@@ -280,6 +280,9 @@ impl ConnectionManager for DefaultConnectionManager {
     }
 
     fn save_connection_config(&mut self, mut config: ConnectionConfig) -> Result<(), ConnectionError> {
+        // Validate the connection configuration before saving
+        config.validate()?;
+        
         // If the connection doesn't have an ID, generate a new one
         let id = if config.id == Uuid::nil() {
             let new_id = Uuid::new_v4();

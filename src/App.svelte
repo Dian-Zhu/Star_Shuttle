@@ -20,24 +20,32 @@
   async function handleSaveConnection() {
     try {
       // Convert simplified connection object to backend format
+      // Note: Rust enum variants use PascalCase (Password, PrivateKey, Agent)
       const backendAuthMethod = {
-        password: {
+        Password: {
           password: newConnection.password,
           save_password: newConnection.savePassword,
         },
       }
 
+      // Generate a UUID for the connection
+      const { v4: uuidv4 } = await import('uuid');
+      const connectionId = uuidv4();
+
       // Call backend save_connection_config command
       await invoke('save_connection_config', {
         config: {
+          id: connectionId,
           name: newConnection.name,
           host: newConnection.host,
           port: newConnection.port,
           username: newConnection.username,
           auth_method: backendAuthMethod,
-          description: undefined,
+          description: null, // Use null instead of undefined for optional fields
           tags: [],
-          group_id: undefined,
+          group_id: null, // Use null instead of undefined for optional fields
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
         },
       })
 
