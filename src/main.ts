@@ -6,10 +6,8 @@ if (!target) {
   throw new Error('Could not find app element')
 }
 
-// For Svelte 5, we need to use the compatibility mode by updating svelte.config.js
-// This will allow us to use the Svelte 4 API in Svelte 5
-const app = new App({
-  target,
-})
+// Svelte 5 uses the mount function from 'svelte'
+import { mount } from 'svelte'
+const app = mount(App, { target })
 
 export default app

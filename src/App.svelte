@@ -64,14 +64,18 @@
   }
 </script>
 
-<div class="h-screen w-screen flex flex-col bg-gray-900 text-white">
+<div class="h-screen w-screen flex flex-col text-white">
   <!-- Header -->
-  <header class="h-16 bg-gray-800 border-b border-gray-700 flex items-center justify-between px-4">
-    <div class="flex items-center gap-2">
-      <div class="w-8 h-8 bg-blue-600 rounded flex items-center justify-center">
-        <span class="font-bold">SSH</span>
+  <header class="h-16 bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 border-b border-slate-700/50 flex items-center justify-between px-6 shadow-lg">
+    <div class="flex items-center gap-3">
+      <div class="w-10 h-10 bg-gradient-to-br from-blue-500 to-blue-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-500/30">
+        <span class="font-bold text-sm">SSH</span>
       </div>
-      <h1 class="text-xl font-semibold">SSH Remote Manager</h1>
+      <div>
+        <h1 class="text-xl font-bold bg-gradient-to-r from-blue-400 to-blue-500 bg-clip-text text-transparent">
+          SSH Remote Manager
+        </h1>
+      </div>
     </div>
     <div class="flex items-center gap-4">
       <!-- Settings button, etc. -->
@@ -81,21 +85,21 @@
   <!-- Main Content -->
   <div class="flex-1 flex overflow-hidden">
     <!-- Sidebar -->
-    <aside class="w-64 bg-gray-800 border-r border-gray-700 overflow-y-auto">
+    <aside class="w-72 bg-slate-800/50 backdrop-blur-sm border-r border-slate-700/50 overflow-y-auto">
       <!-- Connection list will go here -->
-      <div class="p-4">
-        <h2 class="text-lg font-semibold mb-4">Connections</h2>
+      <div class="p-6">
+        <h2 class="text-lg font-semibold mb-4 text-slate-200">Connections</h2>
         <button
-          class="w-full bg-blue-600 hover:bg-blue-700 text-white py-2 px-4 rounded mb-4"
+          class="w-full bg-gradient-to-r from-blue-600 to-blue-500 hover:from-blue-500 hover:to-blue-400 text-white py-2.5 px-4 rounded-xl mb-4 font-medium shadow-lg shadow-blue-500/25 transition-all duration-200 hover:shadow-xl hover:shadow-blue-500/40"
           on:click={handleNewConnection}
         >
-          New Connection
+          + New Connection
         </button>
         <div class="space-y-2">
           <!-- Connection items will be dynamically added here -->
-          <div class="p-2 bg-gray-700 rounded cursor-pointer hover:bg-gray-600">
-            <div class="font-medium">Example Connection</div>
-            <div class="text-sm text-gray-400">user@example.com:22</div>
+          <div class="p-3 bg-slate-700/50 rounded-xl cursor-pointer hover:bg-slate-700 border border-slate-600/50 transition-all duration-200">
+            <div class="font-medium text-slate-100">Example Connection</div>
+            <div class="text-sm text-slate-400 mt-1">user@example.com:22</div>
           </div>
         </div>
       </div>
@@ -104,57 +108,59 @@
     <!-- Main Content Area -->
     <main class="flex-1 overflow-hidden flex flex-col">
       <!-- Tabs for terminal, file transfer, etc. -->
-      <div class="flex border-b border-gray-700">
-        <button class="px-4 py-2 bg-gray-800 border-r border-gray-700 font-medium">
+      <div class="flex border-b border-slate-700/50 bg-slate-800/30">
+        <button class="px-6 py-3 bg-slate-800/80 border-r border-slate-700/50 font-medium text-blue-400 border-b-2 border-blue-500">
           Terminal
         </button>
-        <button class="px-4 py-2 bg-gray-900 font-medium text-gray-400 hover:text-white">
+        <button class="px-6 py-3 font-medium text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 transition-colors duration-200">
           File Transfer
         </button>
       </div>
 
       <!-- Content based on selected tab -->
-      <div class="flex-1 overflow-auto p-4">
+      <div class="flex-1 overflow-auto p-8">
         {#if showConnectionForm}
-          <div class="max-w-2xl mx-auto bg-gray-800 rounded-lg p-6 border border-gray-700">
-            <h2 class="text-xl font-semibold mb-4">New Connection</h2>
+          <div class="max-w-2xl mx-auto bg-slate-800/50 backdrop-blur-sm rounded-2xl p-8 border border-slate-700/50 shadow-xl">
+            <h2 class="text-2xl font-bold mb-6 bg-gradient-to-r from-blue-400 to-blue-500 bg-clip-text text-transparent">
+              New Connection
+            </h2>
             <form on:submit|preventDefault={handleSaveConnection}>
-              <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-5 mb-6">
                 <div class="md:col-span-2">
-                  <label for="name" class="block text-sm font-medium text-gray-300 mb-1"
+                  <label for="name" class="block text-sm font-medium text-slate-300 mb-2"
                     >Connection Name</label
                   >
                   <input
                     type="text"
                     id="name"
                     bind:value={newConnection.name}
-                    class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    class="w-full bg-slate-700/50 border border-slate-600/50 rounded-xl px-4 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200"
                     placeholder="Enter connection name"
                     required
                   />
                 </div>
 
                 <div>
-                  <label for="host" class="block text-sm font-medium text-gray-300 mb-1">Host</label
+                  <label for="host" class="block text-sm font-medium text-slate-300 mb-2">Host</label
                   >
                   <input
                     type="text"
                     id="host"
                     bind:value={newConnection.host}
-                    class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    class="w-full bg-slate-700/50 border border-slate-600/50 rounded-xl px-4 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200"
                     placeholder="e.g., example.com or 192.168.1.1"
                     required
                   />
                 </div>
 
                 <div>
-                  <label for="port" class="block text-sm font-medium text-gray-300 mb-1">Port</label
+                  <label for="port" class="block text-sm font-medium text-slate-300 mb-2">Port</label
                   >
                   <input
                     type="number"
                     id="port"
                     bind:value={newConnection.port}
-                    class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    class="w-full bg-slate-700/50 border border-slate-600/50 rounded-xl px-4 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200"
                     min="1"
                     max="65535"
                     required
@@ -162,55 +168,55 @@
                 </div>
 
                 <div>
-                  <label for="username" class="block text-sm font-medium text-gray-300 mb-1"
+                  <label for="username" class="block text-sm font-medium text-slate-300 mb-2"
                     >Username</label
                   >
                   <input
                     type="text"
                     id="username"
                     bind:value={newConnection.username}
-                    class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    class="w-full bg-slate-700/50 border border-slate-600/50 rounded-xl px-4 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200"
                     placeholder="Enter username"
                     required
                   />
                 </div>
 
                 <div class="md:col-span-2">
-                  <label for="password" class="block text-sm font-medium text-gray-300 mb-1"
+                  <label for="password" class="block text-sm font-medium text-slate-300 mb-2"
                     >Password</label
                   >
                   <input
                     type="password"
                     id="password"
                     bind:value={newConnection.password}
-                    class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    class="w-full bg-slate-700/50 border border-slate-600/50 rounded-xl px-4 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200"
                     placeholder="Enter password"
                     required
                   />
                 </div>
 
-                <div class="md:col-span-2 flex items-center">
+                <div class="md:col-span-2 flex items-center bg-slate-700/30 rounded-xl px-4 py-2.5">
                   <input
                     type="checkbox"
                     id="savePassword"
                     bind:checked={newConnection.savePassword}
-                    class="mr-2 h-4 w-4 text-blue-600 bg-gray-700 border-gray-600 rounded focus:ring-blue-500"
+                    class="mr-3 h-4 w-4 text-blue-600 bg-slate-600 border-slate-500 rounded focus:ring-blue-500 focus:ring-offset-0"
                   />
-                  <label for="savePassword" class="text-sm text-gray-300">Save password</label>
+                  <label for="savePassword" class="text-sm text-slate-300 cursor-pointer">Save password</label>
                 </div>
               </div>
 
-              <div class="flex justify-end gap-3">
+              <div class="flex justify-end gap-3 pt-4 border-t border-slate-700/50">
                 <button
                   type="button"
                   on:click={handleCancel}
-                  class="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded focus:outline-none focus:ring-2 focus:ring-gray-500"
+                  class="px-6 py-2.5 bg-slate-700/50 hover:bg-slate-700 text-slate-200 rounded-xl font-medium focus:outline-none focus:ring-2 focus:ring-slate-500 transition-all duration-200"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  class="px-6 py-2.5 bg-gradient-to-r from-blue-600 to-blue-500 hover:from-blue-500 hover:to-blue-400 text-white rounded-xl font-medium shadow-lg shadow-blue-500/25 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all duration-200 hover:shadow-xl hover:shadow-blue-500/40"
                 >
                   Save Connection
                 </button>
@@ -218,9 +224,18 @@
             </form>
           </div>
         {:else}
-          <div class="text-center text-gray-500">
-            <h2 class="text-2xl font-semibold mb-2">Welcome to SSH Remote Manager</h2>
-            <p>Select a connection from the sidebar or create a new one to get started.</p>
+          <div class="flex flex-col items-center justify-center h-full text-center">
+            <div class="w-24 h-24 bg-gradient-to-br from-blue-500/20 to-blue-600/20 rounded-full flex items-center justify-center mb-6 shadow-lg shadow-blue-500/10">
+              <svg class="w-12 h-12 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+              </svg>
+            </div>
+            <h2 class="text-3xl font-bold mb-3 bg-gradient-to-r from-blue-400 to-blue-500 bg-clip-text text-transparent">
+              Welcome to SSH Remote Manager
+            </h2>
+            <p class="text-slate-400 text-lg max-w-md">
+              Select a connection from the sidebar or create a new one to get started.
+            </p>
           </div>
         {/if}
       </div>
