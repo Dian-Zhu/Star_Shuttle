@@ -274,7 +274,7 @@ impl TerminalParser {
                 }
             },
             ControlSequence::Reset => {
-                // TODO: Implement reset terminal state
+                buffer.reset();
             },
             _ => {},
         }

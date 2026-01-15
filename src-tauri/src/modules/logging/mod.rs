@@ -16,7 +16,19 @@ impl log::Log for SimpleLogger {
     
     fn log(&self, record: &Record) {
         if self.enabled(record.metadata()) {
-            let log_entry = format!("{} - [{}] {}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"), record.level(), record.args());
+            // Get module path or use "unknown" if not available
+            let module = record.module_path().unwrap_or("unknown");
+            
+            // Format log entry with structured fields
+            let log_entry = format!(
+                "{{\"timestamp\":\"{}\",\"level\":\"{}\",\"module\":\"{}\",\"message\":\"{}\",\"file\":\"{}\",\"line\":{}}}",
+                chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.3f%z"),
+                record.level(),
+                module,
+                record.args(),
+                record.file().unwrap_or("unknown"),
+                record.line().unwrap_or(0)
+            );
             println!("{}", log_entry);
             
             if let Ok(mut guard) = self.inner.lock() {

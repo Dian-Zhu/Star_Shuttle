@@ -4,7 +4,6 @@ pub mod connection;
 pub mod credential;
 pub mod db;
 pub mod error;
-pub mod file_transfer;
 pub mod logging;
 pub mod session;
 pub mod terminal;

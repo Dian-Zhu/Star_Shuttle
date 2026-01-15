@@ -1,4 +1,5 @@
-use tauri::{State}; use uuid::Uuid;
+use tauri::{State, AppHandle, Emitter};
+use uuid::Uuid;
 use std::sync::{Arc, RwLock};
 use crate::modules::connection::{ConnectionConfig, DefaultConnectionManager};
 
@@ -90,19 +91,60 @@ mod commands {
         let manager = manager.read().unwrap();
         manager.test_connection(&config).map_err(|e| e.to_string())
     }
+
+    #[command]
+    pub fn start_terminal(
+        app: AppHandle,
+        manager: State<Arc<RwLock<DefaultConnectionManager>>>,
+        session_id: Uuid,
+        width: u16,
+        height: u16,
+    ) -> Result<bool, String> {
+        let mut manager = manager.write().unwrap();
+        manager.start_terminal(&app, &session_id, width, height).map_err(|e| e.to_string())
+    }
+
+    #[command]
+    pub fn send_terminal_data(
+        manager: State<Arc<RwLock<DefaultConnectionManager>>>,
+        session_id: Uuid,
+        data: String,
+    ) -> Result<(), String> {
+        let mut manager = manager.write().unwrap();
+        manager.send_terminal_data(&session_id, &data).map_err(|e| e.to_string())
+    }
+
+    #[command]
+    pub fn resize_terminal(
+        manager: State<Arc<RwLock<DefaultConnectionManager>>>,
+        session_id: Uuid,
+        width: u16,
+        height: u16,
+    ) -> Result<(), String> {
+        let mut manager = manager.write().unwrap();
+        manager.resize_terminal(&session_id, width, height).map_err(|e| e.to_string())
+    }
+
+    #[command]
+    pub fn close_terminal(
+        manager: State<Arc<RwLock<DefaultConnectionManager>>>,
+        session_id: Uuid,
+    ) -> Result<(), String> {
+        let mut manager = manager.write().unwrap();
+        manager.close_terminal(&session_id).map_err(|e| e.to_string())
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Initialize our custom structured logger
+    crate::modules::logging::LogManager::init(log::LevelFilter::Debug)
+        .expect("Failed to initialize logger");
+    
     tauri::Builder::default()
-        .setup(|app| {
-            if cfg!(debug_assertions) {
-                app.handle().plugin(
-                    tauri_plugin_log::Builder::default()
-                        .level(log::LevelFilter::Info)
-                        .build(),
-                )?;
-            }
+        .setup(|_app| {
+            // Remove tauri_plugin_log to avoid logger initialization conflict
+            // We use our custom structured logger instead
             Ok(())
         })
         .manage(Arc::new(RwLock::new(DefaultConnectionManager::new())))
@@ -116,6 +158,11 @@ pub fn run() {
             commands::delete_connection_config,
             commands::get_all_connection_configs,
             commands::test_connection,
+            // Terminal commands
+            commands::start_terminal,
+            commands::send_terminal_data,
+            commands::resize_terminal,
+            commands::close_terminal,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -91,6 +91,16 @@ impl TerminalBuffer {
         })
     }
     
+    pub fn reset(&mut self) {
+        self.buffer = vec![vec![Cell::default(); self.cols as usize]; self.rows as usize];
+        self.scrollback.clear();
+        self.cursor_col = 0;
+        self.cursor_row = 0;
+        self.cursor_visible = true;
+        self.cursor_blink = true;
+        self.attributes = Attributes::default();
+    }
+
     pub fn resize(&mut self, cols: u16, rows: u16) -> Result<()> {
         if cols < 1 || rows < 1 {
             return Err(TerminalError::InvalidSize(cols, rows).into());
