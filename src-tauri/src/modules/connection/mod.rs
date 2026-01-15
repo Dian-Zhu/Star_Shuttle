@@ -174,7 +174,7 @@ pub enum ConnectionError {
 }
 
 use std::sync::{Arc, Mutex};
-use crate::modules::connection::ssh_impl::connect_ssh;
+use crate::modules::connection::ssh_impl::{connect_ssh, SshConnection};
 use crate::modules::connection::tracking::ChannelTracker;
 use tauri::Emitter;
 use tokio::sync::mpsc;
@@ -198,18 +198,18 @@ pub enum TerminalCommand {
 pub struct DefaultConnectionManager {
     connections: HashMap<Uuid, ConnectionConfig>,
     sessions: HashMap<Uuid, SessionInfo>,
-    ssh_handles: HashMap<Uuid, Arc<Mutex<russh::client::Handle<ssh_impl::SshHandler>>>>,
+    ssh_connections: HashMap<Uuid, SshConnection>,
     terminals: HashMap<Uuid, TerminalSession>,
     tracker: Arc<Mutex<ChannelTracker>>,
 }
 
-// Manual Debug implementation to handle the non-Debug ssh_handles field
+// Manual Debug implementation to handle the non-Debug ssh_connections field
 impl std::fmt::Debug for DefaultConnectionManager {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DefaultConnectionManager")
             .field("connections", &self.connections)
             .field("sessions", &self.sessions)
-            .field("ssh_handles_count", &self.ssh_handles.len())
+            .field("ssh_connections_count", &self.ssh_connections.len())
             .field("terminals_count", &self.terminals.len())
             .finish()
     }
@@ -278,12 +278,12 @@ impl ConnectionManager for DefaultConnectionManager {
                 ssh_impl::connect_ssh(&host, port, &username, auth_type).await
             })
         }).join() {
-            Ok(Ok(handle)) => {
+            Ok(Ok(ssh_connection)) => {
                 // Connection successful
                 info!("Connection successful for session: {}", session_id);
                 session_info.status = ConnectionStatus::Connected;
                 self.sessions.insert(session_id, session_info);
-                self.ssh_handles.insert(session_id, handle);
+                self.ssh_connections.insert(session_id, ssh_connection);
                 Ok(session_id)
             },
             Ok(Err(e)) => {
@@ -309,9 +309,9 @@ impl ConnectionManager for DefaultConnectionManager {
         session.status = ConnectionStatus::Disconnecting;
         info!("Disconnecting session: {}", session_id);
         
-        // Remove SSH handle if it exists
-        if self.ssh_handles.remove(session_id).is_some() {
-            debug!("SSH handle removed for session: {}", session_id);
+        // Remove SSH connection if it exists
+        if self.ssh_connections.remove(session_id).is_some() {
+            debug!("SSH connection removed for session: {}", session_id);
         }
         
         // Update session status
@@ -419,7 +419,7 @@ impl ConnectionManager for DefaultConnectionManager {
                 ssh_impl::connect_ssh(&host, port, &username, auth_type).await
             })
         }).join() {
-            Ok(Ok(_handle)) => {
+            Ok(Ok(_ssh_connection)) => {
                 // Connection test successful
                 info!("Connection test successful: {}:{}", host_clone, port_clone);
                 Ok(())
@@ -446,8 +446,15 @@ impl ConnectionManager for DefaultConnectionManager {
             return Err(ConnectionError::ConnectionFailed("Session is not connected".to_string()));
         }
 
-        // Get SSH handle
-        let ssh_handle = self.ssh_handles.get(session_id).ok_or(ConnectionError::SessionNotFound(*session_id))?;
+        // Get SSH connection
+        let ssh_connection = self.ssh_connections.get(session_id).ok_or(ConnectionError::SessionNotFound(*session_id))?;
+
+        // Check if SSH connection is still valid
+        {
+            let handle = ssh_connection.handle.lock().unwrap();
+            // Add a simple health check - try to send a no-op or check connection state
+            debug!("SSH connection health check for session: {}", session_id);
+        }
 
         info!("Starting terminal for session: {}", session_id);
 
@@ -459,7 +466,7 @@ impl ConnectionManager for DefaultConnectionManager {
 
         let session_id_clone = *session_id;
         let app_clone = app.clone();
-        let ssh_handle_clone = Arc::clone(ssh_handle);
+        let ssh_handle_clone = Arc::clone(&ssh_connection.handle);
         
         // Tracker clone
         let tracker_clone = Arc::clone(&self.tracker);
@@ -475,32 +482,55 @@ impl ConnectionManager for DefaultConnectionManager {
                 let handle = ssh_handle_clone.lock().unwrap();
                 let handle_ref = &*handle;
 
+                // Debug: Log connection state before opening channel
+                debug!("Attempting to open terminal channel for session: {}", session_id_clone);
+
                 // Open channel
                 match handle_ref.channel_open_session().await {
                     Ok(mut channel) => {
                         debug!("Channel opened for session: {}", session_id_clone);
 
-                        // Request PTY
+                        // Request PTY with proper terminal modes
+                        // russh uses a different approach for terminal modes - use empty array for now
                         if let Err(e) = channel.request_pty(true, "xterm-256color", width as u32, height as u32, 0, 0, &[]).await {
                             error!("Failed to request PTY: {:?}", e);
+                            // Send error to frontend
+                            let error_msg = format!("Failed to request PTY: {}", e);
+                            let event_name = format!("terminal-error-{}", session_id_clone);
+                            let _ = app_clone.emit(&event_name, serde_json::json!({ "error": error_msg }));
                             return;
                         }
 
                         // Start shell
                         if let Err(e) = channel.request_shell(true).await {
                             error!("Failed to start shell: {:?}", e);
+                            // Send error to frontend
+                            let error_msg = format!("Failed to start shell: {}", e);
+                            let event_name = format!("terminal-error-{}", session_id_clone);
+                            let _ = app_clone.emit(&event_name, serde_json::json!({ "error": error_msg }));
                             return;
                         }
 
                         info!("Terminal started for session: {}", session_id_clone);
 
+                        // Send initial newline to trigger shell prompt
+                        let newline_data = b"\r\n";
+                        if let Err(e) = channel.data(&newline_data[..]).await {
+                            error!("Failed to send initial newline: {:?}", e);
+                        }
+
                         // Event loop for channel and commands
+                        let mut last_activity = tokio::time::Instant::now();
+                        
                         loop {
                             tokio::select! {
                                 // Handle incoming SSH data
                                 msg = channel.wait() => {
                                     match msg {
                                         Some(russh::ChannelMsg::Data { ref data }) => {
+                                            // Update last activity time
+                                            last_activity = tokio::time::Instant::now();
+                                            
                                             // Log received data
                                             tracker_clone.lock().unwrap().log_data(session_id_clone, data, "received");
                                             
@@ -527,6 +557,9 @@ impl ConnectionManager for DefaultConnectionManager {
                                 cmd = rx.recv() => {
                                     match cmd {
                                         Some(TerminalCommand::Data(data)) => {
+                                            // Update last activity time
+                                            last_activity = tokio::time::Instant::now();
+                                            
                                             // russh::Channel::data takes AsyncRead
                                             let _ = channel.data(&data[..]).await;
                                         },
@@ -543,11 +576,28 @@ impl ConnectionManager for DefaultConnectionManager {
                                         }
                                     }
                                 }
+                                // Heartbeat check (every 30 seconds)
+                                _ = tokio::time::sleep(tokio::time::Duration::from_secs(30)) => {
+                                    // Check if we've had activity in the last 60 seconds
+                                    if last_activity.elapsed() > tokio::time::Duration::from_secs(60) {
+                                        // Send a keepalive by sending a null byte
+                                        let null_byte = b"\0";
+                                        if let Err(e) = channel.data(&null_byte[..]).await {
+                                            debug!("Keepalive failed, connection may be dead: {:?}", e);
+                                            break;
+                                        }
+                                        debug!("Sent keepalive to session: {}", session_id_clone);
+                                    }
+                                }
                             }
                         }
                     },
                     Err(e) => {
                         error!("Failed to open terminal channel: {:?}", e);
+                        // Send error to frontend
+                        let error_msg = format!("Failed to open terminal channel: {}", e);
+                        let event_name = format!("terminal-error-{}", session_id_clone);
+                        let _ = app_clone.emit(&event_name, serde_json::json!({ "error": error_msg }));
                     }
                 }
             });

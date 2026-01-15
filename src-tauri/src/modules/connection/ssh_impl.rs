@@ -1,10 +1,17 @@
 use russh::client::{Config, Handle, Handler}; use std::sync::{Arc, Mutex}; use std::net::SocketAddr; use std::str::FromStr; use tokio::net::lookup_host; use anyhow::anyhow; use super::known_hosts::KnownHostsManager; use log::{info, debug, error};
+use russh_keys::load_secret_key; // 新增导入
 
+#[derive(Clone)]
 pub enum AuthType {
     Password(Option<String>),
     PrivateKey(String, Option<String>),
     Agent(Option<String>),
     Certificate(String, String, Option<String>),
+}
+
+pub struct SshConnection {
+    pub handle: Arc<Mutex<Handle<SshHandler>>>,
+    // 移除session_task字段，russh的Handle内部已经管理会话任务
 }
 
 pub struct SshHandler {
@@ -130,7 +137,7 @@ pub async fn connect_ssh(
     port: u16,
     username: &str,
     auth_type: AuthType,
-) -> Result<Arc<Mutex<Handle<SshHandler>>>, anyhow::Error> {
+) -> Result<SshConnection, anyhow::Error> {
     info!("Starting SSH connection to {}:{} as {}", host, port, username);
     
     // Validate input parameters
@@ -168,7 +175,7 @@ pub async fn connect_ssh(
     // Create handler
     let handler = SshHandler {
         username: username.to_string(),
-        auth_type,
+        auth_type: auth_type.clone(), // 克隆以备后用
         auth_complete: false,
         known_hosts_manager,
         host: host.to_string(),
@@ -204,12 +211,103 @@ pub async fn connect_ssh(
 
     // Connect to SSH server
     debug!("Attempting to connect to {}:{} (resolved to {:?}) as {}", host, port, addr, username);
-    let handle = russh::client::connect(config, addr, handler).await
+    let mut handle = russh::client::connect(config, addr, handler).await
         .map_err(|e| {
             error!("Failed to establish SSH connection to {}:{}: {}", host, port, e);
             anyhow!("Failed to establish SSH connection to {}:{}: {}", host, port, e)
         })?;
 
-    info!("Successfully established SSH connection to {}:{}", host, port);
-    Ok(Arc::new(Mutex::new(handle)))
+    info!("SSH TCP connection established to {}:{}", host, port);
+    
+    // 执行身份验证
+    match &auth_type {
+        AuthType::Password(Some(password)) => {
+            debug!("Attempting password authentication for user: {}", username);
+            
+            // 添加详细的调试信息
+            debug!("Password length: {}", password.len());
+            debug!("Host: {}:{}", host, port);
+            
+            // 先尝试none认证来获取服务器支持的认证方法
+            debug!("First attempting none authentication to check server capabilities");
+            let none_result = handle.authenticate_none(username).await
+                .map_err(|e| {
+                    debug!("None authentication failed (expected): {:?}", e);
+                    e
+                }).ok();
+            
+            if let Some(false) = none_result {
+                debug!("Server rejected none authentication (expected)");
+            }
+            
+            // 尝试密码身份验证
+            debug!("Now attempting password authentication");
+            let auth_result = handle.authenticate_password(username, password).await
+                .map_err(|e| {
+                    error!("Password authentication failed with error: {:?}", e);
+                    anyhow!("Password authentication failed: {:?}", e)
+                })?;
+            
+            if !auth_result {
+                error!("Password authentication rejected by server for user: {}@{}:{}", username, host, port);
+                
+                // 提供更具体的错误信息
+                let error_msg = format!(
+                    "密码认证被服务器拒绝。请检查：\n1. 用户名和密码是否正确\n2. 服务器是否启用了密码认证\n3. 用户账户是否被锁定或禁用\n服务器: {}:{}, 用户: {}",
+                    host, port, username
+                );
+                
+                return Err(anyhow!(error_msg));
+            }
+            
+            info!("Password authentication successful for user: {}@{}:{}", username, host, port);
+        }
+        AuthType::PrivateKey(key_path, passphrase) => {
+            debug!("Attempting public key authentication with key: {}", key_path);
+            
+            // 加载私钥
+            let key = load_secret_key(key_path, passphrase.as_deref())
+                .map_err(|e| {
+                    error!("Failed to load private key from {}: {}", key_path, e);
+                    anyhow!("Failed to load private key: {}", e)
+                })?;
+            
+            let key_pair = Arc::new(key);
+            
+            // 尝试身份验证
+            let auth_result = handle.authenticate_publickey(username, key_pair).await
+                .map_err(|e| {
+                    error!("Public key authentication failed with error: {:?}", e);
+                    anyhow!("Public key authentication failed: {:?}", e)
+                })?;
+            
+            if !auth_result {
+                error!("Public key authentication rejected by server for user: {}", username);
+                return Err(anyhow!("Public key authentication rejected by server. Please check key file and permissions."));
+            }
+            
+            info!("Public key authentication successful for user: {}", username);
+        }
+        AuthType::Agent(agent_path) => {
+            // TODO: 实现SSH代理身份验证
+            error!("SSH agent authentication not yet implemented");
+            return Err(anyhow!("SSH agent authentication not yet implemented"));
+        }
+        AuthType::Certificate(cert_path, key_path, passphrase) => {
+            // TODO: 实现证书身份验证
+            error!("Certificate authentication not yet implemented");
+            return Err(anyhow!("Certificate authentication not yet implemented"));
+        }
+        AuthType::Password(None) => {
+            error!("Password authentication requested but no password provided");
+            return Err(anyhow!("Password authentication requested but no password provided"));
+        }
+    }
+
+    info!("SSH connection fully established and authenticated to {}:{} as {}", host, port, username);
+    
+    // 创建SSH连接
+    Ok(SshConnection {
+        handle: Arc::new(Mutex::new(handle)),
+    })
 }

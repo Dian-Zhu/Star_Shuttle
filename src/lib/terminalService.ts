@@ -9,6 +9,9 @@ import 'xterm/css/xterm.css';
 // Output listeners storage
 const outputListeners = new Map<string, () => void>();
 
+// Session status monitoring
+const sessionStatusListeners = new Map<string, () => void>();
+
 export async function connectAndOpen(connection: Connection) {
   try {
     errorMessage.set(null);
@@ -77,6 +80,7 @@ export async function initTerminal(container: HTMLElement, sessionId: string, co
       },
       scrollback: 5000,
       allowProposedApi: true,
+      convertEol: true, // Enable EOL conversion to fix line endings
     });
 
     // Create fit addon and load
@@ -106,13 +110,29 @@ export async function initTerminal(container: HTMLElement, sessionId: string, co
     });
 
     // Listen for terminal output from backend
-    const unlisten = await listen(`terminal-output-${sessionId}`, (event: any) => {
+    const outputUnlisten = await listen(`terminal-output-${sessionId}`, (event: any) => {
       if (event.payload && event.payload.data) {
         term.write(event.payload.data);
       }
     });
 
-    outputListeners.set(sessionId, unlisten);
+    // Listen for terminal errors from backend
+    const errorUnlisten = await listen(`terminal-error-${sessionId}`, (event: any) => {
+      if (event.payload && event.payload.error) {
+        console.error('Terminal error:', event.payload.error);
+        term.write(`\r\n\x1b[31mError: ${event.payload.error}\x1b[0m\r\n`);
+        errorMessage.set(`终端错误: ${event.payload.error}`);
+        setTimeout(() => errorMessage.set(null), 5000);
+      }
+    });
+
+    outputListeners.set(sessionId, () => {
+      outputUnlisten();
+      errorUnlisten();
+    });
+
+    // Start monitoring session status
+    await monitorSessionStatus(sessionId);
 
     // Request terminal session from backend
     const result = await invoke('start_terminal', {
@@ -124,6 +144,8 @@ export async function initTerminal(container: HTMLElement, sessionId: string, co
     if (!result) {
       console.error('Failed to start terminal session');
       term.write('\r\n\x1b[31mFailed to start terminal session\x1b[0m\r\n');
+      errorMessage.set('启动终端会话失败');
+      setTimeout(() => errorMessage.set(null), 5000);
       return null;
     }
 
@@ -141,6 +163,8 @@ export async function initTerminal(container: HTMLElement, sessionId: string, co
     };
   } catch (error) {
     console.error('Failed to initialize terminal:', error);
+    errorMessage.set(`初始化终端失败: ${error}`);
+    setTimeout(() => errorMessage.set(null), 5000);
     return null;
   }
 }
@@ -158,6 +182,40 @@ export async function sendTerminalResize(sessionId: string, width: number, heigh
     await invoke('resize_terminal', { sessionId, width, height });
   } catch (error) {
     console.error('Failed to resize terminal:', error);
+  }
+}
+
+export async function monitorSessionStatus(sessionId: string) {
+  try {
+    // Listen for session status changes from backend
+    const statusUnlisten = await listen(`session-status-${sessionId}`, (event: any) => {
+      if (event.payload && event.payload.status) {
+        console.log('Session status changed:', sessionId, event.payload.status);
+        
+        // Handle different status changes
+        switch (event.payload.status) {
+          case 'disconnected':
+            errorMessage.set(`会话已断开: ${sessionId}`);
+            setTimeout(() => errorMessage.set(null), 5000);
+            // Optionally attempt to reconnect
+            break;
+          case 'error':
+            if (event.payload.error) {
+              errorMessage.set(`会话错误: ${event.payload.error}`);
+              setTimeout(() => errorMessage.set(null), 5000);
+            }
+            break;
+          case 'connected':
+            successMessage.set('会话已连接');
+            setTimeout(() => successMessage.set(null), 3000);
+            break;
+        }
+      }
+    });
+
+    sessionStatusListeners.set(sessionId, statusUnlisten);
+  } catch (error) {
+    console.error('Failed to monitor session status:', error);
   }
 }
 
@@ -185,6 +243,13 @@ export async function closeTerminal(sessionId: string) {
     if (unlisten) {
       unlisten();
       outputListeners.delete(sessionId);
+    }
+
+    // Clean up status listener
+    const statusUnlisten = sessionStatusListeners.get(sessionId);
+    if (statusUnlisten) {
+      statusUnlisten();
+      sessionStatusListeners.delete(sessionId);
     }
 
     // Notify backend to close terminal
