@@ -178,6 +178,7 @@ use crate::modules::connection::ssh_impl::{connect_ssh, SshConnection};
 use crate::modules::connection::tracking::ChannelTracker;
 use tauri::Emitter;
 use tokio::sync::mpsc;
+use tokio::runtime::Runtime;
 
 // Terminal session data
 #[derive(Clone)]
@@ -194,16 +195,16 @@ pub enum TerminalCommand {
 }
 
 // Default connection manager implementation
-#[derive(Default)]
 pub struct DefaultConnectionManager {
     connections: HashMap<Uuid, ConnectionConfig>,
     sessions: HashMap<Uuid, SessionInfo>,
     ssh_connections: HashMap<Uuid, SshConnection>,
     terminals: HashMap<Uuid, TerminalSession>,
     tracker: Arc<Mutex<ChannelTracker>>,
+    runtime: Arc<Runtime>,
 }
 
-// Manual Debug implementation to handle the non-Debug ssh_connections field
+// Manual Debug implementation to handle the non-Debug ssh_connections and runtime fields
 impl std::fmt::Debug for DefaultConnectionManager {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DefaultConnectionManager")
@@ -215,9 +216,23 @@ impl std::fmt::Debug for DefaultConnectionManager {
     }
 }
 
+impl Default for DefaultConnectionManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DefaultConnectionManager {
     pub fn new() -> Self {
-        Default::default()
+        let runtime = Runtime::new().expect("Failed to create Tokio runtime");
+        Self {
+            connections: HashMap::new(),
+            sessions: HashMap::new(),
+            ssh_connections: HashMap::new(),
+            terminals: HashMap::new(),
+            tracker: Arc::new(Mutex::new(ChannelTracker::new())),
+            runtime: Arc::new(runtime),
+        }
     }
 }
 
@@ -270,15 +285,12 @@ impl ConnectionManager for DefaultConnectionManager {
         // Log connection details (excluding sensitive info)
         info!("Attempting to connect to {}:{} as {}", host, port, username);
         
-        // Use the real SSH connection function from ssh_impl.rs
-        // Note: This is a blocking call, but in a real application, we would spawn a separate thread or use async/await
-        match std::thread::spawn(move || {
-            let runtime = tokio::runtime::Runtime::new().unwrap();
-            runtime.block_on(async {
-                ssh_impl::connect_ssh(&host, port, &username, auth_type).await
-            })
-        }).join() {
-            Ok(Ok(ssh_connection)) => {
+        // Use the persistent runtime to establish SSH connection
+        // This ensures the connection task remains alive as long as the manager exists
+        match self.runtime.block_on(async {
+            ssh_impl::connect_ssh(&host, port, &username, auth_type).await
+        }) {
+            Ok(ssh_connection) => {
                 // Connection successful
                 info!("Connection successful for session: {}", session_id);
                 session_info.status = ConnectionStatus::Connected;
@@ -286,20 +298,13 @@ impl ConnectionManager for DefaultConnectionManager {
                 self.ssh_connections.insert(session_id, ssh_connection);
                 Ok(session_id)
             },
-            Ok(Err(e)) => {
+            Err(e) => {
                 // SSH connection error
                 error!("SSH connection error for session {}: {:?}", session_id, e);
                 session_info.status = ConnectionStatus::Error;
                 self.sessions.insert(session_id, session_info);
                 Err(ConnectionError::ConnectionFailed(format!("{:?}", e)))
-            },
-            Err(e) => {
-                // Thread join error
-                error!("Thread join error for session {}: {:?}", session_id, e);
-                session_info.status = ConnectionStatus::Error;
-                self.sessions.insert(session_id, session_info);
-                Err(ConnectionError::ConnectionFailed(format!("{:?}", e)))
-            },
+            }
         }
     }
 
@@ -408,32 +413,24 @@ impl ConnectionManager for DefaultConnectionManager {
             },
         };
         
-        // Clone variables that need to be used after the thread spawn
+        // Clone variables for logging
         let host_clone = host.clone();
         let port_clone = port.clone();
         
-        // Use the real SSH connection function from ssh_impl.rs to test the connection
-        match std::thread::spawn(move || {
-            let runtime = tokio::runtime::Runtime::new().unwrap();
-            runtime.block_on(async {
-                ssh_impl::connect_ssh(&host, port, &username, auth_type).await
-            })
-        }).join() {
-            Ok(Ok(_ssh_connection)) => {
+        // Use the persistent runtime to test the connection
+        match self.runtime.block_on(async {
+            ssh_impl::connect_ssh(&host, port, &username, auth_type).await
+        }) {
+            Ok(_ssh_connection) => {
                 // Connection test successful
                 info!("Connection test successful: {}:{}", host_clone, port_clone);
                 Ok(())
             },
-            Ok(Err(e)) => {
+            Err(e) => {
                 // SSH connection error
                 error!("Connection test failed: {:?}", e);
                 Err(ConnectionError::ConnectionFailed(format!("{:?}", e)))
-            },
-            Err(e) => {
-                // Thread join error
-                error!("Connection test thread failed: {:?}", e);
-                Err(ConnectionError::ConnectionFailed(format!("{:?}", e)))
-            },
+            }
         }
     }
 
@@ -450,11 +447,7 @@ impl ConnectionManager for DefaultConnectionManager {
         let ssh_connection = self.ssh_connections.get(session_id).ok_or(ConnectionError::SessionNotFound(*session_id))?;
 
         // Check if SSH connection is still valid
-        {
-            let handle = ssh_connection.handle.lock().unwrap();
-            // Add a simple health check - try to send a no-op or check connection state
-            debug!("SSH connection health check for session: {}", session_id);
-        }
+        debug!("Skipping synchronous health check for session: {}", session_id);
 
         info!("Starting terminal for session: {}", session_id);
 
@@ -474,133 +467,134 @@ impl ConnectionManager for DefaultConnectionManager {
         // Register session in tracker
         tracker_clone.lock().unwrap().register_session(session_id_clone);
 
-        // Spawn a task to handle the terminal channel
-        std::thread::spawn(move || {
-            let runtime = tokio::runtime::Runtime::new().unwrap();
-            runtime.block_on(async {
-                // Lock the SSH handle
-                let handle = ssh_handle_clone.lock().unwrap();
-                let handle_ref = &*handle;
+        // Spawn a task to handle the terminal channel on the persistent runtime
+        let runtime = Arc::clone(&self.runtime);
+        runtime.spawn(async move {
+            // Debug: Log connection state before opening channel
+            debug!("Attempting to open terminal channel for session: {}", session_id_clone);
 
-                // Debug: Log connection state before opening channel
-                debug!("Attempting to open terminal channel for session: {}", session_id_clone);
+            // Open channel
+            // We need to lock the mutex to access the handle, but we should drop the lock
+            // as soon as we have the channel to allow other operations on the connection.
+            let channel_result = {
+                let handle = ssh_handle_clone.lock().await;
+                handle.channel_open_session().await
+            };
 
-                // Open channel
-                match handle_ref.channel_open_session().await {
-                    Ok(mut channel) => {
-                        debug!("Channel opened for session: {}", session_id_clone);
+            match channel_result {
+                Ok(mut channel) => {
+                    debug!("Channel opened for session: {}", session_id_clone);
 
-                        // Request PTY with proper terminal modes
-                        // russh uses a different approach for terminal modes - use empty array for now
-                        if let Err(e) = channel.request_pty(true, "xterm-256color", width as u32, height as u32, 0, 0, &[]).await {
-                            error!("Failed to request PTY: {:?}", e);
-                            // Send error to frontend
-                            let error_msg = format!("Failed to request PTY: {}", e);
-                            let event_name = format!("terminal-error-{}", session_id_clone);
-                            let _ = app_clone.emit(&event_name, serde_json::json!({ "error": error_msg }));
-                            return;
-                        }
+                    // Request PTY with proper terminal modes
+                    // russh uses a different approach for terminal modes - use empty array for now
+                    if let Err(e) = channel.request_pty(true, "xterm-256color", width as u32, height as u32, 0, 0, &[]).await {
+                        error!("Failed to request PTY: {:?}", e);
+                        // Send error to frontend
+                        let error_msg = format!("Failed to request PTY: {}", e);
+                        let event_name = format!("terminal-error-{}", session_id_clone);
+                        let _ = app_clone.emit(&event_name, serde_json::json!({ "error": error_msg }));
+                        return;
+                    }
 
-                        // Start shell
-                        if let Err(e) = channel.request_shell(true).await {
-                            error!("Failed to start shell: {:?}", e);
-                            // Send error to frontend
-                            let error_msg = format!("Failed to start shell: {}", e);
-                            let event_name = format!("terminal-error-{}", session_id_clone);
-                            let _ = app_clone.emit(&event_name, serde_json::json!({ "error": error_msg }));
-                            return;
-                        }
+                    // Start shell
+                    if let Err(e) = channel.request_shell(true).await {
+                        error!("Failed to start shell: {:?}", e);
+                        // Send error to frontend
+                        let error_msg = format!("Failed to start shell: {}", e);
+                        let event_name = format!("terminal-error-{}", session_id_clone);
+                        let _ = app_clone.emit(&event_name, serde_json::json!({ "error": error_msg }));
+                        return;
+                    }
 
-                        info!("Terminal started for session: {}", session_id_clone);
+                    info!("Terminal started for session: {}", session_id_clone);
 
-                        // Send initial newline to trigger shell prompt
-                        let newline_data = b"\r\n";
-                        if let Err(e) = channel.data(&newline_data[..]).await {
-                            error!("Failed to send initial newline: {:?}", e);
-                        }
+                    // Send initial newline to trigger shell prompt
+                    let newline_data = b"\r\n";
+                    if let Err(e) = channel.data(&newline_data[..]).await {
+                        error!("Failed to send initial newline: {:?}", e);
+                    }
 
-                        // Event loop for channel and commands
-                        let mut last_activity = tokio::time::Instant::now();
-                        
-                        loop {
-                            tokio::select! {
-                                // Handle incoming SSH data
-                                msg = channel.wait() => {
-                                    match msg {
-                                        Some(russh::ChannelMsg::Data { ref data }) => {
-                                            // Update last activity time
-                                            last_activity = tokio::time::Instant::now();
-                                            
-                                            // Log received data
-                                            tracker_clone.lock().unwrap().log_data(session_id_clone, data, "received");
-                                            
-                                            let data_str = String::from_utf8_lossy(data).to_string();
-                                            let event_name = format!("terminal-output-{}", session_id_clone);
-                                            let _ = app_clone.emit(&event_name, serde_json::json!({ "data": data_str }));
-                                        },
-                                        Some(russh::ChannelMsg::ExitStatus { exit_status }) => {
-                                            info!("Terminal exited with status: {}", exit_status);
-                                            break;
-                                        },
-                                        Some(russh::ChannelMsg::Close) => {
-                                            info!("Channel closed by server");
-                                            break;
-                                        },
-                                        None => {
-                                            debug!("Channel closed");
-                                            break;
-                                        },
-                                        _ => {}
-                                    }
+                    // Event loop for channel and commands
+                    let mut last_activity = tokio::time::Instant::now();
+                    
+                    loop {
+                        tokio::select! {
+                            // Handle incoming SSH data
+                            msg = channel.wait() => {
+                                match msg {
+                                    Some(russh::ChannelMsg::Data { ref data }) => {
+                                        // Update last activity time
+                                        last_activity = tokio::time::Instant::now();
+                                        
+                                        // Log received data
+                                        tracker_clone.lock().unwrap().log_data(session_id_clone, data, "received");
+                                        
+                                        let data_str = String::from_utf8_lossy(data).to_string();
+                                        let event_name = format!("terminal-output-{}", session_id_clone);
+                                        let _ = app_clone.emit(&event_name, serde_json::json!({ "data": data_str }));
+                                    },
+                                    Some(russh::ChannelMsg::ExitStatus { exit_status }) => {
+                                        info!("Terminal exited with status: {}", exit_status);
+                                        break;
+                                    },
+                                    Some(russh::ChannelMsg::Close) => {
+                                        info!("Channel closed by server");
+                                        break;
+                                    },
+                                    None => {
+                                        debug!("Channel closed");
+                                        break;
+                                    },
+                                    _ => {}
                                 }
-                                // Handle outgoing commands
-                                cmd = rx.recv() => {
-                                    match cmd {
-                                        Some(TerminalCommand::Data(data)) => {
-                                            // Update last activity time
-                                            last_activity = tokio::time::Instant::now();
-                                            
-                                            // russh::Channel::data takes AsyncRead
-                                            let _ = channel.data(&data[..]).await;
-                                        },
-                                        Some(TerminalCommand::Resize(w, h)) => {
-                                            let _ = channel.window_change(w, h, 0, 0).await;
-                                        },
-                                        Some(TerminalCommand::Close) => {
-                                            let _ = channel.close().await;
-                                            break;
-                                        },
-                                        None => {
-                                            debug!("Command channel closed");
-                                            break;
-                                        }
-                                    }
-                                }
-                                // Heartbeat check (every 30 seconds)
-                                _ = tokio::time::sleep(tokio::time::Duration::from_secs(30)) => {
-                                    // Check if we've had activity in the last 60 seconds
-                                    if last_activity.elapsed() > tokio::time::Duration::from_secs(60) {
-                                        // Send a keepalive by sending a null byte
-                                        let null_byte = b"\0";
-                                        if let Err(e) = channel.data(&null_byte[..]).await {
-                                            debug!("Keepalive failed, connection may be dead: {:?}", e);
-                                            break;
-                                        }
-                                        debug!("Sent keepalive to session: {}", session_id_clone);
+                            }
+                            // Handle outgoing commands
+                            cmd = rx.recv() => {
+                                match cmd {
+                                    Some(TerminalCommand::Data(data)) => {
+                                        // Update last activity time
+                                        last_activity = tokio::time::Instant::now();
+                                        
+                                        // russh::Channel::data takes AsyncRead
+                                        let _ = channel.data(&data[..]).await;
+                                    },
+                                    Some(TerminalCommand::Resize(w, h)) => {
+                                        let _ = channel.window_change(w, h, 0, 0).await;
+                                    },
+                                    Some(TerminalCommand::Close) => {
+                                        let _ = channel.close().await;
+                                        break;
+                                    },
+                                    None => {
+                                        debug!("Command channel closed");
+                                        break;
                                     }
                                 }
                             }
+                            // Heartbeat check (every 30 seconds)
+                            _ = tokio::time::sleep(tokio::time::Duration::from_secs(30)) => {
+                                // Check if we've had activity in the last 60 seconds
+                                if last_activity.elapsed() > tokio::time::Duration::from_secs(60) {
+                                    // Send a keepalive by sending a null byte
+                                    let null_byte = b"\0";
+                                    if let Err(e) = channel.data(&null_byte[..]).await {
+                                        debug!("Keepalive failed, connection may be dead: {:?}", e);
+                                        break;
+                                    }
+                                    debug!("Sent keepalive to session: {}", session_id_clone);
+                                }
+                            }
                         }
-                    },
-                    Err(e) => {
-                        error!("Failed to open terminal channel: {:?}", e);
-                        // Send error to frontend
-                        let error_msg = format!("Failed to open terminal channel: {}", e);
-                        let event_name = format!("terminal-error-{}", session_id_clone);
-                        let _ = app_clone.emit(&event_name, serde_json::json!({ "error": error_msg }));
                     }
+                },
+                Err(e) => {
+                    error!("Failed to open terminal channel: {:?}", e);
+                    // Send error to frontend
+                    let error_msg = format!("Failed to open terminal channel: {}", e);
+                    let event_name = format!("terminal-error-{}", session_id_clone);
+                    let _ = app_clone.emit(&event_name, serde_json::json!({ "error": error_msg }));
                 }
-            });
+            }
         });
 
         // Store terminal session
@@ -631,9 +625,13 @@ impl ConnectionManager for DefaultConnectionManager {
 
         // Send data command
         let sender = terminal.sender.clone();
-        let _ = sender.blocking_send(TerminalCommand::Data(data_bytes));
-
-        Ok(())
+        match sender.blocking_send(TerminalCommand::Data(data_bytes)) {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                error!("Failed to send terminal data: {}", e);
+                Err(ConnectionError::ConnectionFailed(format!("Failed to send data: {}", e)))
+            }
+        }
     }
 
     fn resize_terminal(&mut self, session_id: &Uuid, width: u16, height: u16) -> Result<(), ConnectionError> {

@@ -1,4 +1,4 @@
-use russh::client::{Config, Handle, Handler}; use std::sync::{Arc, Mutex}; use std::net::SocketAddr; use std::str::FromStr; use tokio::net::lookup_host; use anyhow::anyhow; use super::known_hosts::KnownHostsManager; use log::{info, debug, error};
+use russh::client::{Config, Handle, Handler}; use std::sync::Arc; use tokio::sync::Mutex; use std::net::SocketAddr; use std::str::FromStr; use tokio::net::lookup_host; use anyhow::anyhow; use super::known_hosts::KnownHostsManager; use log::{info, debug, error};
 use russh_keys::load_secret_key; // 新增导入
 
 #[derive(Clone)]
@@ -14,6 +14,7 @@ pub struct SshConnection {
     // 移除session_task字段，russh的Handle内部已经管理会话任务
 }
 
+#[derive(Clone)]
 pub struct SshHandler {
     username: String,
     auth_type: AuthType,

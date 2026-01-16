@@ -8,6 +8,7 @@ use dirs::home_dir;
 use log::{info, debug};
 
 /// KnownHostsManager handles the management of known SSH hosts and their keys
+#[derive(Clone)]
 pub struct KnownHostsManager {
     known_hosts_path: String,
     known_hosts: HashMap<String, Vec<PublicKey>>,
