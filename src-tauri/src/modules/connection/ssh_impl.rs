@@ -9,6 +9,7 @@ pub enum AuthType {
     Certificate(String, String, Option<String>),
 }
 
+#[derive(Clone)]
 pub struct SshConnection {
     pub handle: Arc<Mutex<Handle<SshHandler>>>,
     // 移除session_task字段，russh的Handle内部已经管理会话任务

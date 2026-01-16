@@ -234,6 +234,10 @@ impl DefaultConnectionManager {
             runtime: Arc::new(runtime),
         }
     }
+
+    pub fn get_ssh_connection(&self, id: &Uuid) -> Option<SshConnection> {
+        self.ssh_connections.get(id).cloned()
+    }
 }
 
 impl ConnectionManager for DefaultConnectionManager {
@@ -516,6 +520,7 @@ impl ConnectionManager for DefaultConnectionManager {
 
                     // Event loop for channel and commands
                     let mut last_activity = tokio::time::Instant::now();
+                    let mut exit_reason = "unknown";
                     
                     loop {
                         tokio::select! {
@@ -535,14 +540,17 @@ impl ConnectionManager for DefaultConnectionManager {
                                     },
                                     Some(russh::ChannelMsg::ExitStatus { exit_status }) => {
                                         info!("Terminal exited with status: {}", exit_status);
+                                        exit_reason = "normal";
                                         break;
                                     },
                                     Some(russh::ChannelMsg::Close) => {
                                         info!("Channel closed by server");
+                                        exit_reason = "server_closed";
                                         break;
                                     },
                                     None => {
-                                        debug!("Channel closed");
+                                        debug!("Channel closed (connection lost)");
+                                        exit_reason = "connection_lost";
                                         break;
                                     },
                                     _ => {}
@@ -563,10 +571,12 @@ impl ConnectionManager for DefaultConnectionManager {
                                     },
                                     Some(TerminalCommand::Close) => {
                                         let _ = channel.close().await;
+                                        exit_reason = "user_closed";
                                         break;
                                     },
                                     None => {
                                         debug!("Command channel closed");
+                                        exit_reason = "command_channel_closed";
                                         break;
                                     }
                                 }
@@ -579,6 +589,7 @@ impl ConnectionManager for DefaultConnectionManager {
                                     let null_byte = b"\0";
                                     if let Err(e) = channel.data(&null_byte[..]).await {
                                         debug!("Keepalive failed, connection may be dead: {:?}", e);
+                                        exit_reason = "keepalive_failed";
                                         break;
                                     }
                                     debug!("Sent keepalive to session: {}", session_id_clone);
@@ -586,6 +597,11 @@ impl ConnectionManager for DefaultConnectionManager {
                             }
                         }
                     }
+
+                    // Emit session closed event
+                    let event_name = format!("session-closed-{}", session_id_clone);
+                    info!("Emitting session closed event: {} (reason: {})", event_name, exit_reason);
+                    let _ = app_clone.emit(&event_name, serde_json::json!({ "reason": exit_reason }));
                 },
                 Err(e) => {
                     error!("Failed to open terminal channel: {:?}", e);
@@ -621,7 +637,12 @@ impl ConnectionManager for DefaultConnectionManager {
         let data_bytes = data.as_bytes().to_vec();
         
         // Log sent data
-        self.tracker.lock().unwrap().log_data(*session_id, &data_bytes, "sent");
+        // Log sent data
+        if let Ok(mut tracker) = self.tracker.lock() {
+            tracker.log_data(*session_id, &data_bytes, "sent");
+        } else {
+            error!("Failed to lock channel tracker for logging sent data");
+        }
 
         // Send data command
         let sender = terminal.sender.clone();
@@ -655,7 +676,8 @@ impl ConnectionManager for DefaultConnectionManager {
             .map(|t| t.id)
             .ok_or_else(|| ConnectionError::SessionNotFound(*session_id))?;
 
-        let terminal = self.terminals.remove(&terminal_id).unwrap();
+        let terminal = self.terminals.remove(&terminal_id)
+            .ok_or_else(|| ConnectionError::SessionNotFound(*session_id))?;
 
         // Send close command
         let sender = terminal.sender.clone();

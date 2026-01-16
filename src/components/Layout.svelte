@@ -2,11 +2,59 @@
   import Sidebar from './Sidebar.svelte';
   import TerminalManager from './TerminalManager.svelte';
   import ConnectionModal from './ConnectionModal.svelte';
-  import { showConnectionForm, successMessage, errorMessage } from '../lib/store';
+  import SettingsModal from './SettingsModal.svelte';
+  import { showConnectionForm, showSettings, successMessage, errorMessage, settings, activeTerminals, selectedTerminalIndex } from '../lib/store';
+  import { closeTerminal } from '../lib/terminalService';
   import { fade, fly } from 'svelte/transition';
+
+  // Apply theme class to document element
+  $: {
+    if ($settings.theme === 'dark') {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  }
+
+  function handleKeydown(event: KeyboardEvent) {
+    // Check for Ctrl+Shift modifiers
+    if (event.ctrlKey && event.shiftKey) {
+      switch (event.code) {
+        case 'KeyN': // New Connection
+          event.preventDefault();
+          showConnectionForm.update(v => !v);
+          break;
+        case 'KeyS': // Settings
+          event.preventDefault();
+          showSettings.update(v => !v);
+          break;
+        case 'KeyW': // Close Current Terminal
+          event.preventDefault();
+          if ($activeTerminals.length > 0 && $selectedTerminalIndex >= 0 && $selectedTerminalIndex < $activeTerminals.length) {
+             const session = $activeTerminals[$selectedTerminalIndex];
+             if (session) closeTerminal(session.sessionId);
+          }
+          break;
+        case 'BracketLeft': // Previous tab
+          event.preventDefault();
+          if ($activeTerminals.length > 1) {
+            selectedTerminalIndex.update(idx => (idx - 1 + $activeTerminals.length) % $activeTerminals.length);
+          }
+          break;
+        case 'BracketRight': // Next tab
+          event.preventDefault();
+          if ($activeTerminals.length > 1) {
+            selectedTerminalIndex.update(idx => (idx + 1) % $activeTerminals.length);
+          }
+          break;
+      }
+    }
+  }
 </script>
 
-<div class="h-screen w-screen flex bg-slate-950 text-slate-200 overflow-hidden font-sans antialiased selection:bg-blue-500/30">
+<svelte:window on:keydown={handleKeydown} />
+
+<div class="h-screen w-screen flex bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-200 overflow-hidden font-sans antialiased selection:bg-blue-500/30">
   <Sidebar />
   
   <main class="flex-1 flex flex-col min-w-0 relative">
@@ -40,5 +88,11 @@
 {#if $showConnectionForm}
   <div transition:fade={{ duration: 200 }}>
     <ConnectionModal />
+  </div>
+{/if}
+
+{#if $showSettings}
+  <div transition:fade={{ duration: 200 }}>
+    <SettingsModal />
   </div>
 {/if}

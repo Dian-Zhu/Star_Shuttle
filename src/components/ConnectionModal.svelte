@@ -40,12 +40,12 @@
 </script>
 
 <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-  <div class="bg-slate-900 border border-slate-800 rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden">
+  <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden">
     <!-- Header -->
-    <div class="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-900">
-      <h2 class="text-lg font-semibold text-slate-100">新建连接</h2>
+    <div class="flex items-center justify-between px-6 py-4 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
+      <h2 class="text-lg font-semibold text-slate-900 dark:text-slate-100">新建连接</h2>
       <button 
-        class="text-slate-400 hover:text-white transition-colors p-1 rounded-md hover:bg-slate-800"
+        class="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors p-1 rounded-md hover:bg-slate-100 dark:hover:bg-slate-800"
         on:click={handleClose}
       >
         <XIcon class="w-5 h-5" />
@@ -58,12 +58,12 @@
         <!-- Basic Info -->
         <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
           <div class="md:col-span-2">
-            <label class="block text-sm font-medium text-slate-400 mb-1.5" for="name">连接名称</label>
+            <label class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1.5" for="name">连接名称</label>
             <input
               type="text"
               id="name"
               bind:value={formData.name}
-              class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all"
+              class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-200 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all"
               placeholder="例如: 生产环境服务器"
               required
             />
@@ -71,23 +71,23 @@
 
           <div class="md:col-span-2 grid grid-cols-12 gap-4">
             <div class="col-span-8">
-              <label class="block text-sm font-medium text-slate-400 mb-1.5" for="host">主机地址</label>
+              <label class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1.5" for="host">主机地址</label>
               <input
                 type="text"
                 id="host"
                 bind:value={formData.host}
-                class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all font-mono"
+                class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-200 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all font-mono"
                 placeholder="192.168.1.1 或 example.com"
                 required
               />
             </div>
             <div class="col-span-4">
-              <label class="block text-sm font-medium text-slate-400 mb-1.5" for="port">端口</label>
+              <label class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1.5" for="port">端口</label>
               <input
                 type="number"
                 id="port"
                 bind:value={formData.port}
-                class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all font-mono"
+                class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-200 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all font-mono"
                 min="1"
                 max="65535"
                 required
@@ -96,12 +96,12 @@
           </div>
 
           <div class="md:col-span-2">
-            <label class="block text-sm font-medium text-slate-400 mb-1.5" for="username">用户名</label>
+            <label class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1.5" for="username">用户名</label>
             <input
               type="text"
               id="username"
               bind:value={formData.username}
-              class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all font-mono"
+              class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-200 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all font-mono"
               placeholder="root"
               required
             />
@@ -109,43 +109,43 @@
         </div>
 
         <!-- Authentication -->
-        <div class="border-t border-slate-800 pt-5">
-          <label class="block text-sm font-medium text-slate-400 mb-3">认证方式</label>
+        <div class="border-t border-slate-200 dark:border-slate-800 pt-5">
+          <span class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-3">认证方式</span>
           
           <div class="flex space-x-4 mb-4">
             <label class="flex items-center cursor-pointer">
-              <input type="radio" bind:group={formData.authMethod} value="password" class="w-4 h-4 text-blue-600 bg-slate-800 border-slate-600 focus:ring-blue-600 ring-offset-slate-900">
-              <span class="ml-2 text-sm text-slate-300">密码</span>
+              <input type="radio" bind:group={formData.authMethod} value="password" class="w-4 h-4 text-blue-600 bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-600 focus:ring-blue-600 ring-offset-white dark:ring-offset-slate-900">
+              <span class="ml-2 text-sm text-slate-700 dark:text-slate-300">密码</span>
             </label>
             <label class="flex items-center cursor-pointer">
-              <input type="radio" bind:group={formData.authMethod} value="privateKey" class="w-4 h-4 text-blue-600 bg-slate-800 border-slate-600 focus:ring-blue-600 ring-offset-slate-900">
-              <span class="ml-2 text-sm text-slate-300">私钥</span>
+              <input type="radio" bind:group={formData.authMethod} value="privateKey" class="w-4 h-4 text-blue-600 bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-600 focus:ring-blue-600 ring-offset-white dark:ring-offset-slate-900">
+              <span class="ml-2 text-sm text-slate-700 dark:text-slate-300">私钥</span>
             </label>
             <label class="flex items-center cursor-pointer">
-              <input type="radio" bind:group={formData.authMethod} value="agent" class="w-4 h-4 text-blue-600 bg-slate-800 border-slate-600 focus:ring-blue-600 ring-offset-slate-900">
-              <span class="ml-2 text-sm text-slate-300">Agent</span>
+              <input type="radio" bind:group={formData.authMethod} value="agent" class="w-4 h-4 text-blue-600 bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-600 focus:ring-blue-600 ring-offset-white dark:ring-offset-slate-900">
+              <span class="ml-2 text-sm text-slate-700 dark:text-slate-300">Agent</span>
             </label>
           </div>
 
-          <div class="bg-slate-950/50 rounded-lg p-4 border border-slate-800/50">
+          <div class="bg-slate-50/50 dark:bg-slate-950/50 rounded-lg p-4 border border-slate-200/50 dark:border-slate-800/50">
             {#if formData.authMethod === 'password'}
               <div>
-                <label class="block text-sm font-medium text-slate-400 mb-1.5" for="password">密码</label>
+                <label class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1.5" for="password">密码</label>
                 <input
                   type="password"
                   id="password"
                   bind:value={formData.password}
-                  class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all"
+                  class="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-200 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all"
                 />
                 <label class="flex items-center mt-2 cursor-pointer">
-                  <input type="checkbox" bind:checked={formData.savePassword} class="rounded border-slate-700 bg-slate-900 text-blue-600 focus:ring-blue-600 ring-offset-slate-900">
-                  <span class="ml-2 text-xs text-slate-400">保存密码</span>
+                  <input type="checkbox" bind:checked={formData.savePassword} class="rounded border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-blue-600 focus:ring-blue-600 ring-offset-white dark:ring-offset-slate-900">
+                  <span class="ml-2 text-xs text-slate-500 dark:text-slate-400">保存密码</span>
                 </label>
               </div>
             {:else if formData.authMethod === 'privateKey'}
               <div class="space-y-3">
                 <div>
-                  <label class="block text-sm font-medium text-slate-400 mb-1.5" for="keyPath">私钥路径</label>
+                  <label class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1.5" for="keyPath">私钥路径</label>
                   <input
                     type="text"
                     id="keyPath"

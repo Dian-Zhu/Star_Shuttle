@@ -14,7 +14,7 @@ mod commands {
         manager: State<Arc<RwLock<DefaultConnectionManager>>>,
         config: ConnectionConfig,
     ) -> Result<Uuid, String> {
-        let mut manager = manager.write().unwrap();
+        let mut manager = manager.write().map_err(|e| format!("Failed to acquire write lock: {}", e))?;
         manager.connect(&config).map_err(|e| e.to_string())
     }
     
@@ -23,7 +23,7 @@ mod commands {
         manager: State<Arc<RwLock<DefaultConnectionManager>>>,
         session_id: Uuid,
     ) -> Result<(), String> {
-        let mut manager = manager.write().unwrap();
+        let mut manager = manager.write().map_err(|e| format!("Failed to acquire write lock: {}", e))?;
         manager.disconnect(&session_id).map_err(|e| e.to_string())
     }
     
@@ -32,7 +32,7 @@ mod commands {
         manager: State<Arc<RwLock<DefaultConnectionManager>>>,
         session_id: Uuid,
     ) -> Result<Option<serde_json::Value>, String> {
-        let manager = manager.read().unwrap();
+        let manager = manager.read().map_err(|e| format!("Failed to acquire read lock: {}", e))?;
         let session = manager.get_session(&session_id);
         match session {
             Some(s) => {
@@ -47,7 +47,7 @@ mod commands {
     pub fn get_all_sessions(
         manager: State<Arc<RwLock<DefaultConnectionManager>>>,
     ) -> Result<Vec<serde_json::Value>, String> {
-        let manager = manager.read().unwrap();
+        let manager = manager.read().map_err(|e| format!("Failed to acquire read lock: {}", e))?;
         let sessions = manager.get_all_sessions();
         sessions.into_iter()
             .map(|s| serde_json::to_value(s).map_err(|e| e.to_string()))
@@ -59,7 +59,7 @@ mod commands {
         manager: State<Arc<RwLock<DefaultConnectionManager>>>,
         config: ConnectionConfig,
     ) -> Result<(), String> {
-        let mut manager = manager.write().unwrap();
+        let mut manager = manager.write().map_err(|e| format!("Failed to acquire write lock: {}", e))?;
         manager.save_connection_config(config).map_err(|e| e.to_string())
     }
     
@@ -68,7 +68,7 @@ mod commands {
         manager: State<Arc<RwLock<DefaultConnectionManager>>>,
         connection_id: Uuid,
     ) -> Result<(), String> {
-        let mut manager = manager.write().unwrap();
+        let mut manager = manager.write().map_err(|e| format!("Failed to acquire write lock: {}", e))?;
         manager.delete_connection_config(&connection_id).map_err(|e| e.to_string())
     }
     
@@ -76,7 +76,7 @@ mod commands {
     pub fn get_all_connection_configs(
         manager: State<Arc<RwLock<DefaultConnectionManager>>>,
     ) -> Result<Vec<serde_json::Value>, String> {
-        let manager = manager.read().unwrap();
+        let manager = manager.read().map_err(|e| format!("Failed to acquire read lock: {}", e))?;
         let configs = manager.get_all_connection_configs();
         configs.into_iter()
             .map(|c| serde_json::to_value(c).map_err(|e| e.to_string()))
@@ -88,7 +88,7 @@ mod commands {
         manager: State<Arc<RwLock<DefaultConnectionManager>>>,
         config: ConnectionConfig,
     ) -> Result<(), String> {
-        let manager = manager.read().unwrap();
+        let manager = manager.read().map_err(|e| format!("Failed to acquire read lock: {}", e))?;
         manager.test_connection(&config).map_err(|e| e.to_string())
     }
 
@@ -100,7 +100,7 @@ mod commands {
         width: u16,
         height: u16,
     ) -> Result<bool, String> {
-        let mut manager = manager.write().unwrap();
+        let mut manager = manager.write().map_err(|e| format!("Failed to acquire write lock: {}", e))?;
         manager.start_terminal(&app, &session_id, width, height).map_err(|e| e.to_string())
     }
 
@@ -110,7 +110,7 @@ mod commands {
         session_id: Uuid,
         data: String,
     ) -> Result<(), String> {
-        let mut manager = manager.write().unwrap();
+        let mut manager = manager.write().map_err(|e| format!("Failed to acquire write lock: {}", e))?;
         manager.send_terminal_data(&session_id, &data).map_err(|e| e.to_string())
     }
 
@@ -121,7 +121,7 @@ mod commands {
         width: u16,
         height: u16,
     ) -> Result<(), String> {
-        let mut manager = manager.write().unwrap();
+        let mut manager = manager.write().map_err(|e| format!("Failed to acquire write lock: {}", e))?;
         manager.resize_terminal(&session_id, width, height).map_err(|e| e.to_string())
     }
 
@@ -130,7 +130,7 @@ mod commands {
         manager: State<Arc<RwLock<DefaultConnectionManager>>>,
         session_id: Uuid,
     ) -> Result<(), String> {
-        let mut manager = manager.write().unwrap();
+        let mut manager = manager.write().map_err(|e| format!("Failed to acquire write lock: {}", e))?;
         manager.close_terminal(&session_id).map_err(|e| e.to_string())
     }
 }
@@ -141,13 +141,19 @@ pub fn run() {
     crate::modules::logging::LogManager::init(log::LevelFilter::Debug)
         .expect("Failed to initialize logger");
     
+    let connection_manager = Arc::new(RwLock::new(DefaultConnectionManager::new()));
+    let sftp_manager = crate::modules::sftp::SftpManager::new(connection_manager.clone());
+
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         .setup(|_app| {
             // Remove tauri_plugin_log to avoid logger initialization conflict
             // We use our custom structured logger instead
             Ok(())
         })
-        .manage(Arc::new(RwLock::new(DefaultConnectionManager::new())))
+        .manage(connection_manager)
+        .manage(sftp_manager)
         .invoke_handler(tauri::generate_handler![
             // Connection management commands
             commands::connect,
@@ -163,6 +169,14 @@ pub fn run() {
             commands::send_terminal_data,
             commands::resize_terminal,
             commands::close_terminal,
+            // SFTP commands
+            crate::modules::sftp::sftp_ls,
+            crate::modules::sftp::sftp_read,
+            crate::modules::sftp::sftp_write,
+            crate::modules::sftp::sftp_mkdir,
+            crate::modules::sftp::sftp_rm,
+            crate::modules::sftp::sftp_rmdir,
+            crate::modules::sftp::sftp_rename,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

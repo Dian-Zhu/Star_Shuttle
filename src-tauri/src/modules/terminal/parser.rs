@@ -1,4 +1,4 @@
-use super::error::TerminalError; use crate::modules::error::Result; use super::buffer::{TerminalBuffer, Cell};
+use super::error::TerminalError; use crate::modules::error::Result; use super::buffer::{TerminalBuffer, Cell}; use log::warn;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ControlSequence {
@@ -291,25 +291,33 @@ impl TerminalParser {
     
     fn handle_backspace(&self, buffer: &mut TerminalBuffer) -> () {
         if buffer.cursor_col > 0 {
-            buffer.set_cursor_position(buffer.cursor_col - 1, buffer.cursor_row).unwrap();
+            if let Err(e) = buffer.set_cursor_position(buffer.cursor_col - 1, buffer.cursor_row) {
+                warn!("Failed to backspace: {}", e);
+            }
         }
     }
     
     fn handle_tab(&self, buffer: &mut TerminalBuffer) -> () {
         let next_tab_stop = ((buffer.cursor_col / 8) + 1) * 8;
-        buffer.set_cursor_position(next_tab_stop.min(buffer.cols - 1), buffer.cursor_row).unwrap();
+        if let Err(e) = buffer.set_cursor_position(next_tab_stop.min(buffer.cols - 1), buffer.cursor_row) {
+            warn!("Failed to tab: {}", e);
+        }
     }
     
     fn handle_line_feed(&self, buffer: &mut TerminalBuffer) -> () {
         if buffer.cursor_row < buffer.rows - 1 {
-            buffer.set_cursor_position(buffer.cursor_col, buffer.cursor_row + 1).unwrap();
+            if let Err(e) = buffer.set_cursor_position(buffer.cursor_col, buffer.cursor_row + 1) {
+                warn!("Failed to line feed: {}", e);
+            }
         } else {
             buffer.scroll_up(1);
         }
     }
     
     fn handle_carriage_return(&self, buffer: &mut TerminalBuffer) -> () {
-        buffer.set_cursor_position(0, buffer.cursor_row).unwrap();
+        if let Err(e) = buffer.set_cursor_position(0, buffer.cursor_row) {
+            warn!("Failed to carriage return: {}", e);
+        }
     }
     
     fn handle_form_feed(&self, buffer: &mut TerminalBuffer) -> () {
@@ -372,12 +380,25 @@ impl TerminalParser {
             blink: buffer.attributes.blink,
             reverse: buffer.attributes.reverse,
         };
-        buffer.write_cell(buffer.cursor_col, buffer.cursor_row, cell).unwrap();
+        if let Err(e) = buffer.write_cell(buffer.cursor_col, buffer.cursor_row, cell) {
+            warn!("Failed to write cell: {}", e);
+        }
         
         if buffer.cursor_col < buffer.cols - 1 {
-            buffer.set_cursor_position(buffer.cursor_col + 1, buffer.cursor_row).unwrap();
+            if let Err(e) = buffer.set_cursor_position(buffer.cursor_col + 1, buffer.cursor_row) {
+                warn!("Failed to advance cursor: {}", e);
+            }
         } else {
-            buffer.set_cursor_position(0, buffer.cursor_row + 1).unwrap();
+            if buffer.cursor_row < buffer.rows - 1 {
+                if let Err(e) = buffer.set_cursor_position(0, buffer.cursor_row + 1) {
+                    warn!("Failed to wrap cursor: {}", e);
+                }
+            } else {
+                buffer.scroll_up(1);
+                if let Err(e) = buffer.set_cursor_position(0, buffer.cursor_row) {
+                    warn!("Failed to set cursor after scroll: {}", e);
+                }
+            }
         }
     }
 }

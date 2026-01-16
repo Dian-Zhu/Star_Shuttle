@@ -48,9 +48,104 @@ export const connections = writable<Connection[]>([]);
 export const activeTerminals = writable<ActiveTerminal[]>([]);
 export const selectedTerminalIndex = writable<number>(0);
 export const showConnectionForm = writable<boolean>(false);
+export const showSettings = writable<boolean>(false);
 export const loading = writable<boolean>(false);
 export const errorMessage = writable<string | null>(null);
 export const successMessage = writable<string | null>(null);
+
+// Global Settings Store
+export interface AppSettings {
+  theme: 'dark' | 'light';
+  ui: {
+    sidebarCollapsed: boolean;
+  };
+  terminal: {
+    fontSize: number;
+    fontFamily: string;
+    cursorBlink: boolean;
+  };
+  connection: {
+    autoReconnect: boolean;
+  };
+}
+
+const defaultSettings: AppSettings = {
+  theme: 'dark',
+  ui: {
+    sidebarCollapsed: false,
+  },
+  terminal: {
+    fontSize: 14,
+    fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+    cursorBlink: true,
+  },
+  connection: {
+    autoReconnect: false,
+  },
+};
+
+// Load settings from localStorage with fallback
+const loadSettings = (): AppSettings => {
+  if (typeof localStorage === 'undefined') return defaultSettings;
+  
+  const stored = localStorage.getItem('appSettings');
+  if (!stored) return defaultSettings;
+
+  try {
+    const parsed = JSON.parse(stored);
+    // Merge with defaults to ensure all fields exist
+    return {
+      ...defaultSettings,
+      ...parsed,
+      ui: {
+        ...defaultSettings.ui,
+        ...(parsed.ui || {})
+      },
+      terminal: {
+        ...defaultSettings.terminal,
+        ...(parsed.terminal || {})
+      },
+      connection: {
+        ...defaultSettings.connection,
+        ...(parsed.connection || {})
+      }
+    };
+  } catch (e) {
+    console.error('Failed to parse settings:', e);
+    return defaultSettings;
+  }
+};
+
+export const settings = writable<AppSettings>(loadSettings());
+
+// Create a derived store for backward compatibility or ease of use if needed, 
+// but we should prefer using settings directly.
+// For now, let's keep isSidebarCollapsed as a derived store that can also be set? 
+// No, let's replace usages of isSidebarCollapsed with settings.
+export const isSidebarCollapsed = {
+    subscribe: (run: (value: boolean) => void) => {
+        return settings.subscribe(s => run(s.ui.sidebarCollapsed));
+    },
+    update: (fn: (value: boolean) => boolean) => {
+        settings.update(s => ({
+            ...s,
+            ui: { ...s.ui, sidebarCollapsed: fn(s.ui.sidebarCollapsed) }
+        }));
+    },
+    set: (value: boolean) => {
+        settings.update(s => ({
+            ...s,
+            ui: { ...s.ui, sidebarCollapsed: value }
+        }));
+    }
+};
+
+// Persist settings changes
+settings.subscribe(value => {
+  if (typeof localStorage !== 'undefined') {
+    localStorage.setItem('appSettings', JSON.stringify(value));
+  }
+});
 
 // Derived store for selected terminal
 export const selectedTerminal = derived(

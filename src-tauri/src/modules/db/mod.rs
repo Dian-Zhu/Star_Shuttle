@@ -62,7 +62,8 @@ impl DatabaseManager {
         let mut stmt = self.conn.prepare("SELECT id, name, host, port, username, auth_method, created_at, updated_at FROM connection_profiles")?;
         let profile_iter = stmt.query_map([], |row| {
             Ok(ConnectionProfile {
-                id: Uuid::parse_str(row.get::<_, String>(0)?.as_str()).unwrap(),
+                id: Uuid::parse_str(row.get::<_, String>(0)?.as_str())
+                    .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?,
                 name: row.get(1)?,
                 host: row.get(2)?,
                 port: row.get(3)?,
