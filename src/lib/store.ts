@@ -39,6 +39,11 @@ export interface Connection {
   remote_forwards?: { remote_host: string; remote_port: number; local_host: string; local_port: number }[];
 }
 
+export interface HistoryItem {
+  connection: Connection;
+  lastConnected: number; // timestamp
+}
+
 export interface ActiveTerminal {
   sessionId: string;
   connection: Connection;
@@ -53,12 +58,33 @@ export const activeTerminals = writable<ActiveTerminal[]>([]);
 export const selectedTerminalIndex = writable<number>(0);
 export const showConnectionForm = writable<boolean>(false);
 export const showSettings = writable<boolean>(false);
+export const showAdvancedModal = writable<boolean>(false);
 export const showCommandPalette = writable<boolean>(false);
 export const isLocked = writable<boolean>(false);
 export const hasAppLock = writable<boolean>(false);
 export const loading = writable<boolean>(false);
 export const errorMessage = writable<string | null>(null);
 export const successMessage = writable<string | null>(null);
+
+// History Store
+const loadHistory = (): HistoryItem[] => {
+  if (typeof localStorage === 'undefined') return [];
+  try {
+    const stored = localStorage.getItem('connectionHistory');
+    return stored ? JSON.parse(stored) : [];
+  } catch (e) {
+    console.error('Failed to parse history:', e);
+    return [];
+  }
+};
+
+export const connectionHistory = writable<HistoryItem[]>(loadHistory());
+
+connectionHistory.subscribe(value => {
+  if (typeof localStorage !== 'undefined') {
+    localStorage.setItem('connectionHistory', JSON.stringify(value));
+  }
+});
 
 // Global Settings Store
 export interface AppSettings {
@@ -73,6 +99,18 @@ export interface AppSettings {
   };
   connection: {
     autoReconnect: boolean;
+  };
+  shortcuts: {
+    commandPalette: string;
+    newConnection: string;
+    settings: string;
+    closeTerminal: string;
+    prevTab: string;
+    nextTab: string;
+  };
+  security: {
+    autoLockMinutes: number; // 0 = disabled
+    lockOnBlur: boolean;
   };
 }
 
@@ -89,6 +127,18 @@ const defaultSettings: AppSettings = {
   connection: {
     autoReconnect: false,
   },
+  shortcuts: {
+    commandPalette: 'Ctrl+Shift+P',
+    newConnection: 'Ctrl+Shift+N',
+    settings: 'Ctrl+Shift+S',
+    closeTerminal: 'Ctrl+Shift+W',
+    prevTab: 'Ctrl+Shift+[',
+    nextTab: 'Ctrl+Shift+]',
+  },
+  security: {
+    autoLockMinutes: 0,
+    lockOnBlur: false,
+  }
 };
 
 // Load settings from localStorage with fallback
@@ -115,6 +165,14 @@ const loadSettings = (): AppSettings => {
       connection: {
         ...defaultSettings.connection,
         ...(parsed.connection || {})
+      },
+      shortcuts: {
+        ...defaultSettings.shortcuts,
+        ...(parsed.shortcuts || {})
+      },
+      security: {
+        ...defaultSettings.security,
+        ...(parsed.security || {})
       }
     };
   } catch (e) {

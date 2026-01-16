@@ -174,6 +174,16 @@ mod commands {
         let mut manager = manager.write().map_err(|e| format!("Failed to acquire write lock: {}", e))?;
         manager.close_terminal(&session_id).map_err(|e| e.to_string())
     }
+
+    #[command]
+    pub fn exec_command(
+        manager: State<Arc<RwLock<DefaultConnectionManager>>>,
+        session_id: Uuid,
+        command: String,
+    ) -> Result<String, String> {
+        let mut manager = manager.write().map_err(|e| format!("Failed to acquire write lock: {}", e))?;
+        manager.exec_command(&session_id, &command).map_err(|e| e.to_string())
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -218,6 +228,7 @@ pub fn run() {
             commands::send_terminal_data,
             commands::resize_terminal,
             commands::close_terminal,
+            commands::exec_command,
             // App Lock commands
             commands::set_app_lock,
             commands::verify_app_lock,

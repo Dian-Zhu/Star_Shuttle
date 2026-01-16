@@ -9,6 +9,7 @@
 
   const tabs = [
     { id: 'general', label: '通用' },
+    { id: 'shortcuts', label: '快捷键' },
     { id: 'terminal', label: '终端' },
     { id: 'connection', label: '连接' },
     { id: 'appearance', label: '外观' },
@@ -168,34 +169,6 @@
       <div class="flex-1 overflow-y-auto p-6 custom-scrollbar">
         {#if activeTab === 'general'}
           <div class="space-y-6" in:slide={{ duration: 200 }}>
-            <!-- Theme -->
-            <div>
-              <label class="block text-sm font-medium text-slate-400 mb-2" for="theme">
-                主题
-              </label>
-              <div class="grid grid-cols-3 gap-3">
-                <button
-                  class="px-4 py-2 rounded-lg border {$settings.theme === 'light' ? 'bg-blue-600 border-blue-600 text-white' : 'border-slate-700 bg-slate-900 text-slate-400 hover:bg-slate-800'}"
-                  on:click={() => $settings.theme = 'light'}
-                >
-                  亮色
-                </button>
-                <button
-                  class="px-4 py-2 rounded-lg border {$settings.theme === 'dark' ? 'bg-blue-600 border-blue-600 text-white' : 'border-slate-700 bg-slate-900 text-slate-400 hover:bg-slate-800'}"
-                  on:click={() => $settings.theme = 'dark'}
-                >
-                  暗色
-                </button>
-                <button
-                  class="px-4 py-2 rounded-lg border border-slate-700 bg-slate-900 text-slate-500 cursor-not-allowed opacity-50"
-                  disabled
-                  title="暂不支持"
-                >
-                  跟随系统
-                </button>
-              </div>
-            </div>
-
             <!-- Language -->
             <div>
               <label class="block text-sm font-medium text-slate-400 mb-2" for="language">
@@ -208,6 +181,17 @@
                 <option value="zh-CN">简体中文</option>
                 <option value="en-US" disabled>English (Coming Soon)</option>
               </select>
+            </div>
+
+            <!-- Shortcuts -->
+            <div>
+              <button
+                class="w-full flex items-center justify-between p-3 rounded-lg border border-slate-700 bg-slate-900 hover:bg-slate-800 transition-colors group"
+                on:click={() => activeTab = 'shortcuts'}
+              >
+                <span class="text-sm font-medium text-slate-300 group-hover:text-slate-200">快捷键设置</span>
+                <svg class="w-5 h-5 text-slate-500 group-hover:text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+              </button>
             </div>
 
             <!-- App Info -->
@@ -223,6 +207,89 @@
                </div>
             </div>
           </div>
+
+        {:else if activeTab === 'shortcuts'}
+           <div class="space-y-6" in:slide={{ duration: 200 }}>
+             <h3 class="text-lg font-medium text-slate-200">快捷键设置</h3>
+             
+             <div class="space-y-4">
+                <div class="grid grid-cols-2 gap-4 items-center border-b border-slate-800 pb-4">
+                  <div>
+                    <span class="block text-sm font-medium text-slate-300">命令面板</span>
+                    <span class="text-xs text-slate-500">快速访问所有命令</span>
+                  </div>
+                  <input 
+                    type="text" 
+                    bind:value={$settings.shortcuts.commandPalette}
+                    class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 text-sm font-mono focus:border-blue-500 outline-none"
+                  />
+                </div>
+
+                <div class="grid grid-cols-2 gap-4 items-center border-b border-slate-800 pb-4">
+                  <div>
+                    <span class="block text-sm font-medium text-slate-300">新建连接</span>
+                    <span class="text-xs text-slate-500">打开新建连接窗口</span>
+                  </div>
+                  <input 
+                    type="text" 
+                    bind:value={$settings.shortcuts.newConnection}
+                    class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 text-sm font-mono focus:border-blue-500 outline-none"
+                  />
+                </div>
+
+                <div class="grid grid-cols-2 gap-4 items-center border-b border-slate-800 pb-4">
+                  <div>
+                    <span class="block text-sm font-medium text-slate-300">设置</span>
+                    <span class="text-xs text-slate-500">打开设置窗口</span>
+                  </div>
+                  <input 
+                    type="text" 
+                    bind:value={$settings.shortcuts.settings}
+                    class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 text-sm font-mono focus:border-blue-500 outline-none"
+                  />
+                </div>
+
+                <div class="grid grid-cols-2 gap-4 items-center border-b border-slate-800 pb-4">
+                  <div>
+                    <span class="block text-sm font-medium text-slate-300">关闭终端</span>
+                    <span class="text-xs text-slate-500">关闭当前活动的终端会话</span>
+                  </div>
+                  <input 
+                    type="text" 
+                    bind:value={$settings.shortcuts.closeTerminal}
+                    class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 text-sm font-mono focus:border-blue-500 outline-none"
+                  />
+                </div>
+
+                <div class="grid grid-cols-2 gap-4 items-center border-b border-slate-800 pb-4">
+                  <div>
+                    <span class="block text-sm font-medium text-slate-300">上一个标签页</span>
+                    <span class="text-xs text-slate-500">切换到左侧终端标签</span>
+                  </div>
+                  <input 
+                    type="text" 
+                    bind:value={$settings.shortcuts.prevTab}
+                    class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 text-sm font-mono focus:border-blue-500 outline-none"
+                  />
+                </div>
+
+                <div class="grid grid-cols-2 gap-4 items-center border-b border-slate-800 pb-4">
+                  <div>
+                    <span class="block text-sm font-medium text-slate-300">下一个标签页</span>
+                    <span class="text-xs text-slate-500">切换到右侧终端标签</span>
+                  </div>
+                  <input 
+                    type="text" 
+                    bind:value={$settings.shortcuts.nextTab}
+                    class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 text-sm font-mono focus:border-blue-500 outline-none"
+                  />
+                </div>
+             </div>
+             
+             <div class="bg-blue-900/20 border border-blue-900/30 rounded-lg p-3 text-xs text-blue-200">
+               <p>提示：快捷键格式为 "修饰键+按键"，例如 "Ctrl+Shift+P"。支持 Ctrl, Shift, Alt, Meta (Cmd)。</p>
+             </div>
+           </div>
 
         {:else if activeTab === 'terminal'}
           <div class="space-y-6" in:slide={{ duration: 200 }}>
@@ -370,6 +437,44 @@
                  </button>
                </div>
              {:else}
+               <!-- Auto Lock Settings -->
+               <div class="space-y-4 border border-slate-800 rounded-lg p-4 bg-slate-950/30">
+                 <h4 class="font-medium text-slate-300">自动锁定</h4>
+                 
+                 <div class="flex items-center justify-between">
+                    <div>
+                      <label class="block text-sm font-medium text-slate-400" for="autoLockTime">
+                        自动锁定时间
+                      </label>
+                      <p class="text-xs text-slate-500 mt-0.5">无操作指定时间后自动锁定 (0 为禁用)</p>
+                    </div>
+                    <div class="flex items-center gap-2">
+                       <input 
+                         type="number" 
+                         id="autoLockTime"
+                         min="0"
+                         max="120"
+                         bind:value={$settings.security.autoLockMinutes}
+                         class="w-16 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-center text-slate-200 focus:border-blue-500 outline-none"
+                       />
+                       <span class="text-sm text-slate-500">分钟</span>
+                    </div>
+                 </div>
+
+                 <div class="flex items-center justify-between border-t border-slate-800 pt-4">
+                    <div>
+                      <label class="block text-sm font-medium text-slate-400" for="lockOnBlur">
+                        失去焦点时锁定
+                      </label>
+                      <p class="text-xs text-slate-500 mt-0.5">当切换到其他应用窗口时自动锁定</p>
+                    </div>
+                    <label class="relative inline-flex items-center cursor-pointer">
+                      <input type="checkbox" id="lockOnBlur" bind:checked={$settings.security.lockOnBlur} class="sr-only peer">
+                      <div class="w-11 h-6 bg-slate-700 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                    </label>
+                 </div>
+               </div>
+
                <!-- Change/Remove Lock -->
                <div class="space-y-4 border border-slate-800 rounded-lg p-4 bg-slate-950/30">
                  <h4 class="font-medium text-slate-300">管理密码</h4>

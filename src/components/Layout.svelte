@@ -7,11 +7,13 @@
   import SettingsModal from './SettingsModal.svelte';
   import CommandPalette from './CommandPalette.svelte';
   import AppLockOverlay from './AppLockOverlay.svelte';
-  import { showConnectionForm, showSettings, successMessage, errorMessage, settings, activeTerminals, selectedTerminalIndex, showCommandPalette, isLocked } from '../lib/store';
+  import AdvancedModal from './AdvancedModal.svelte';
+  import { showConnectionForm, showSettings, successMessage, errorMessage, settings, activeTerminals, selectedTerminalIndex, showCommandPalette, isLocked, showAdvancedModal } from '../lib/store';
   import { closeTerminal } from '../lib/terminalService';
   import { fade, fly } from 'svelte/transition';
 
   let isCheckingLock = true;
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
   onMount(async () => {
     try {
@@ -24,7 +26,60 @@
     } finally {
       isCheckingLock = false;
     }
+
+    // Event listeners for auto lock
+    window.addEventListener('blur', handleWindowBlur);
+    window.addEventListener('mousemove', resetIdleTimer);
+    window.addEventListener('keydown', resetIdleTimer);
+    window.addEventListener('click', resetIdleTimer);
+    
+    resetIdleTimer();
+
+    return () => {
+        window.removeEventListener('blur', handleWindowBlur);
+        window.removeEventListener('mousemove', resetIdleTimer);
+        window.removeEventListener('keydown', resetIdleTimer);
+        window.removeEventListener('click', resetIdleTimer);
+        if (idleTimer) clearTimeout(idleTimer);
+    };
   });
+
+  async function handleWindowBlur() {
+    // Only lock if enabled and not already locked
+    if ($settings.security.lockOnBlur && !$isLocked) {
+         // Check if app lock is actually enabled on backend
+         try {
+             const enabled = await invoke('is_app_lock_enabled');
+             if (enabled) {
+                 isLocked.set(true);
+             }
+         } catch (e) {
+             console.error('Failed to check lock status on blur', e);
+         }
+    }
+  }
+
+  function resetIdleTimer() {
+      if (idleTimer) clearTimeout(idleTimer);
+      
+      const minutes = $settings.security.autoLockMinutes;
+      if (minutes > 0 && !$isLocked) {
+          idleTimer = setTimeout(async () => {
+               // Double check lock status
+               try {
+                   const enabled = await invoke('is_app_lock_enabled');
+                   if (enabled && !$isLocked) {
+                       isLocked.set(true);
+                   }
+               } catch (e) {}
+          }, minutes * 60 * 1000);
+      }
+  }
+  
+  // React to settings change to update timer
+  $: if ($settings.security.autoLockMinutes) {
+      resetIdleTimer();
+  }
 
   // Apply theme class to document element
   $: {
@@ -35,45 +90,87 @@
     }
   }
 
+  function checkShortcut(event: KeyboardEvent, shortcut: string): boolean {
+    if (!shortcut) return false;
+    const parts = shortcut.toLowerCase().split('+');
+    const key = parts.pop();
+    
+    if (!key) return false;
+
+    // Check modifiers
+    const ctrl = parts.includes('ctrl') || parts.includes('control');
+    const shift = parts.includes('shift');
+    const alt = parts.includes('alt') || parts.includes('option');
+    const meta = parts.includes('meta') || parts.includes('cmd') || parts.includes('command');
+
+    if (ctrl && !event.ctrlKey) return false;
+    if (shift && !event.shiftKey) return false;
+    if (alt && !event.altKey) return false;
+    if (meta && !event.metaKey) return false;
+
+    // Check key
+    // event.code is like 'KeyN', 'BracketLeft'. shortcut key usually is 'n', '[', etc.
+    // This is a simple implementation, might need refinement for special keys.
+    const eventKey = event.key.toLowerCase();
+    if (eventKey === key) return true;
+
+    // Fallback for code matching if key doesn't match directly (e.g. for BracketLeft)
+    if (key === '[' && event.code === 'BracketLeft') return true;
+    if (key === ']' && event.code === 'BracketRight') return true;
+
+    return false;
+  }
+
   function handleKeydown(event: KeyboardEvent) {
-    // Command Palette (Ctrl+Shift+P or Cmd+Shift+P)
-    if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.code === 'KeyP') {
+    const shortcuts = $settings.shortcuts;
+
+    // Command Palette
+    if (checkShortcut(event, shortcuts.commandPalette)) {
       event.preventDefault();
       showCommandPalette.update(v => !v);
       return;
     }
 
-    // Check for Ctrl+Shift modifiers
-    if (event.ctrlKey && event.shiftKey) {
-      switch (event.code) {
-        case 'KeyN': // New Connection
-          event.preventDefault();
-          showConnectionForm.update(v => !v);
-          break;
-        case 'KeyS': // Settings
-          event.preventDefault();
-          showSettings.update(v => !v);
-          break;
-        case 'KeyW': // Close Current Terminal
-          event.preventDefault();
-          if ($activeTerminals.length > 0 && $selectedTerminalIndex >= 0 && $selectedTerminalIndex < $activeTerminals.length) {
-             const session = $activeTerminals[$selectedTerminalIndex];
-             if (session) closeTerminal(session.sessionId);
-          }
-          break;
-        case 'BracketLeft': // Previous tab
-          event.preventDefault();
-          if ($activeTerminals.length > 1) {
-            selectedTerminalIndex.update(idx => (idx - 1 + $activeTerminals.length) % $activeTerminals.length);
-          }
-          break;
-        case 'BracketRight': // Next tab
-          event.preventDefault();
-          if ($activeTerminals.length > 1) {
-            selectedTerminalIndex.update(idx => (idx + 1) % $activeTerminals.length);
-          }
-          break;
+    // New Connection
+    if (checkShortcut(event, shortcuts.newConnection)) {
+      event.preventDefault();
+      showConnectionForm.update(v => !v);
+      return;
+    }
+
+    // Settings
+    if (checkShortcut(event, shortcuts.settings)) {
+      event.preventDefault();
+      showSettings.update(v => !v);
+      return;
+    }
+
+    // Close Current Terminal
+    if (checkShortcut(event, shortcuts.closeTerminal)) {
+      event.preventDefault();
+      if ($activeTerminals.length > 0 && $selectedTerminalIndex >= 0 && $selectedTerminalIndex < $activeTerminals.length) {
+         const session = $activeTerminals[$selectedTerminalIndex];
+         if (session) closeTerminal(session.sessionId);
       }
+      return;
+    }
+
+    // Previous Tab
+    if (checkShortcut(event, shortcuts.prevTab)) {
+      event.preventDefault();
+      if ($activeTerminals.length > 1) {
+        selectedTerminalIndex.update(idx => (idx - 1 + $activeTerminals.length) % $activeTerminals.length);
+      }
+      return;
+    }
+
+    // Next Tab
+    if (checkShortcut(event, shortcuts.nextTab)) {
+      event.preventDefault();
+      if ($activeTerminals.length > 1) {
+        selectedTerminalIndex.update(idx => (idx + 1) % $activeTerminals.length);
+      }
+      return;
     }
   }
 </script>
@@ -130,6 +227,10 @@
   <div transition:fade={{ duration: 200 }}>
     <SettingsModal />
   </div>
+{/if}
+
+{#if $showAdvancedModal}
+  <AdvancedModal />
 {/if}
 
 {#if $showCommandPalette}

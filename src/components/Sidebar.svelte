@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { connections, showConnectionForm, isSidebarCollapsed, showSettings } from '../lib/store';
+  import { connections, showConnectionForm, isSidebarCollapsed, showSettings, activeTerminals } from '../lib/store';
   import { loadConnections, deleteConnection } from '../lib/connectionService';
   import { connectAndOpen } from '../lib/terminalService';
   import PlusIcon from './icons/PlusIcon.svelte';
@@ -11,15 +11,51 @@
   import ChevronRightIcon from './icons/ChevronRightIcon.svelte';
   import UploadIcon from './icons/UploadIcon.svelte';
   import DownloadIcon from './icons/DownloadIcon.svelte';
+  import AdvancedIcon from './icons/AdvancedIcon.svelte';
   import { importConnections, exportConnections } from '../lib/importExportService';
+  import { showAdvancedModal, connectionHistory } from '../lib/store';
+  import ClockIcon from './icons/ClockIcon.svelte';
+  import ActivityIcon from './icons/ActivityIcon.svelte';
+  import SystemMonitorModal from './SystemMonitorModal.svelte';
 
   let searchTerm = '';
-  
+  let activeTab: 'servers' | 'history' = 'servers';
+  let showMonitor: string | null = null; // Session ID for monitor
+  let monitorConnection: any = null;
+
   // Filter connections based on search term
   $: filteredConnections = $connections.filter(c => 
     c.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
     c.host.toLowerCase().includes(searchTerm.toLowerCase())
   );
+
+  $: filteredHistory = $connectionHistory.filter(h => 
+    h.connection.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+    h.connection.host.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  $: activeConnectionIds = new Set($activeTerminals.map(t => t.connection.id));
+
+  function formatTimeAgo(timestamp: number) {
+    const seconds = Math.floor((Date.now() - timestamp) / 1000);
+    
+    let interval = seconds / 31536000;
+    if (interval > 1) return Math.floor(interval) + "年前";
+    
+    interval = seconds / 2592000;
+    if (interval > 1) return Math.floor(interval) + "月前";
+    
+    interval = seconds / 86400;
+    if (interval > 1) return Math.floor(interval) + "天前";
+    
+    interval = seconds / 3600;
+    if (interval > 1) return Math.floor(interval) + "小时前";
+    
+    interval = seconds / 60;
+    if (interval > 1) return Math.floor(interval) + "分钟前";
+    
+    return "刚刚";
+  }
 
   onMount(() => {
     loadConnections();
@@ -39,7 +75,28 @@
   function toggleSidebar() {
     isSidebarCollapsed.update(v => !v);
   }
+
+  function openMonitor(connection: any, event: MouseEvent) {
+      event.stopPropagation();
+      // Find active session
+      const terminal = $activeTerminals.find(t => t.connection.id === connection.id);
+      
+      if (terminal) {
+          showMonitor = terminal.sessionId;
+          monitorConnection = connection;
+      } else {
+          alert('请先连接到服务器才能打开监控面板');
+      }
+  }
 </script>
+
+{#if showMonitor && monitorConnection}
+    <SystemMonitorModal 
+        sessionId={showMonitor} 
+        connection={monitorConnection} 
+        onClose={() => { showMonitor = null; monitorConnection = null; }} 
+    />
+{/if}
 
 <aside class="flex flex-col bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 transition-all duration-300 ease-in-out {$isSidebarCollapsed ? 'w-16' : 'w-64'}">
   <!-- Sidebar Header -->
@@ -55,17 +112,48 @@
       {/if}
     </div>
     
-    <button
-      class="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-500 text-white py-2 px-3 rounded-lg font-medium transition-all shadow-md hover:shadow-blue-900/30 active:scale-95"
-      on:click={() => showConnectionForm.set(true)}
-      title="新建连接"
-    >
-      <PlusIcon class="w-4 h-4" />
-      {#if !$isSidebarCollapsed}
-        <span class="whitespace-nowrap">新建连接</span>
-      {/if}
-    </button>
+    <div class="flex gap-2">
+      <button
+        class="flex-1 flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-500 text-white py-2 px-3 rounded-lg font-medium transition-all shadow-md hover:shadow-blue-900/30 active:scale-95"
+        on:click={() => showConnectionForm.set(true)}
+        title="新建连接"
+      >
+        <PlusIcon class="w-4 h-4" />
+        {#if !$isSidebarCollapsed}
+          <span class="whitespace-nowrap">新建</span>
+        {/if}
+      </button>
+
+      <button
+        class="flex-1 flex items-center justify-center gap-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 py-2 px-3 rounded-lg font-medium transition-all"
+        on:click={() => showAdvancedModal.set(true)}
+        title="高级功能"
+      >
+        <AdvancedIcon className="w-4 h-4" />
+        {#if !$isSidebarCollapsed}
+          <span class="whitespace-nowrap">高级</span>
+        {/if}
+      </button>
+    </div>
   </div>
+
+  <!-- Tabs -->
+  {#if !$isSidebarCollapsed}
+    <div class="px-4 pt-4 flex gap-1">
+       <button 
+         class="flex-1 py-1.5 text-xs font-medium rounded-md transition-all {activeTab === 'servers' ? 'bg-slate-200 dark:bg-slate-800 text-slate-900 dark:text-slate-100' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}"
+         on:click={() => activeTab = 'servers'}
+       >
+         服务器
+       </button>
+       <button 
+         class="flex-1 py-1.5 text-xs font-medium rounded-md transition-all {activeTab === 'history' ? 'bg-slate-200 dark:bg-slate-800 text-slate-900 dark:text-slate-100' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}"
+         on:click={() => activeTab = 'history'}
+       >
+         历史
+       </button>
+    </div>
+  {/if}
 
   <!-- Search -->
   {#if !$isSidebarCollapsed}
@@ -86,59 +174,112 @@
 
   <!-- Connection List -->
   <div class="flex-1 overflow-y-auto px-2 py-2 space-y-0.5 custom-scrollbar">
-    {#if !$isSidebarCollapsed}
-        <div class="px-2 py-1.5 flex justify-between items-center text-xs font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wider whitespace-nowrap">
-          <span>服务器列表</span>
-          <div class="flex gap-1">
-             <button class="p-1 hover:text-slate-200 transition-colors" title="导入配置" on:click={importConnections}>
-                <UploadIcon className="w-3 h-3" />
-             </button>
-             <button class="p-1 hover:text-slate-200 transition-colors" title="导出配置" on:click={exportConnections}>
-                <DownloadIcon className="w-3 h-3" />
-             </button>
-          </div>
-        </div>
-    {/if}
-    {#if filteredConnections.length > 0}
-      {#each filteredConnections as connection}
-        <div class="group relative">
-          <button
-            class="w-full text-left flex items-center {$isSidebarCollapsed ? 'justify-center p-2' : 'gap-3 p-2.5'} rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors group-hover:shadow-sm"
-            on:click={() => handleConnect(connection)}
-            title={$isSidebarCollapsed ? `${connection.name} (${connection.username}@${connection.host})` : ''}
-          >
-            <div class="text-slate-400 group-hover:text-blue-500 dark:group-hover:text-blue-400 transition-colors shrink-0">
-              <ServerIcon class="w-4 h-4" />
-            </div>
-            {#if !$isSidebarCollapsed}
-              <div class="flex-1 min-w-0">
-                <div class="font-medium text-slate-700 dark:text-slate-200 truncate group-hover:text-slate-900 dark:group-hover:text-white transition-colors">
-                  {connection.name}
-                </div>
-                <div class="text-xs text-slate-500 truncate mt-0.5 font-mono opacity-80">
-                  {connection.username}@{connection.host}
-                </div>
+    {#if activeTab === 'servers'}
+        {#if !$isSidebarCollapsed}
+            <div class="px-2 py-1.5 flex justify-between items-center text-xs font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wider whitespace-nowrap">
+              <span>服务器列表</span>
+              <div class="flex gap-1">
+                 <button class="p-1 hover:text-slate-200 transition-colors" title="导入配置" on:click={importConnections}>
+                    <UploadIcon className="w-3 h-3" />
+                 </button>
+                 <button class="p-1 hover:text-slate-200 transition-colors" title="导出配置" on:click={exportConnections}>
+                    <DownloadIcon className="w-3 h-3" />
+                 </button>
               </div>
-            {/if}
-          </button>
-          
+            </div>
+        {/if}
+        {#if filteredConnections.length > 0}
+          {#each filteredConnections as connection}
+            <div class="group relative">
+              <button
+                class="w-full text-left flex items-center {$isSidebarCollapsed ? 'justify-center p-2' : 'gap-3 p-2.5'} rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors group-hover:shadow-sm"
+                on:click={() => handleConnect(connection)}
+                title={$isSidebarCollapsed ? `${connection.name} (${connection.username}@${connection.host})` : ''}
+              >
+                <div class="text-slate-400 group-hover:text-blue-500 dark:group-hover:text-blue-400 transition-colors shrink-0">
+                  <ServerIcon class="w-4 h-4" />
+                </div>
+                {#if !$isSidebarCollapsed}
+                  <div class="flex-1 min-w-0">
+                    <div class="font-medium text-slate-700 dark:text-slate-200 truncate group-hover:text-slate-900 dark:group-hover:text-white transition-colors">
+                      {connection.name}
+                    </div>
+                    <div class="text-xs text-slate-500 truncate mt-0.5 font-mono opacity-80">
+                      {connection.username}@{connection.host}
+                    </div>
+                  </div>
+                {/if}
+              </button>
+              
+              {#if !$isSidebarCollapsed}
+                {#if activeConnectionIds.has(connection.id)}
+                  <button
+                    class="absolute right-9 top-2.5 p-1.5 rounded-md text-green-500 hover:text-green-600 hover:bg-green-100 dark:hover:bg-green-900/30 transition-all"
+                    on:click={(e) => openMonitor(connection, e)}
+                    title="系统监控"
+                  >
+                    <ActivityIcon class="w-3.5 h-3.5" />
+                  </button>
+                {/if}
+                <button
+                  class="absolute right-2 top-2.5 p-1.5 rounded-md text-slate-400 dark:text-slate-500 hover:text-red-500 dark:hover:text-red-400 hover:bg-slate-200 dark:hover:bg-slate-700/50 opacity-0 group-hover:opacity-100 transition-all"
+                  on:click={(e) => handleDelete(connection.id, e)}
+                  title="删除连接"
+                >
+                  <TrashIcon class="w-3.5 h-3.5" />
+                </button>
+              {/if}
+            </div>
+          {/each}
+        {:else}
           {#if !$isSidebarCollapsed}
-            <button
-              class="absolute right-2 top-2.5 p-1.5 rounded-md text-slate-400 dark:text-slate-500 hover:text-red-500 dark:hover:text-red-400 hover:bg-slate-200 dark:hover:bg-slate-700/50 opacity-0 group-hover:opacity-100 transition-all"
-              on:click={(e) => handleDelete(connection.id, e)}
-              title="删除连接"
-            >
-              <TrashIcon class="w-3.5 h-3.5" />
-            </button>
+            <div class="flex flex-col items-center justify-center py-10 text-slate-400 dark:text-slate-500">
+              <p class="text-sm">未找到连接</p>
+            </div>
           {/if}
-        </div>
-      {/each}
-    {:else}
-      {#if !$isSidebarCollapsed}
-        <div class="flex flex-col items-center justify-center py-10 text-slate-400 dark:text-slate-500">
-          <p class="text-sm">未找到连接</p>
-        </div>
-      {/if}
+        {/if}
+    {:else if activeTab === 'history'}
+        {#if !$isSidebarCollapsed}
+            <div class="px-2 py-1.5 flex justify-between items-center text-xs font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wider whitespace-nowrap">
+              <span>最近连接</span>
+            </div>
+        {/if}
+        {#if filteredHistory.length > 0}
+          {#each filteredHistory as item}
+            <div class="group relative">
+              <button
+                class="w-full text-left flex items-center {$isSidebarCollapsed ? 'justify-center p-2' : 'gap-3 p-2.5'} rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors group-hover:shadow-sm"
+                on:click={() => handleConnect(item.connection)}
+                title={$isSidebarCollapsed ? `${item.connection.name} - ${formatTimeAgo(item.lastConnected)}` : ''}
+              >
+                <div class="text-slate-400 group-hover:text-green-500 dark:group-hover:text-green-400 transition-colors shrink-0">
+                  <ClockIcon className="w-4 h-4" />
+                </div>
+                {#if !$isSidebarCollapsed}
+                  <div class="flex-1 min-w-0">
+                    <div class="flex justify-between items-center">
+                       <div class="font-medium text-slate-700 dark:text-slate-200 truncate group-hover:text-slate-900 dark:group-hover:text-white transition-colors">
+                         {item.connection.name}
+                       </div>
+                       <span class="text-[10px] text-slate-400 bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded-full">
+                         {formatTimeAgo(item.lastConnected)}
+                       </span>
+                    </div>
+                    <div class="text-xs text-slate-500 truncate mt-0.5 font-mono opacity-80">
+                      {item.connection.username}@{item.connection.host}
+                    </div>
+                  </div>
+                {/if}
+              </button>
+            </div>
+          {/each}
+        {:else}
+          {#if !$isSidebarCollapsed}
+            <div class="flex flex-col items-center justify-center py-10 text-slate-400 dark:text-slate-500">
+              <p class="text-sm">无历史记录</p>
+            </div>
+          {/if}
+        {/if}
     {/if}
   </div>
 

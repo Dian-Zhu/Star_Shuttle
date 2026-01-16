@@ -115,11 +115,11 @@ export async function saveConnection(connectionData: any) {
     successMessage.set('连接保存成功！');
     await loadConnections();
     setTimeout(() => successMessage.set(null), 5000);
-    return true;
+    return connectionId;
   } catch (error) {
     console.error('Error saving connection:', error);
     errorMessage.set(`保存连接失败：${error instanceof Error ? error.message : error}`);
     setTimeout(() => errorMessage.set(null), 5000);
-    return false;
+    return null;
   }
 }

@@ -166,6 +166,9 @@ pub trait ConnectionManager {
     fn send_terminal_data(&mut self, session_id: &Uuid, data: &str) -> Result<(), ConnectionError>;
     fn resize_terminal(&mut self, session_id: &Uuid, width: u16, height: u16) -> Result<(), ConnectionError>;
     fn close_terminal(&mut self, session_id: &Uuid) -> Result<(), ConnectionError>;
+    
+    // Command execution
+    fn exec_command(&mut self, session_id: &Uuid, command: &str) -> Result<String, ConnectionError>;
 }
 
 // Connection errors
@@ -714,6 +717,44 @@ impl ConnectionManager for DefaultConnectionManager {
 
         info!("Terminal closed for session: {}", session_id);
         Ok(())
+    }
+
+    fn exec_command(&mut self, session_id: &Uuid, command: &str) -> Result<String, ConnectionError> {
+        let ssh_connection = self.ssh_connections.get(session_id)
+            .ok_or_else(|| ConnectionError::SessionNotFound(*session_id))?
+            .clone();
+
+        let command = command.to_string();
+        
+        // Execute command in a blocking way using runtime
+        let result = self.runtime.block_on(async move {
+            let handle = ssh_connection.handle.lock().await;
+            let mut channel = handle.channel_open_session().await
+                .map_err(|e| ConnectionError::SshError(format!("Failed to open channel: {:?}", e)))?;
+            
+            channel.exec(true, command.as_bytes().to_vec()).await
+                .map_err(|e| ConnectionError::SshError(format!("Failed to execute command: {:?}", e)))?;
+            
+            let mut output = String::new();
+            while let Some(msg) = channel.wait().await {
+                match msg {
+                    russh::ChannelMsg::Data { ref data } => {
+                        output.push_str(&String::from_utf8_lossy(data));
+                    },
+                    russh::ChannelMsg::ExtendedData { ref data, .. } => {
+                        output.push_str(&String::from_utf8_lossy(data));
+                    },
+                    russh::ChannelMsg::Eof => {
+                        break;
+                    },
+                    _ => {}
+                }
+            }
+            channel.close().await.ok();
+            Ok(output)
+        });
+
+        result
     }
 }
 

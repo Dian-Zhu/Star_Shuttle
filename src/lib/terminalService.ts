@@ -4,7 +4,7 @@ import { Terminal } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
 import { SearchAddon } from 'xterm-addon-search';
 import { get } from 'svelte/store';
-import { activeTerminals, selectedTerminalIndex, type Connection, type ActiveTerminal, errorMessage, successMessage, settings } from './store';
+import { activeTerminals, selectedTerminalIndex, type Connection, type ActiveTerminal, errorMessage, successMessage, settings, connectionHistory } from './store';
 import 'xterm/css/xterm.css';
 
 // Output listeners storage
@@ -47,6 +47,19 @@ export async function connectAndOpen(connection: Connection) {
     
     // Select the new terminal
     selectedTerminalIndex.set(terminals.length);
+
+    // Update history
+    connectionHistory.update(history => {
+      // Remove existing entry for this connection if any
+      const newHistory = history.filter(h => h.connection.id !== connection.id);
+      // Add to top
+      newHistory.unshift({
+        connection,
+        lastConnected: Date.now()
+      });
+      // Limit to 50 items
+      return newHistory.slice(0, 50);
+    });
 
     successMessage.set(`连接成功: ${connection.name}`);
     setTimeout(() => successMessage.set(null), 3000);
