@@ -1,6 +1,7 @@
 import { writable, derived } from 'svelte/store';
 import type { Terminal } from 'xterm';
 import type { FitAddon } from 'xterm-addon-fit';
+import type { SearchAddon } from 'xterm-addon-search';
 
 // 定义连接类型 (与后端结构匹配)
 export interface Connection {
@@ -34,6 +35,8 @@ export interface Connection {
   created_at: string;
   updated_at: string;
   group_id: string | null;
+  local_forwards?: { local_host: string; local_port: number; remote_host: string; remote_port: number }[];
+  remote_forwards?: { remote_host: string; remote_port: number; local_host: string; local_port: number }[];
 }
 
 export interface ActiveTerminal {
@@ -41,6 +44,7 @@ export interface ActiveTerminal {
   connection: Connection;
   terminal: Terminal;
   fitAddon: FitAddon;
+  searchAddon: SearchAddon;
 }
 
 // Stores
@@ -49,6 +53,9 @@ export const activeTerminals = writable<ActiveTerminal[]>([]);
 export const selectedTerminalIndex = writable<number>(0);
 export const showConnectionForm = writable<boolean>(false);
 export const showSettings = writable<boolean>(false);
+export const showCommandPalette = writable<boolean>(false);
+export const isLocked = writable<boolean>(false);
+export const hasAppLock = writable<boolean>(false);
 export const loading = writable<boolean>(false);
 export const errorMessage = writable<string | null>(null);
 export const successMessage = writable<string | null>(null);

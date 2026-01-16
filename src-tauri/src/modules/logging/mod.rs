@@ -26,7 +26,17 @@ impl log::Log for SimpleLogger {
             // Get module path or use "unknown" if not available
             let module = record.module_path().unwrap_or("unknown");
             
-            // Format log entry with structured fields
+            // Format log entry for console (human readable)
+            let console_entry = format!(
+                "{} [{}] [{}] {}",
+                chrono::Local::now().format("%H:%M:%S"),
+                record.level(),
+                module,
+                record.args()
+            );
+            eprintln!("{}", console_entry);
+
+            // Format log entry for file/storage (JSON)
             let log_entry = format!(
                 "{{\"timestamp\":\"{}\",\"level\":\"{}\",\"module\":\"{}\",\"message\":\"{}\",\"file\":\"{}\",\"line\":{}}}",
                 chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.3f%z"),
@@ -36,7 +46,6 @@ impl log::Log for SimpleLogger {
                 record.file().unwrap_or("unknown"),
                 record.line().unwrap_or(0)
             );
-            println!("{}", log_entry);
             
             if let Ok(mut guard) = self.inner.lock() {
                 if let Some(state) = &mut *guard {

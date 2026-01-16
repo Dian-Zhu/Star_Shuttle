@@ -127,11 +127,11 @@
     }
   }
 
-  function handleDragOver(e: DragEvent) {
+  function handleDragOver(_e: DragEvent) {
     isDragging = true;
   }
 
-  function handleDragLeave(e: DragEvent) {
+  function handleDragLeave(_e: DragEvent) {
     isDragging = false;
   }
 

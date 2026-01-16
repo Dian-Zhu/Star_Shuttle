@@ -20,18 +20,50 @@
     privateKeyPath: '',
     description: '',
     tags: '',
+    localForwards: [] as { local_host: string; local_port: number; remote_host: string; remote_port: number }[],
+    remoteForwards: [] as { remote_host: string; remote_port: number; local_host: string; local_port: number }[],
   };
+
+  // Temporary variables for adding new forwards
+  let newLocalForward = { local_host: 'localhost', local_port: 0, remote_host: 'localhost', remote_port: 0 };
+  let newRemoteForward = { remote_host: 'localhost', remote_port: 0, local_host: 'localhost', local_port: 0 };
 
   let isSaving = false;
 
   async function handleSubmit() {
     isSaving = true;
-    const success = await saveConnection(formData);
+    const success = await saveConnection({
+      ...formData,
+      local_forwards: formData.localForwards,
+      remote_forwards: formData.remoteForwards,
+    });
     isSaving = false;
     
     if (success) {
       handleClose();
     }
+  }
+
+  function addLocalForward() {
+    if (newLocalForward.local_port > 0 && newLocalForward.remote_port > 0) {
+      formData.localForwards = [...formData.localForwards, { ...newLocalForward }];
+      newLocalForward = { local_host: 'localhost', local_port: 0, remote_host: 'localhost', remote_port: 0 };
+    }
+  }
+
+  function removeLocalForward(index: number) {
+    formData.localForwards = formData.localForwards.filter((_, i) => i !== index);
+  }
+
+  function addRemoteForward() {
+    if (newRemoteForward.remote_port > 0 && newRemoteForward.local_port > 0) {
+      formData.remoteForwards = [...formData.remoteForwards, { ...newRemoteForward }];
+      newRemoteForward = { remote_host: 'localhost', remote_port: 0, local_host: 'localhost', local_port: 0 };
+    }
+  }
+
+  function removeRemoteForward(index: number) {
+    formData.remoteForwards = formData.remoteForwards.filter((_, i) => i !== index);
   }
 
   function handleClose() {
@@ -180,6 +212,123 @@
                 />
               </div>
             {/if}
+          </div>
+        </div>
+
+        <!-- Port Forwarding -->
+        <div class="border-t border-slate-200 dark:border-slate-800 pt-5">
+          <span class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-3">端口转发</span>
+          
+          <!-- Local Forwarding -->
+          <div class="mb-4">
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-xs font-medium text-slate-500 dark:text-slate-400">本地转发 (Local)</span>
+            </div>
+            
+            <div class="space-y-2 mb-2">
+              {#each formData.localForwards as forward, i}
+                <div class="flex items-center gap-2 bg-slate-50 dark:bg-slate-900/50 p-2 rounded border border-slate-200 dark:border-slate-800">
+                  <div class="flex-1 text-xs font-mono text-slate-600 dark:text-slate-300">
+                    L:{forward.local_port} -> {forward.remote_host}:{forward.remote_port}
+                  </div>
+                  <button type="button" on:click={() => removeLocalForward(i)} class="text-slate-400 hover:text-red-500">
+                    <XIcon class="w-3 h-3" />
+                  </button>
+                </div>
+              {/each}
+            </div>
+
+            <div class="grid grid-cols-12 gap-2">
+              <div class="col-span-3">
+                <input
+                  type="number"
+                  bind:value={newLocalForward.local_port}
+                  placeholder="本地端口"
+                  class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded px-2 py-1 text-xs text-slate-900 dark:text-slate-200 focus:border-blue-500 outline-none"
+                />
+              </div>
+              <div class="col-span-4">
+                <input
+                  type="text"
+                  bind:value={newLocalForward.remote_host}
+                  placeholder="目标主机"
+                  class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded px-2 py-1 text-xs text-slate-900 dark:text-slate-200 focus:border-blue-500 outline-none"
+                />
+              </div>
+              <div class="col-span-3">
+                <input
+                  type="number"
+                  bind:value={newLocalForward.remote_port}
+                  placeholder="目标端口"
+                  class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded px-2 py-1 text-xs text-slate-900 dark:text-slate-200 focus:border-blue-500 outline-none"
+                />
+              </div>
+              <div class="col-span-2">
+                <button
+                  type="button"
+                  on:click={addLocalForward}
+                  class="w-full h-full flex items-center justify-center bg-blue-600 hover:bg-blue-500 text-white rounded text-xs transition-colors"
+                >
+                  添加
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Remote Forwarding -->
+          <div>
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-xs font-medium text-slate-500 dark:text-slate-400">远程转发 (Remote)</span>
+            </div>
+
+            <div class="space-y-2 mb-2">
+              {#each formData.remoteForwards as forward, i}
+                <div class="flex items-center gap-2 bg-slate-50 dark:bg-slate-900/50 p-2 rounded border border-slate-200 dark:border-slate-800">
+                  <div class="flex-1 text-xs font-mono text-slate-600 dark:text-slate-300">
+                    R:{forward.remote_port} -> {forward.local_host}:{forward.local_port}
+                  </div>
+                  <button type="button" on:click={() => removeRemoteForward(i)} class="text-slate-400 hover:text-red-500">
+                    <XIcon class="w-3 h-3" />
+                  </button>
+                </div>
+              {/each}
+            </div>
+
+            <div class="grid grid-cols-12 gap-2">
+              <div class="col-span-3">
+                <input
+                  type="number"
+                  bind:value={newRemoteForward.remote_port}
+                  placeholder="远程端口"
+                  class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded px-2 py-1 text-xs text-slate-900 dark:text-slate-200 focus:border-blue-500 outline-none"
+                />
+              </div>
+              <div class="col-span-4">
+                <input
+                  type="text"
+                  bind:value={newRemoteForward.local_host}
+                  placeholder="本地主机"
+                  class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded px-2 py-1 text-xs text-slate-900 dark:text-slate-200 focus:border-blue-500 outline-none"
+                />
+              </div>
+              <div class="col-span-3">
+                <input
+                  type="number"
+                  bind:value={newRemoteForward.local_port}
+                  placeholder="本地端口"
+                  class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded px-2 py-1 text-xs text-slate-900 dark:text-slate-200 focus:border-blue-500 outline-none"
+                />
+              </div>
+              <div class="col-span-2">
+                <button
+                  type="button"
+                  on:click={addRemoteForward}
+                  class="w-full h-full flex items-center justify-center bg-blue-600 hover:bg-blue-500 text-white rounded text-xs transition-colors"
+                >
+                  添加
+                </button>
+              </div>
+            </div>
           </div>
         </div>
 

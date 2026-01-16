@@ -37,6 +37,38 @@ impl DatabaseManager {
             )",
             [],
         )?;
+        
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )",
+            [],
+        )?;
+        Ok(())
+    }
+    
+    pub fn save_setting(&self, key: &str, value: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_setting(&self, key: &str) -> Result<Option<String>> {
+        let mut stmt = self.conn.prepare("SELECT value FROM settings WHERE key = ?")?;
+        let mut rows = stmt.query(params![key])?;
+        
+        if let Some(row) = rows.next()? {
+            Ok(Some(row.get(0)?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn delete_setting(&self, key: &str) -> Result<()> {
+        self.conn.execute("DELETE FROM settings WHERE key = ?", params![key])?;
         Ok(())
     }
     

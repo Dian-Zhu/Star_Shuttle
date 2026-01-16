@@ -41,3 +41,4 @@ async-trait = "0.1.89"
 tokio = { version = "1.37.0", features = ["rt", "rt-multi-thread"] }
 tauri-plugin-dialog = "2.6.0"
 tauri-plugin-fs = "2.4.5"
+bcrypt = "0.18.0"

@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { Terminal } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
+import { SearchAddon } from 'xterm-addon-search';
 import { get } from 'svelte/store';
 import { activeTerminals, selectedTerminalIndex, type Connection, type ActiveTerminal, errorMessage, successMessage, settings } from './store';
 import 'xterm/css/xterm.css';
@@ -39,7 +40,8 @@ export async function connectAndOpen(connection: Connection) {
         sessionId,
         connection,
         terminal: null as any, // Will be initialized by view
-        fitAddon: null as any
+        fitAddon: null as any,
+        searchAddon: null as any
       }
     ]);
     
@@ -109,7 +111,9 @@ export async function initTerminal(container: HTMLElement, sessionId: string, co
 
     // Create fit addon and load
     const fitAddon = new FitAddon();
+    const searchAddon = new SearchAddon();
     term.loadAddon(fitAddon);
+    term.loadAddon(searchAddon);
     term.open(container);
 
     // Fit terminal to container
@@ -165,6 +169,7 @@ export async function initTerminal(container: HTMLElement, sessionId: string, co
       connection,
       terminal: term,
       fitAddon,
+      searchAddon,
     };
   } catch (error) {
     console.error('Failed to initialize terminal:', error);

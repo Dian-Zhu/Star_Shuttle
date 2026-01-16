@@ -2,6 +2,8 @@
   import { showSettings, settings } from '../lib/store';
   import XIcon from './icons/XIcon.svelte';
   import { slide } from 'svelte/transition';
+  import { onMount } from 'svelte';
+  import { invoke } from '@tauri-apps/api/core';
 
   let activeTab = 'terminal';
 
@@ -9,8 +11,113 @@
     { id: 'general', label: '通用' },
     { id: 'terminal', label: '终端' },
     { id: 'connection', label: '连接' },
-    { id: 'appearance', label: '外观' }
+    { id: 'appearance', label: '外观' },
+    { id: 'security', label: '安全' }
   ];
+
+  // Security State
+  let hasLock = false;
+  let oldPassword = '';
+  let newPassword = '';
+  let confirmPassword = '';
+  let securityMessage = '';
+  let securityError = '';
+
+  onMount(() => {
+    checkLockStatus();
+  });
+
+  async function checkLockStatus() {
+    try {
+      hasLock = await invoke('is_app_lock_enabled');
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  async function handleSetLock() {
+    if (newPassword !== confirmPassword) {
+      securityError = '两次输入的密码不一致';
+      return;
+    }
+    if (!newPassword) {
+      securityError = '密码不能为空';
+      return;
+    }
+    
+    try {
+      await invoke('set_app_lock', { password: newPassword });
+      hasLock = true;
+      securityMessage = '应用锁已设置';
+      securityError = '';
+      newPassword = '';
+      confirmPassword = '';
+    } catch (e) {
+      securityError = `设置失败: ${e}`;
+    }
+  }
+
+  async function handleChangeLock() {
+     if (!oldPassword) {
+       securityError = '请输入当前密码';
+       return;
+     }
+     
+     // Verify old password first
+     try {
+       const isValid = await invoke('verify_app_lock', { password: oldPassword });
+       if (!isValid) {
+         securityError = '当前密码错误';
+         return;
+       }
+       
+       if (newPassword !== confirmPassword) {
+         securityError = '两次输入的新密码不一致';
+         return;
+       }
+
+       if (!newPassword) {
+         securityError = '新密码不能为空';
+         return;
+       }
+       
+       await invoke('set_app_lock', { password: newPassword });
+       securityMessage = '密码已更新';
+       securityError = '';
+       oldPassword = '';
+       newPassword = '';
+       confirmPassword = '';
+     } catch (e) {
+       securityError = `修改失败: ${e}`;
+     }
+  }
+
+  async function handleRemoveLock() {
+    if (!oldPassword) {
+       securityError = '请输入当前密码以确认清除';
+       return;
+    }
+
+    if (!confirm('确定要清除应用锁吗？清除后应用启动将不再需要密码。')) return;
+    
+    try {
+      const isValid = await invoke('verify_app_lock', { password: oldPassword });
+       if (!isValid) {
+         securityError = '当前密码错误';
+         return;
+       }
+
+      await invoke('remove_app_lock');
+      hasLock = false;
+      securityMessage = '应用锁已清除';
+      securityError = '';
+      oldPassword = '';
+      newPassword = '';
+      confirmPassword = '';
+    } catch (e) {
+      securityError = `清除失败: ${e}`;
+    }
+  }
 
   function handleClose() {
     showSettings.set(false);
@@ -61,8 +168,59 @@
       <div class="flex-1 overflow-y-auto p-6 custom-scrollbar">
         {#if activeTab === 'general'}
           <div class="space-y-6" in:slide={{ duration: 200 }}>
-            <div class="text-center text-slate-500 py-10">
-              <p>更多通用设置正在开发中...</p>
+            <!-- Theme -->
+            <div>
+              <label class="block text-sm font-medium text-slate-400 mb-2" for="theme">
+                主题
+              </label>
+              <div class="grid grid-cols-3 gap-3">
+                <button
+                  class="px-4 py-2 rounded-lg border {$settings.theme === 'light' ? 'bg-blue-600 border-blue-600 text-white' : 'border-slate-700 bg-slate-900 text-slate-400 hover:bg-slate-800'}"
+                  on:click={() => $settings.theme = 'light'}
+                >
+                  亮色
+                </button>
+                <button
+                  class="px-4 py-2 rounded-lg border {$settings.theme === 'dark' ? 'bg-blue-600 border-blue-600 text-white' : 'border-slate-700 bg-slate-900 text-slate-400 hover:bg-slate-800'}"
+                  on:click={() => $settings.theme = 'dark'}
+                >
+                  暗色
+                </button>
+                <button
+                  class="px-4 py-2 rounded-lg border border-slate-700 bg-slate-900 text-slate-500 cursor-not-allowed opacity-50"
+                  disabled
+                  title="暂不支持"
+                >
+                  跟随系统
+                </button>
+              </div>
+            </div>
+
+            <!-- Language -->
+            <div>
+              <label class="block text-sm font-medium text-slate-400 mb-2" for="language">
+                语言
+              </label>
+              <select
+                id="language"
+                class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 focus:border-blue-500 outline-none"
+              >
+                <option value="zh-CN">简体中文</option>
+                <option value="en-US" disabled>English (Coming Soon)</option>
+              </select>
+            </div>
+
+            <!-- App Info -->
+            <div class="pt-6 border-t border-slate-800">
+               <div class="flex justify-between items-center">
+                 <div>
+                   <h4 class="text-sm font-medium text-slate-200">关于 Star Shuttle</h4>
+                   <p class="text-xs text-slate-500 mt-1">Version 0.1.0</p>
+                 </div>
+                 <button class="text-xs text-blue-500 hover:text-blue-400 transition-colors">
+                   检查更新
+                 </button>
+               </div>
             </div>
           </div>
 
@@ -178,6 +336,72 @@
               </div>
             </div>
           </div>
+        {:else if activeTab === 'security'}
+           <div class="space-y-6" in:slide={{ duration: 200 }}>
+             <h3 class="text-lg font-medium text-slate-200">应用安全锁</h3>
+             <p class="text-sm text-slate-400">设置启动密码以保护您的连接信息。</p>
+             
+             {#if securityMessage}
+               <div class="p-3 bg-green-500/10 border border-green-500/20 text-green-400 rounded-lg text-sm">
+                 {securityMessage}
+               </div>
+             {/if}
+             
+             {#if securityError}
+               <div class="p-3 bg-red-500/10 border border-red-500/20 text-red-400 rounded-lg text-sm">
+                 {securityError}
+               </div>
+             {/if}
+
+             {#if !hasLock}
+               <!-- Setup Lock -->
+               <div class="space-y-4 border border-slate-800 rounded-lg p-4 bg-slate-950/30">
+                 <h4 class="font-medium text-slate-300">设置新密码</h4>
+                 <div>
+                   <label class="block text-sm font-medium text-slate-400 mb-1" for="new-pwd">新密码</label>
+                   <input type="password" id="new-pwd" bind:value={newPassword} class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-blue-500 outline-none" />
+                 </div>
+                 <div>
+                   <label class="block text-sm font-medium text-slate-400 mb-1" for="confirm-pwd">确认密码</label>
+                   <input type="password" id="confirm-pwd" bind:value={confirmPassword} class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-blue-500 outline-none" />
+                 </div>
+                 <button class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-medium transition-colors" on:click={handleSetLock}>
+                   启用应用锁
+                 </button>
+               </div>
+             {:else}
+               <!-- Change/Remove Lock -->
+               <div class="space-y-4 border border-slate-800 rounded-lg p-4 bg-slate-950/30">
+                 <h4 class="font-medium text-slate-300">管理密码</h4>
+                 <div>
+                   <label class="block text-sm font-medium text-slate-400 mb-1" for="curr-pwd">当前密码</label>
+                   <input type="password" id="curr-pwd" bind:value={oldPassword} class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-blue-500 outline-none" />
+                 </div>
+                 
+                 <div class="pt-4 border-t border-slate-800">
+                    <h5 class="text-sm font-medium text-slate-400 mb-3">修改密码（可选）</h5>
+                    <div class="space-y-3">
+                        <div>
+                        <label class="block text-sm font-medium text-slate-500 mb-1" for="new-pwd-change">新密码</label>
+                        <input type="password" id="new-pwd-change" bind:value={newPassword} class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-blue-500 outline-none" />
+                        </div>
+                        <div>
+                        <label class="block text-sm font-medium text-slate-500 mb-1" for="confirm-pwd-change">确认新密码</label>
+                        <input type="password" id="confirm-pwd-change" bind:value={confirmPassword} class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-blue-500 outline-none" />
+                        </div>
+                        <div class="flex gap-3 pt-2">
+                            <button class="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg text-sm font-medium transition-colors" on:click={handleChangeLock}>
+                            更新密码
+                            </button>
+                            <button class="px-4 py-2 bg-red-900/30 hover:bg-red-900/50 text-red-400 border border-red-900/50 rounded-lg text-sm font-medium transition-colors" on:click={handleRemoveLock}>
+                            清除应用锁
+                            </button>
+                        </div>
+                    </div>
+                 </div>
+               </div>
+             {/if}
+           </div>
         {/if}
       </div>
     </div>

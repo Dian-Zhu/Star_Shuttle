@@ -1,7 +1,8 @@
-use tauri::{State, AppHandle, Emitter};
+use tauri::{State, AppHandle, Emitter, Manager};
 use uuid::Uuid;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, Mutex};
 use crate::modules::connection::{ConnectionConfig, DefaultConnectionManager};
+use crate::modules::db::DatabaseManager;
 
 // Create a separate module for commands to avoid macro name conflicts
 mod commands {
@@ -9,6 +10,46 @@ mod commands {
     use tauri::command;
     use crate::modules::connection::ConnectionManager;
     
+    #[command]
+    pub fn set_app_lock(
+        db: State<Arc<Mutex<DatabaseManager>>>,
+        password: String
+    ) -> Result<(), String> {
+        let hash = bcrypt::hash(password, bcrypt::DEFAULT_COST).map_err(|e| e.to_string())?;
+        let db = db.lock().map_err(|e| e.to_string())?;
+        db.save_setting("app_lock_hash", &hash).map_err(|e| e.to_string())
+    }
+
+    #[command]
+    pub fn verify_app_lock(
+        db: State<Arc<Mutex<DatabaseManager>>>,
+        password: String
+    ) -> Result<bool, String> {
+        let db = db.lock().map_err(|e| e.to_string())?;
+        if let Some(hash) = db.get_setting("app_lock_hash").map_err(|e| e.to_string())? {
+            bcrypt::verify(password, &hash).map_err(|e| e.to_string())
+        } else {
+            Ok(false)
+        }
+    }
+
+    #[command]
+    pub fn is_app_lock_enabled(
+        db: State<Arc<Mutex<DatabaseManager>>>
+    ) -> Result<bool, String> {
+        let db = db.lock().map_err(|e| e.to_string())?;
+        let result = db.get_setting("app_lock_hash").map_err(|e| e.to_string())?;
+        Ok(result.is_some())
+    }
+
+    #[command]
+    pub fn remove_app_lock(
+        db: State<Arc<Mutex<DatabaseManager>>>
+    ) -> Result<(), String> {
+        let db = db.lock().map_err(|e| e.to_string())?;
+        db.delete_setting("app_lock_hash").map_err(|e| e.to_string())
+    }
+
     #[command]
     pub fn connect(
         manager: State<Arc<RwLock<DefaultConnectionManager>>>,
@@ -147,9 +188,17 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .setup(|_app| {
+        .setup(|app| {
             // Remove tauri_plugin_log to avoid logger initialization conflict
             // We use our custom structured logger instead
+            
+            let app_handle = app.handle();
+            let app_dir = app_handle.path().app_data_dir().expect("failed to get app data dir");
+            std::fs::create_dir_all(&app_dir).expect("failed to create app data dir");
+            let db_path = app_dir.join("app.db");
+            let db_manager = crate::modules::db::DatabaseManager::new(db_path.to_str().unwrap()).expect("failed to init db");
+            app.manage(Arc::new(Mutex::new(db_manager)));
+            
             Ok(())
         })
         .manage(connection_manager)
@@ -169,6 +218,11 @@ pub fn run() {
             commands::send_terminal_data,
             commands::resize_terminal,
             commands::close_terminal,
+            // App Lock commands
+            commands::set_app_lock,
+            commands::verify_app_lock,
+            commands::is_app_lock_enabled,
+            commands::remove_app_lock,
             // SFTP commands
             crate::modules::sftp::sftp_ls,
             crate::modules::sftp::sftp_read,

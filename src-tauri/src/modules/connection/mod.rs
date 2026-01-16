@@ -50,6 +50,24 @@ pub struct ConnectionConfig {
     #[serde(default = "chrono::Utc::now")]
     pub updated_at: DateTime<Utc>,
     pub group_id: Option<Uuid>,
+    pub local_forwards: Vec<LocalForward>,
+    pub remote_forwards: Vec<RemoteForward>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LocalForward {
+    pub local_host: String,
+    pub local_port: u16,
+    pub remote_host: String,
+    pub remote_port: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteForward {
+    pub remote_host: String,
+    pub remote_port: u16,
+    pub local_host: String,
+    pub local_port: u16,
 }
 
 impl Default for ConnectionConfig {
@@ -69,6 +87,8 @@ impl Default for ConnectionConfig {
             created_at: Utc::now(),
             updated_at: Utc::now(),
             group_id: None,
+            local_forwards: Vec::new(),
+            remote_forwards: Vec::new(),
         }
     }
 }
@@ -273,6 +293,8 @@ impl ConnectionManager for DefaultConnectionManager {
         let port = config.port;
         let username = config.username.clone();
         let auth_method = config.auth_method.clone();
+        let local_forwards = config.local_forwards.clone();
+        let remote_forwards = config.remote_forwards.clone();
         
         // Convert our AuthMethod to ssh_impl::AuthType
         let auth_type = match auth_method {
@@ -292,7 +314,7 @@ impl ConnectionManager for DefaultConnectionManager {
         // Use the persistent runtime to establish SSH connection
         // This ensures the connection task remains alive as long as the manager exists
         match self.runtime.block_on(async {
-            ssh_impl::connect_ssh(&host, port, &username, auth_type).await
+            ssh_impl::connect_ssh(&host, port, &username, auth_type, &local_forwards, &remote_forwards).await
         }) {
             Ok(ssh_connection) => {
                 // Connection successful
@@ -420,10 +442,12 @@ impl ConnectionManager for DefaultConnectionManager {
         // Clone variables for logging
         let host_clone = host.clone();
         let port_clone = port.clone();
+        let local_forwards = config.local_forwards.clone();
+        let remote_forwards = config.remote_forwards.clone();
         
         // Use the persistent runtime to test the connection
         match self.runtime.block_on(async {
-            ssh_impl::connect_ssh(&host, port, &username, auth_type).await
+            ssh_impl::connect_ssh(&host, port, &username, auth_type, &local_forwards, &remote_forwards).await
         }) {
             Ok(_ssh_connection) => {
                 // Connection test successful

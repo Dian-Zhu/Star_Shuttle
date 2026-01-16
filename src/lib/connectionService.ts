@@ -94,19 +94,21 @@ export async function saveConnection(connectionData: any) {
       ? connectionData.tags.split(',').map((tag: string) => tag.trim()).filter(Boolean)
       : [];
 
-    const connectionId = uuidv4();
+    const connectionId = connectionData.id || uuidv4();
 
     await invoke('save_connection_config', {
       config: {
         id: connectionId,
         name: connectionData.name,
         host: connectionData.host,
-        port: connectionData.port,
+        port: Number(connectionData.port),
         username: connectionData.username,
         auth_method: backendAuthMethod,
         description: connectionData.description || null,
         tags: tagsArray,
         group_id: null,
+        local_forwards: connectionData.local_forwards || [],
+        remote_forwards: connectionData.remote_forwards || [],
       },
     });
 

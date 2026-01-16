@@ -1,7 +1,8 @@
 import { save, open } from '@tauri-apps/plugin-dialog';
 import { writeTextFile, readTextFile } from '@tauri-apps/plugin-fs';
 import { invoke } from '@tauri-apps/api/core';
-import { loadConnections, successMessage, errorMessage } from './connectionService';
+import { loadConnections } from './connectionService';
+import { successMessage, errorMessage } from './store';
 import type { Connection } from './store';
 
 export async function exportConnections() {
@@ -56,17 +57,7 @@ export async function importConnections() {
 
     if (!filePath) return; // User cancelled
 
-    const content = await readTextFile(filePath.path); // filePath is struct in v2? No, it returns string or null or array
-    // Wait, in v2 `open` returns `null | string | string[] | FileResponse | FileResponse[]` depending on options.
-    // Default is string or null (if multiple=false).
-    
-    // Check type of filePath. In v2 JS API:
-    // export type OpenResponse = string | string[] | null;
-    
-    // Actually, let's verify if `filePath` is string.
-    const pathStr = typeof filePath === 'string' ? filePath : (filePath as any).path; 
-    // Wait, the new plugin-dialog might return struct? 
-    // Documentation says: returns path(s) as string(s).
+    const pathStr = typeof filePath === 'string' ? filePath : filePath[0];
     
     const jsonContent = await readTextFile(pathStr);
     let importedConnections: Connection[];

@@ -10,6 +10,8 @@
   
   let container: HTMLElement;
   let mode: 'terminal' | 'sftp' = 'terminal';
+  let showSearch = false;
+  let searchTerm = '';
   
   onMount(async () => {
       // If terminal instance doesn't exist, create it
@@ -20,6 +22,22 @@
               // Note: This mutation won't trigger store updates automatically, which is fine here
               terminalData.terminal = result.terminal;
               terminalData.fitAddon = result.fitAddon;
+              terminalData.searchAddon = result.searchAddon;
+              
+              // Add key binding for search (Ctrl+F)
+              terminalData.terminal.attachCustomKeyEventHandler((e) => {
+                  if (e.ctrlKey && e.key === 'f' && e.type === 'keydown') {
+                      showSearch = !showSearch;
+                      if (showSearch) {
+                          // Need to wait for DOM update
+                          setTimeout(() => document.getElementById(`search-input-${terminalData.sessionId}`)?.focus(), 100);
+                      } else {
+                          terminalData.terminal.focus();
+                      }
+                      return false; // Prevent default Ctrl+F
+                  }
+                  return true;
+              });
           }
       } else {
           // If terminal already exists, open it in this container
@@ -27,6 +45,54 @@
           terminalData.fitAddon.fit();
       }
   });
+
+  function handleSearch() {
+      if (terminalData.searchAddon) {
+          terminalData.searchAddon.findNext(searchTerm, {
+            regex: false,
+            wholeWord: false,
+            caseSensitive: false,
+            incremental: true
+          });
+      }
+  }
+
+  function handleSearchPrevious() {
+      if (terminalData.searchAddon) {
+          terminalData.searchAddon.findPrevious(searchTerm, {
+            regex: false,
+            wholeWord: false,
+            caseSensitive: false,
+          });
+      }
+  }
+
+  function handleSearchNext() {
+      if (terminalData.searchAddon) {
+          terminalData.searchAddon.findNext(searchTerm, {
+            regex: false,
+            wholeWord: false,
+            caseSensitive: false,
+          });
+      }
+  }
+
+  function closeSearch() {
+      showSearch = false;
+      terminalData.terminal.focus();
+  }
+
+  function handleKeydown(e: KeyboardEvent) {
+      if (e.key === 'Enter') {
+          if (e.shiftKey) {
+              handleSearchPrevious();
+          } else {
+              handleSearchNext();
+          }
+      } else if (e.key === 'Escape') {
+          closeSearch();
+      }
+  }
 
   // Reactively update terminal options when settings change
   $: if (terminalData && terminalData.terminal) {
@@ -102,6 +168,32 @@
        class="w-full h-full overflow-hidden"
        style:display={mode === 'terminal' ? 'block' : 'none'}
      ></div>
+
+     <!-- Search Bar -->
+     {#if showSearch && mode === 'terminal'}
+      <div class="absolute top-2 right-2 z-10 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-lg rounded-md p-1.5 flex items-center gap-1.5">
+        <input 
+          id="search-input-{terminalData.sessionId}"
+          type="text" 
+          bind:value={searchTerm} 
+          on:input={handleSearch}
+          on:keydown={handleKeydown}
+          placeholder="Find..." 
+          class="bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded px-2 py-1 text-sm text-slate-800 dark:text-slate-200 w-48 focus:outline-none focus:ring-1 focus:ring-blue-500"
+        />
+        <div class="flex items-center border-l border-slate-200 dark:border-slate-700 pl-1.5 gap-1">
+          <button on:click={handleSearchPrevious} class="p-1 hover:bg-slate-100 dark:hover:bg-slate-700 rounded text-slate-500 dark:text-slate-400" title="Previous (Shift+Enter)">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7"></path></svg>
+          </button>
+          <button on:click={handleSearchNext} class="p-1 hover:bg-slate-100 dark:hover:bg-slate-700 rounded text-slate-500 dark:text-slate-400" title="Next (Enter)">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+          </button>
+          <button on:click={closeSearch} class="p-1 hover:bg-slate-100 dark:hover:bg-slate-700 rounded text-slate-500 dark:text-slate-400 hover:text-red-500 dark:hover:text-red-400" title="Close (Esc)">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+          </button>
+        </div>
+      </div>
+     {/if}
 
      <!-- SFTP Container -->
      {#if mode === 'sftp'}
