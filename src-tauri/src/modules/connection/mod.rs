@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize}; use uuid::Uuid; use chrono::{DateTime, Utc}; use std::collections::HashMap; use thiserror::Error; use log::{info, debug, error, warn};
+use serde::{Deserialize, Serialize}; use uuid::Uuid; use chrono::{DateTime, Utc}; use std::collections::HashMap; use thiserror::Error; use log::{info, debug, error};
 
 // Re-export submodules
 pub mod auth; pub mod error; pub mod ssh_impl; pub mod known_hosts; pub mod tracking;
@@ -143,10 +143,6 @@ impl ConnectionConfig {
             return Err(ConnectionError::InvalidConfig("Port is required".to_string()));
         }
         
-        if self.port < 1 || self.port > 65535 {
-            return Err(ConnectionError::InvalidConfig("Port must be between 1 and 65535".to_string()));
-        }
-        
         match &self.auth_method {
             AuthMethod::Password { password, .. } => {
                 if password.is_empty() {
@@ -233,7 +229,7 @@ pub enum ConnectionError {
 }
 
 use std::sync::{Arc, Mutex};
-use crate::modules::connection::ssh_impl::{connect_ssh, SshConnection};
+use crate::modules::connection::ssh_impl::SshConnection;
 use crate::modules::connection::tracking::ChannelTracker;
 use tauri::Emitter;
 use tokio::sync::mpsc;
@@ -583,6 +579,7 @@ impl ConnectionManager for DefaultConnectionManager {
 
                     // Event loop for channel and commands
                     let mut last_activity = tokio::time::Instant::now();
+                    #[allow(unused_assignments)]
                     let mut exit_reason = "unknown";
                     
                     loop {

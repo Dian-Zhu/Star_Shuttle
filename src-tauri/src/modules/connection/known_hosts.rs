@@ -1,6 +1,6 @@
 use std::path::Path;
 use std::fs::{self, File};
-use std::io::{self, BufRead, Write};
+use std::io::{self, Write};
 use anyhow::anyhow;
 use russh_keys::key::PublicKey;
 use std::collections::HashMap;
@@ -46,7 +46,7 @@ impl KnownHostsManager {
         }
         
         let file = File::open(&self.known_hosts_path)?;
-        let reader = io::BufReader::new(file);
+        let _reader = io::BufReader::new(file);
         
         info!("Loading known_hosts from: {}", self.known_hosts_path);
         

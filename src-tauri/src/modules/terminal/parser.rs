@@ -1,4 +1,4 @@
-use super::error::TerminalError; use crate::modules::error::Result; use super::buffer::{TerminalBuffer, Cell}; use log::warn;
+use crate::modules::error::Result; use super::buffer::{TerminalBuffer, Cell}; use log::warn;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ControlSequence {
@@ -23,7 +23,6 @@ pub struct TerminalParser {
     state: ParserState,
     params: Vec<u16>,
     intermediate: Vec<char>,
-    final_char: Option<char>,
     escape_sequence: String,
 }
 
@@ -33,7 +32,6 @@ enum ParserState {
     Escape,
     Csi,
     Osc,
-    Sgr,
 }
 
 impl Default for TerminalParser {
@@ -42,7 +40,6 @@ impl Default for TerminalParser {
             state: ParserState::Ground,
             params: Vec::new(),
             intermediate: Vec::new(),
-            final_char: None,
             escape_sequence: String::new(),
         }
     }
@@ -66,7 +63,6 @@ impl TerminalParser {
             ParserState::Escape => self.process_escape(byte, buffer),
             ParserState::Csi => self.process_csi(byte, buffer),
             ParserState::Osc => self.process_osc(byte, buffer),
-            ParserState::Sgr => self.process_sgr(byte, buffer),
         }
     }
     
@@ -136,7 +132,7 @@ impl TerminalParser {
             },
             b'A'..=b'~' => {
                 // Final character, process the CSI sequence
-                let seq = self.escape_sequence.clone();
+                let _seq = self.escape_sequence.clone();
                 let params = self.params.clone();
                 self.handle_csi_sequence(byte as char, params, buffer)?;
                 
@@ -154,7 +150,7 @@ impl TerminalParser {
         Ok(())
     }
     
-    fn process_osc(&mut self, byte: u8, buffer: &mut TerminalBuffer) -> Result<()> {
+    fn process_osc(&mut self, byte: u8, _buffer: &mut TerminalBuffer) -> Result<()> {
         // Simple OSC handling - just ignore for now
         if byte == 0x07 || (byte == 0x1b && self.escape_sequence.len() > 2 && self.escape_sequence.as_bytes()[self.escape_sequence.len() - 2] == b'\\') {
             self.state = ParserState::Ground;
@@ -165,13 +161,7 @@ impl TerminalParser {
         Ok(())
     }
     
-    fn process_sgr(&mut self, byte: u8, buffer: &mut TerminalBuffer) -> Result<()> {
-        // SGR (Select Graphic Rendition) handling
-        self.state = ParserState::Ground;
-        Ok(())
-    }
-    
-    fn handle_escape_sequence(&self, seq: &str, buffer: &mut TerminalBuffer) -> Result<()> {
+    fn handle_escape_sequence(&self, _seq: &str, _buffer: &mut TerminalBuffer) -> Result<()> {
         // Handle simple escape sequences
         Ok(())
     }
@@ -281,11 +271,11 @@ impl TerminalParser {
         Ok(())
     }
     
-    fn handle_null(&self, buffer: &mut TerminalBuffer) -> () {
+    fn handle_null(&self, _buffer: &mut TerminalBuffer) -> () {
         // Do nothing
     }
     
-    fn handle_bell(&self, buffer: &mut TerminalBuffer) -> () {
+    fn handle_bell(&self, _buffer: &mut TerminalBuffer) -> () {
         // Ring bell (ignored in terminal buffer)
     }
     
@@ -325,11 +315,11 @@ impl TerminalParser {
         buffer.clear();
     }
     
-    fn handle_shift_out(&self, buffer: &mut TerminalBuffer) -> () {
+    fn handle_shift_out(&self, _buffer: &mut TerminalBuffer) -> () {
         // Ignored
     }
     
-    fn handle_shift_in(&self, buffer: &mut TerminalBuffer) -> () {
+    fn handle_shift_in(&self, _buffer: &mut TerminalBuffer) -> () {
         // Ignored
     }
     

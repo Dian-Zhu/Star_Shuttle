@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use thiserror::Error;
 
 // Re-export submodules
 pub mod emulator;
@@ -35,6 +34,7 @@ pub use error::TerminalError;
 // Default terminal emulator implementation
 #[derive(Debug)]
 pub struct DefaultTerminalEmulator {
+    #[allow(dead_code)]
     session_id: Uuid,
     settings: TerminalSettings,
     // Implementation-specific fields will be added here
@@ -54,7 +54,7 @@ impl TerminalEmulator for DefaultTerminalEmulator {
         }
     }
 
-    fn write(&mut self, data: &[u8]) -> Result<(), TerminalError> {
+    fn write(&mut self, _data: &[u8]) -> Result<(), TerminalError> {
         // Implementation will be added here
         Ok(())
     }
@@ -64,7 +64,7 @@ impl TerminalEmulator for DefaultTerminalEmulator {
         Vec::new()
     }
 
-    fn resize(&mut self, cols: u16, rows: u16) -> Result<(), TerminalError> {
+    fn resize(&mut self, _cols: u16, _rows: u16) -> Result<(), TerminalError> {
         // Implementation will be added here
         Ok(())
     }

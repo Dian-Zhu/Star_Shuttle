@@ -1,6 +1,7 @@
 use super::{TerminalEmulator, buffer::TerminalBuffer, parser::TerminalParser}; use uuid::Uuid;
 
 pub struct TerminalEmulatorImpl {
+    #[allow(dead_code)]
     session_id: Uuid,
     settings: super::TerminalSettings,
     buffer: TerminalBuffer,

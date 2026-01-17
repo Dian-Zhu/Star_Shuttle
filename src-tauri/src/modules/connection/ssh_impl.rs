@@ -1,9 +1,8 @@
-use russh::client::{Config, Handle, Handler}; use std::sync::Arc; use tokio::sync::Mutex; use std::net::SocketAddr; use std::str::FromStr; use tokio::net::lookup_host; use anyhow::anyhow; use super::known_hosts::KnownHostsManager; use log::{info, debug, error};
+use russh::client::{Handle, Handler}; use std::sync::Arc; use tokio::sync::Mutex; use tokio::net::lookup_host; use anyhow::anyhow; use super::known_hosts::KnownHostsManager; use log::{info, debug, error, warn};
 use russh_keys::load_secret_key;
 use tokio::net::{TcpListener, TcpStream};
 use std::collections::HashMap;
 use async_trait::async_trait;
-use futures::StreamExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[derive(Clone)]
@@ -21,8 +20,11 @@ pub struct SshConnection {
 
 #[derive(Clone)]
 pub struct SshHandler {
+    #[allow(dead_code)]
     username: String,
+    #[allow(dead_code)]
     auth_type: AuthType,
+    #[allow(dead_code)]
     auth_complete: bool,
     known_hosts_manager: Option<KnownHostsManager>,
     host: String,
@@ -52,14 +54,12 @@ impl Handler for SshHandler {
         info!("Server key algorithm: {}", algorithm);
         
         // Validate server key using known_hosts manager
-        let mut accept_key = false;
         
         if let Some(known_hosts) = &mut self.known_hosts_manager {
             match known_hosts.check_host_key(&self.host, self.port, server_public_key) {
                 Ok(is_known) => {
                     if is_known {
                         info!("Host key is known and valid");
-                        accept_key = true;
                     } else {
                         info!("Host key is not known, accepting for development purposes");
                         // For development purposes, we'll accept new keys automatically
@@ -67,22 +67,19 @@ impl Handler for SshHandler {
                         if let Err(e) = known_hosts.add_host_key(&self.host, self.port, server_public_key) {
                             error!("Failed to add host key to known_hosts: {:?}", e);
                         }
-                        accept_key = true;
                     }
                 },
                 Err(e) => {
                     error!("Error checking host key: {:?}", e);
                     // For development purposes, we'll accept keys even if there's an error
-                    accept_key = true;
                 }
             }
         } else {
             // No known_hosts manager, accept for development purposes
             info!("No known_hosts manager, accepting key for development purposes");
-            accept_key = true;
         }
         
-        Ok((self, accept_key))
+        Ok((self, true))
     }
 
     async fn server_channel_open_forwarded_tcpip(
@@ -333,7 +330,7 @@ pub async fn connect_ssh(
         return Err(anyhow!("Username is required"));
     }
     
-    if port < 1 || port > 65535 {
+    if port == 0 {
         error!("Port must be between 1 and 65535, got {}", port);
         return Err(anyhow!("Port must be between 1 and 65535, got {}", port));
     }

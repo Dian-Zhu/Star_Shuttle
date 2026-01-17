@@ -1,4 +1,4 @@
-use tauri::{State, AppHandle, Emitter, Manager};
+use tauri::{State, AppHandle, Manager};
 use uuid::Uuid;
 use std::sync::{Arc, RwLock, Mutex};
 use crate::modules::connection::{ConnectionConfig, DefaultConnectionManager};

@@ -4,7 +4,6 @@ use std::io::Write;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 use serde::{Serialize, Deserialize};
-use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
 
 /// Statistics for a specific channel/session.

@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize}; use anyhow::anyhow; use russh_keys::key::PublicKey; use std::path::Path; use std::fs::File; use std::io::Read; use log::{info, debug, error}; 
+use serde::{Deserialize, Serialize}; use anyhow::anyhow; use russh_keys::key::PublicKey; use std::path::Path; use std::fs::File; use std::io::Read; use log::info; 
 
 /// Authentication methods
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,7 +46,7 @@ impl AuthHandler {
     /// Load a private key from file (simplified for russh_keys 0.40.0)
     pub fn load_private_key(
         key_path: &str,
-        passphrase: Option<&str>,
+        _passphrase: Option<&str>,
     ) -> Result<(), anyhow::Error> {
         let key_path = Path::new(key_path);
         
@@ -74,19 +74,19 @@ impl AuthHandler {
     /// Validate a private key
     pub fn validate_private_key(
         key_path: &str,
-        passphrase: Option<&str>,
+        _passphrase: Option<&str>,
     ) -> Result<(), anyhow::Error> {
-        Self::load_private_key(key_path, passphrase)?;
+        Self::load_private_key(key_path, _passphrase)?;
         Ok(())
     }
     
     /// Get the public key from a private key file (simplified)
     pub fn get_public_key_from_private(
         key_path: &str,
-        passphrase: Option<&str>,
+        _passphrase: Option<&str>,
     ) -> Result<(), anyhow::Error> {
         // Validate the private key file exists and is readable
-        Self::load_private_key(key_path, passphrase)?;
+        Self::load_private_key(key_path, _passphrase)?;
         
         // In a real implementation, we would parse the private key and extract the public key
         Ok(())
