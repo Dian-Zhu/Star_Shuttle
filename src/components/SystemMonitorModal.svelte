@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import { fade, slide } from 'svelte/transition';
+  import { fade } from 'svelte/transition';
   import XIcon from './icons/XIcon.svelte';
   import type { Connection } from '../lib/store';
 

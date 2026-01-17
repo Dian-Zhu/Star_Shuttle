@@ -184,6 +184,77 @@ mod commands {
         let mut manager = manager.write().map_err(|e| format!("Failed to acquire write lock: {}", e))?;
         manager.exec_command(&session_id, &command).map_err(|e| e.to_string())
     }
+
+    // Command snippet commands
+    #[command]
+    pub fn save_command_snippet(
+        db: State<Arc<Mutex<DatabaseManager>>>,
+        snippet: crate::modules::db::CommandSnippet,
+    ) -> Result<(), String> {
+        let db = db.lock().map_err(|e| e.to_string())?;
+        db.save_command_snippet(&snippet).map_err(|e| e.to_string())
+    }
+
+    #[command]
+    pub fn get_command_snippets(
+        db: State<Arc<Mutex<DatabaseManager>>>,
+    ) -> Result<Vec<crate::modules::db::CommandSnippet>, String> {
+        let db = db.lock().map_err(|e| e.to_string())?;
+        db.get_command_snippets().map_err(|e| e.to_string())
+    }
+
+    #[command]
+    pub fn get_command_snippet_by_id(
+        db: State<Arc<Mutex<DatabaseManager>>>,
+        id: Uuid,
+    ) -> Result<Option<crate::modules::db::CommandSnippet>, String> {
+        let db = db.lock().map_err(|e| e.to_string())?;
+        db.get_command_snippet_by_id(&id).map_err(|e| e.to_string())
+    }
+
+    #[command]
+    pub fn delete_command_snippet(
+        db: State<Arc<Mutex<DatabaseManager>>>,
+        id: Uuid,
+    ) -> Result<(), String> {
+        let db = db.lock().map_err(|e| e.to_string())?;
+        db.delete_command_snippet(&id).map_err(|e| e.to_string())
+    }
+
+    #[command]
+    pub fn increment_command_snippet_usage(
+        db: State<Arc<Mutex<DatabaseManager>>>,
+        id: Uuid,
+    ) -> Result<(), String> {
+        let db = db.lock().map_err(|e| e.to_string())?;
+        db.increment_usage_count(&id).map_err(|e| e.to_string())
+    }
+
+    #[command]
+    pub fn log_audit_event(
+        db: State<Arc<Mutex<DatabaseManager>>>,
+        event: crate::modules::db::AuditEvent,
+    ) -> Result<(), String> {
+        let db = db.lock().map_err(|e| e.to_string())?;
+        db.save_audit_event(&event).map_err(|e| e.to_string())
+    }
+
+    #[command]
+    pub fn get_audit_events(
+        db: State<Arc<Mutex<DatabaseManager>>>,
+        limit: Option<u32>,
+    ) -> Result<Vec<crate::modules::db::AuditEvent>, String> {
+        let db = db.lock().map_err(|e| e.to_string())?;
+        db.get_audit_events(limit).map_err(|e| e.to_string())
+    }
+
+    #[command]
+    pub fn clear_audit_events(
+        db: State<Arc<Mutex<DatabaseManager>>>,
+    ) -> Result<(), String> {
+        let db = db.lock().map_err(|e| e.to_string())?;
+        db.clear_audit_events().map_err(|e| e.to_string())
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -242,6 +313,16 @@ pub fn run() {
             crate::modules::sftp::sftp_rm,
             crate::modules::sftp::sftp_rmdir,
             crate::modules::sftp::sftp_rename,
+            // Command snippet commands
+            commands::save_command_snippet,
+            commands::get_command_snippets,
+            commands::get_command_snippet_by_id,
+            commands::delete_command_snippet,
+            commands::increment_command_snippet_usage,
+            // Audit logging commands
+            commands::log_audit_event,
+            commands::get_audit_events,
+            commands::clear_audit_events,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

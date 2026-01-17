@@ -15,17 +15,19 @@
   let isCheckingLock = true;
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
-  onMount(async () => {
-    try {
-      const enabled = await invoke('is_app_lock_enabled');
-      if (enabled) {
-        isLocked.set(true);
+  onMount(() => {
+    (async () => {
+      try {
+        const enabled = await invoke('is_app_lock_enabled');
+        if (enabled) {
+          isLocked.set(true);
+        }
+      } catch (e) {
+        console.error('Failed to check app lock status:', e);
+      } finally {
+        isCheckingLock = false;
       }
-    } catch (e) {
-      console.error('Failed to check app lock status:', e);
-    } finally {
-      isCheckingLock = false;
-    }
+    })();
 
     // Event listeners for auto lock
     window.addEventListener('blur', handleWindowBlur);

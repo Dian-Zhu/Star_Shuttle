@@ -5,6 +5,7 @@ import { FitAddon } from 'xterm-addon-fit';
 import { SearchAddon } from 'xterm-addon-search';
 import { get } from 'svelte/store';
 import { activeTerminals, selectedTerminalIndex, type Connection, type ActiveTerminal, errorMessage, successMessage, settings, connectionHistory } from './store';
+import { auditService } from './auditService';
 import 'xterm/css/xterm.css';
 
 // Output listeners storage
@@ -12,6 +13,9 @@ const outputListeners = new Map<string, () => void>();
 
 // Session status monitoring
 const sessionStatusListeners = new Map<string, () => void>();
+
+// Input buffer for command auditing
+const inputBuffers = new Map<string, string>();
 
 export async function connectAndOpen(connection: Connection) {
   try {

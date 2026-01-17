@@ -96,6 +96,69 @@ export async function saveConnection(connectionData: any) {
 
     const connectionId = connectionData.id || uuidv4();
 
+    // Construct proxy configuration
+    let backendProxyType;
+    switch (connectionData.proxyType) {
+      case 'none':
+        backendProxyType = { None: {} };
+        break;
+      case 'socks5':
+        if (!connectionData.proxyHost.trim()) throw new Error('SOCKS5代理主机不能为空');
+        backendProxyType = {
+          Socks5: {
+            host: connectionData.proxyHost,
+            port: Number(connectionData.proxyPort || 1080),
+            username: connectionData.proxyUsername?.trim() || null,
+            password: connectionData.proxyPassword?.trim() || null,
+          },
+        };
+        break;
+      case 'http':
+        if (!connectionData.proxyHost.trim()) throw new Error('HTTP代理主机不能为空');
+        backendProxyType = {
+          Http: {
+            host: connectionData.proxyHost,
+            port: Number(connectionData.proxyPort || 8080),
+            username: connectionData.proxyUsername?.trim() || null,
+            password: connectionData.proxyPassword?.trim() || null,
+          },
+        };
+        break;
+      case 'jumpHost':
+        if (!connectionData.proxyHost.trim()) throw new Error('跳板主机不能为空');
+        if (!connectionData.jumpHostUsername.trim()) throw new Error('跳板用户名不能为空');
+        // Construct jump host auth method (simplified)
+        let jumpAuthMethod;
+        switch (connectionData.jumpHostAuthMethod) {
+          case 'password':
+            jumpAuthMethod = { Password: { password: '', save_password: false } };
+            break;
+          case 'privateKey':
+            jumpAuthMethod = { PrivateKey: { key_path: '', passphrase: null, save_passphrase: false } };
+            break;
+          case 'agent':
+            jumpAuthMethod = { Agent: { agent_path: null } };
+            break;
+          case 'certificate':
+            jumpAuthMethod = { Certificate: { certificate_path: '', private_key_path: '', passphrase: null, save_passphrase: false } };
+            break;
+          default:
+            throw new Error('不支持的跳板认证方式');
+        }
+        backendProxyType = {
+          JumpHost: {
+            host: connectionData.proxyHost,
+            port: Number(connectionData.proxyPort || 22),
+            username: connectionData.jumpHostUsername,
+            auth_method: jumpAuthMethod,
+          },
+        };
+        break;
+      default:
+        backendProxyType = { None: {} };
+        break;
+    }
+
     await invoke('save_connection_config', {
       config: {
         id: connectionId,
@@ -109,6 +172,8 @@ export async function saveConnection(connectionData: any) {
         group_id: null,
         local_forwards: connectionData.local_forwards || [],
         remote_forwards: connectionData.remote_forwards || [],
+        proxy_type: backendProxyType,
+        socks_proxy_port: connectionData.socksProxyPort || null,
       },
     });
 

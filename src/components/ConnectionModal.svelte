@@ -24,6 +24,14 @@
     tags: '', // Comma separated string for backend compatibility
     localForwards: [] as { local_host: string; local_port: number; remote_host: string; remote_port: number }[],
     remoteForwards: [] as { remote_host: string; remote_port: number; local_host: string; local_port: number }[],
+    proxyType: 'none' as 'none' | 'socks5' | 'http' | 'jumpHost',
+    proxyHost: '',
+    proxyPort: 1080,
+    proxyUsername: '',
+    proxyPassword: '',
+    jumpHostUsername: '',
+    jumpHostAuthMethod: 'password' as 'password' | 'privateKey' | 'agent' | 'certificate',
+    socksProxyPort: undefined as number | undefined,
   };
 
   // Tabs
@@ -222,6 +230,10 @@
                   <input type="radio" bind:group={formData.authMethod} value="agent" class="w-4 h-4 text-blue-600 bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-600 focus:ring-blue-600 ring-offset-white dark:ring-offset-slate-900">
                   <span class="ml-2 text-sm text-slate-700 dark:text-slate-300">Agent</span>
                 </label>
+                <label class="flex items-center cursor-pointer">
+                  <input type="radio" bind:group={formData.authMethod} value="certificate" class="w-4 h-4 text-blue-600 bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-600 focus:ring-blue-600 ring-offset-white dark:ring-offset-slate-900">
+                  <span class="ml-2 text-sm text-slate-700 dark:text-slate-300">证书</span>
+                </label>
               </div>
 
               <div class="bg-slate-50/50 dark:bg-slate-950/50 rounded-lg p-4 border border-slate-200/50 dark:border-slate-800/50">
@@ -275,6 +287,38 @@
                       class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all font-mono text-sm"
                       placeholder="默认使用系统 SSH_AUTH_SOCK"
                     />
+                  </div>
+                {:else if formData.authMethod === 'certificate'}
+                  <div class="space-y-3">
+                    <div>
+                      <label class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1.5" for="certificatePath">证书路径</label>
+                      <input
+                        type="text"
+                        id="certificatePath"
+                        bind:value={formData.certificatePath}
+                        class="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-200 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all font-mono text-sm"
+                        placeholder="~/.ssh/id_rsa-cert.pub"
+                      />
+                    </div>
+                    <div>
+                      <label class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1.5" for="privateKeyPath">私钥路径</label>
+                      <input
+                        type="text"
+                        id="privateKeyPath"
+                        bind:value={formData.privateKeyPath}
+                        class="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-200 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all font-mono text-sm"
+                        placeholder="~/.ssh/id_rsa"
+                      />
+                    </div>
+                    <div>
+                      <label class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1.5" for="passphrase">密码短语 (可选)</label>
+                      <input
+                        type="password"
+                        id="passphrase"
+                        bind:value={formData.passphrase}
+                        class="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-200 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all"
+                      />
+                    </div>
                   </div>
                 {/if}
               </div>
@@ -330,6 +374,179 @@
                     placeholder="关于此服务器的备注信息..."
                   ></textarea>
                </div>
+            </div>
+            
+            <!-- Proxy Configuration -->
+            <div>
+              <span class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-3">代理跳板配置</span>
+              
+              <!-- Proxy Type Selection -->
+              <div class="mb-4">
+                <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-2">代理类型</label>
+                <div class="grid grid-cols-4 gap-2">
+                  <button
+                    type="button"
+                    class={`px-3 py-2 text-xs font-medium rounded-md transition-all ${formData.proxyType === 'none' ? 'bg-blue-600 text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'}`}
+                    on:click={() => formData.proxyType = 'none'}
+                  >
+                    无代理
+                  </button>
+                  <button
+                    type="button"
+                    class={`px-3 py-2 text-xs font-medium rounded-md transition-all ${formData.proxyType === 'socks5' ? 'bg-blue-600 text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'}`}
+                    on:click={() => formData.proxyType = 'socks5'}
+                  >
+                    SOCKS5
+                  </button>
+                  <button
+                    type="button"
+                    class={`px-3 py-2 text-xs font-medium rounded-md transition-all ${formData.proxyType === 'http' ? 'bg-blue-600 text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'}`}
+                    on:click={() => formData.proxyType = 'http'}
+                  >
+                    HTTP
+                  </button>
+                  <button
+                    type="button"
+                    class={`px-3 py-2 text-xs font-medium rounded-md transition-all ${formData.proxyType === 'jumpHost' ? 'bg-blue-600 text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'}`}
+                    on:click={() => formData.proxyType = 'jumpHost'}
+                  >
+                    Jump Host
+                  </button>
+                </div>
+              </div>
+              
+              <!-- Proxy Details -->
+              {#if formData.proxyType !== 'none'}
+                <div class="space-y-4 p-4 bg-slate-50 dark:bg-slate-900/50 rounded-lg border border-slate-200 dark:border-slate-800">
+                  {#if formData.proxyType === 'socks5' || formData.proxyType === 'http'}
+                    <!-- SOCKS5/HTTP Proxy Configuration -->
+                    <div class="grid grid-cols-12 gap-4">
+                      <div class="col-span-8">
+                        <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5" for="proxyHost">代理主机</label>
+                        <input
+                          type="text"
+                          id="proxyHost"
+                          bind:value={formData.proxyHost}
+                          class="w-full bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded px-3 py-2 text-sm text-slate-900 dark:text-slate-200 focus:border-blue-500 outline-none"
+                          placeholder="proxy.example.com"
+                        />
+                      </div>
+                      <div class="col-span-4">
+                        <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5" for="proxyPort">代理端口</label>
+                        <input
+                          type="number"
+                          id="proxyPort"
+                          bind:value={formData.proxyPort}
+                          class="w-full bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded px-3 py-2 text-sm text-slate-900 dark:text-slate-200 focus:border-blue-500 outline-none"
+                          placeholder="1080"
+                          min="1"
+                          max="65535"
+                        />
+                      </div>
+                    </div>
+                    
+                    <!-- Proxy Authentication -->
+                    <div>
+                      <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-2">代理认证 (可选)</label>
+                      <div class="grid grid-cols-12 gap-4">
+                        <div class="col-span-6">
+                          <input
+                            type="text"
+                            bind:value={formData.proxyUsername}
+                            class="w-full bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded px-3 py-2 text-sm text-slate-900 dark:text-slate-200 focus:border-blue-500 outline-none"
+                            placeholder="用户名"
+                          />
+                        </div>
+                        <div class="col-span-6">
+                          <input
+                            type="password"
+                            bind:value={formData.proxyPassword}
+                            class="w-full bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded px-3 py-2 text-sm text-slate-900 dark:text-slate-200 focus:border-blue-500 outline-none"
+                            placeholder="密码"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <!-- SOCKS Proxy Port (Dynamic Port Forwarding) -->
+                    {#if formData.proxyType === 'socks5'}
+                      <div>
+                        <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5" for="socksProxyPort">动态端口转发 (SOCKS 代理端口)</label>
+                        <div class="flex items-center gap-2">
+                          <input
+                            type="number"
+                            id="socksProxyPort"
+                            bind:value={formData.socksProxyPort}
+                            class="w-full bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded px-3 py-2 text-sm text-slate-900 dark:text-slate-200 focus:border-blue-500 outline-none"
+                            placeholder="1080 (留空则不启用)"
+                            min="1024"
+                            max="65535"
+                          />
+                          <div class="text-xs text-slate-500">
+                            使用 SSH -D 选项创建本地 SOCKS5 代理
+                          </div>
+                        </div>
+                      </div>
+                    {/if}
+                  {:else if formData.proxyType === 'jumpHost'}
+                    <!-- Jump Host Configuration -->
+                    <div class="space-y-4">
+                      <div class="grid grid-cols-12 gap-4">
+                        <div class="col-span-8">
+                          <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5" for="proxyHost">跳板主机</label>
+                          <input
+                            type="text"
+                            id="proxyHost"
+                            bind:value={formData.proxyHost}
+                            class="w-full bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded px-3 py-2 text-sm text-slate-900 dark:text-slate-200 focus:border-blue-500 outline-none"
+                            placeholder="bastion.example.com"
+                          />
+                        </div>
+                        <div class="col-span-4">
+                          <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5" for="proxyPort">跳板端口</label>
+                          <input
+                            type="number"
+                            id="proxyPort"
+                            bind:value={formData.proxyPort}
+                            class="w-full bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded px-3 py-2 text-sm text-slate-900 dark:text-slate-200 focus:border-blue-500 outline-none"
+                            placeholder="22"
+                            min="1"
+                            max="65535"
+                          />
+                        </div>
+                      </div>
+                      
+                      <div>
+                        <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5" for="jumpHostUsername">跳板用户名</label>
+                        <input
+                          type="text"
+                          id="jumpHostUsername"
+                          bind:value={formData.jumpHostUsername}
+                          class="w-full bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded px-3 py-2 text-sm text-slate-900 dark:text-slate-200 focus:border-blue-500 outline-none"
+                          placeholder="用户名"
+                        />
+                      </div>
+                      
+                      <!-- Jump Host Authentication Method -->
+                      <div>
+                        <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-2">跳板认证方式</label>
+                        <select
+                          bind:value={formData.jumpHostAuthMethod}
+                          class="w-full bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded px-3 py-2 text-sm text-slate-900 dark:text-slate-200 focus:border-blue-500 outline-none"
+                        >
+                          <option value="password">密码认证</option>
+                          <option value="privateKey">私钥认证</option>
+                          <option value="agent">SSH Agent</option>
+                          <option value="certificate">证书认证</option>
+                        </select>
+                        <div class="text-xs text-slate-500 mt-1">
+                          注意：跳板主机的认证需要单独配置
+                        </div>
+                      </div>
+                    </div>
+                  {/if}
+                </div>
+              {/if}
             </div>
           </div>
         {:else if activeTab === 'advanced'}
@@ -449,6 +666,179 @@
                   </div>
                 </div>
               </div>
+            </div>
+            
+            <!-- Proxy Configuration -->
+            <div>
+              <span class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-3">代理跳板配置</span>
+              
+              <!-- Proxy Type Selection -->
+              <div class="mb-4">
+                <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-2">代理类型</label>
+                <div class="grid grid-cols-4 gap-2">
+                  <button
+                    type="button"
+                    class={`px-3 py-2 text-xs font-medium rounded-md transition-all ${formData.proxyType === 'none' ? 'bg-blue-600 text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'}`}
+                    on:click={() => formData.proxyType = 'none'}
+                  >
+                    无代理
+                  </button>
+                  <button
+                    type="button"
+                    class={`px-3 py-2 text-xs font-medium rounded-md transition-all ${formData.proxyType === 'socks5' ? 'bg-blue-600 text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'}`}
+                    on:click={() => formData.proxyType = 'socks5'}
+                  >
+                    SOCKS5
+                  </button>
+                  <button
+                    type="button"
+                    class={`px-3 py-2 text-xs font-medium rounded-md transition-all ${formData.proxyType === 'http' ? 'bg-blue-600 text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'}`}
+                    on:click={() => formData.proxyType = 'http'}
+                  >
+                    HTTP
+                  </button>
+                  <button
+                    type="button"
+                    class={`px-3 py-2 text-xs font-medium rounded-md transition-all ${formData.proxyType === 'jumpHost' ? 'bg-blue-600 text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'}`}
+                    on:click={() => formData.proxyType = 'jumpHost'}
+                  >
+                    Jump Host
+                  </button>
+                </div>
+              </div>
+              
+              <!-- Proxy Details -->
+              {#if formData.proxyType !== 'none'}
+                <div class="space-y-4 p-4 bg-slate-50 dark:bg-slate-900/50 rounded-lg border border-slate-200 dark:border-slate-800">
+                  {#if formData.proxyType === 'socks5' || formData.proxyType === 'http'}
+                    <!-- SOCKS5/HTTP Proxy Configuration -->
+                    <div class="grid grid-cols-12 gap-4">
+                      <div class="col-span-8">
+                        <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5" for="proxyHost">代理主机</label>
+                        <input
+                          type="text"
+                          id="proxyHost"
+                          bind:value={formData.proxyHost}
+                          class="w-full bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded px-3 py-2 text-sm text-slate-900 dark:text-slate-200 focus:border-blue-500 outline-none"
+                          placeholder="proxy.example.com"
+                        />
+                      </div>
+                      <div class="col-span-4">
+                        <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5" for="proxyPort">代理端口</label>
+                        <input
+                          type="number"
+                          id="proxyPort"
+                          bind:value={formData.proxyPort}
+                          class="w-full bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded px-3 py-2 text-sm text-slate-900 dark:text-slate-200 focus:border-blue-500 outline-none"
+                          placeholder="1080"
+                          min="1"
+                          max="65535"
+                        />
+                      </div>
+                    </div>
+                    
+                    <!-- Proxy Authentication -->
+                    <div>
+                      <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-2">代理认证 (可选)</label>
+                      <div class="grid grid-cols-12 gap-4">
+                        <div class="col-span-6">
+                          <input
+                            type="text"
+                            bind:value={formData.proxyUsername}
+                            class="w-full bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded px-3 py-2 text-sm text-slate-900 dark:text-slate-200 focus:border-blue-500 outline-none"
+                            placeholder="用户名"
+                          />
+                        </div>
+                        <div class="col-span-6">
+                          <input
+                            type="password"
+                            bind:value={formData.proxyPassword}
+                            class="w-full bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded px-3 py-2 text-sm text-slate-900 dark:text-slate-200 focus:border-blue-500 outline-none"
+                            placeholder="密码"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <!-- SOCKS Proxy Port (Dynamic Port Forwarding) -->
+                    {#if formData.proxyType === 'socks5'}
+                      <div>
+                        <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5" for="socksProxyPort">动态端口转发 (SOCKS 代理端口)</label>
+                        <div class="flex items-center gap-2">
+                          <input
+                            type="number"
+                            id="socksProxyPort"
+                            bind:value={formData.socksProxyPort}
+                            class="w-full bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded px-3 py-2 text-sm text-slate-900 dark:text-slate-200 focus:border-blue-500 outline-none"
+                            placeholder="1080 (留空则不启用)"
+                            min="1024"
+                            max="65535"
+                          />
+                          <div class="text-xs text-slate-500">
+                            使用 SSH -D 选项创建本地 SOCKS5 代理
+                          </div>
+                        </div>
+                      </div>
+                    {/if}
+                  {:else if formData.proxyType === 'jumpHost'}
+                    <!-- Jump Host Configuration -->
+                    <div class="space-y-4">
+                      <div class="grid grid-cols-12 gap-4">
+                        <div class="col-span-8">
+                          <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5" for="proxyHost">跳板主机</label>
+                          <input
+                            type="text"
+                            id="proxyHost"
+                            bind:value={formData.proxyHost}
+                            class="w-full bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded px-3 py-2 text-sm text-slate-900 dark:text-slate-200 focus:border-blue-500 outline-none"
+                            placeholder="bastion.example.com"
+                          />
+                        </div>
+                        <div class="col-span-4">
+                          <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5" for="proxyPort">跳板端口</label>
+                          <input
+                            type="number"
+                            id="proxyPort"
+                            bind:value={formData.proxyPort}
+                            class="w-full bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded px-3 py-2 text-sm text-slate-900 dark:text-slate-200 focus:border-blue-500 outline-none"
+                            placeholder="22"
+                            min="1"
+                            max="65535"
+                          />
+                        </div>
+                      </div>
+                      
+                      <div>
+                        <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5" for="jumpHostUsername">跳板用户名</label>
+                        <input
+                          type="text"
+                          id="jumpHostUsername"
+                          bind:value={formData.jumpHostUsername}
+                          class="w-full bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded px-3 py-2 text-sm text-slate-900 dark:text-slate-200 focus:border-blue-500 outline-none"
+                          placeholder="用户名"
+                        />
+                      </div>
+                      
+                      <!-- Jump Host Authentication Method -->
+                      <div>
+                        <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-2">跳板认证方式</label>
+                        <select
+                          bind:value={formData.jumpHostAuthMethod}
+                          class="w-full bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded px-3 py-2 text-sm text-slate-900 dark:text-slate-200 focus:border-blue-500 outline-none"
+                        >
+                          <option value="password">密码认证</option>
+                          <option value="privateKey">私钥认证</option>
+                          <option value="agent">SSH Agent</option>
+                          <option value="certificate">证书认证</option>
+                        </select>
+                        <div class="text-xs text-slate-500 mt-1">
+                          注意：跳板主机的认证需要单独配置
+                        </div>
+                      </div>
+                    </div>
+                  {/if}
+                </div>
+              {/if}
             </div>
           </div>
         {/if}

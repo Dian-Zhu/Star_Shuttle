@@ -4,6 +4,7 @@
   import TerminalView from './TerminalView.svelte';
   import XIcon from './icons/XIcon.svelte';
   import TerminalIcon from './icons/TerminalIcon.svelte';
+  import { totalSpeed, formatSpeed } from '../lib/transferQueueService';
 
   function handleTabClick(index: number) {
     $selectedTerminalIndex = index;
@@ -66,6 +67,26 @@
         />
       {/each}
     {/if}
+  </div>
+
+  <!-- Status Bar -->
+  <div class="flex items-center justify-between px-4 py-1.5 bg-slate-800/80 dark:bg-slate-900/90 border-t border-slate-700/50 dark:border-slate-800/50 text-xs text-slate-300 dark:text-slate-400">
+    <div class="flex items-center gap-4">
+      <div class="flex items-center gap-1">
+        <svg class="w-3.5 h-3.5 text-blue-400" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">
+          <path fill-rule="evenodd" d="M12.293 5.293a1 1 0 011.414 0l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414-1.414L14.586 11H3a1 1 0 110-2h11.586l-2.293-2.293a1 1 0 010-1.414z" clip-rule="evenodd"></path>
+        </svg>
+        <span>实时流量:</span>
+        <span class="font-mono font-medium text-green-300">{formatSpeed($totalSpeed)}</span>
+      </div>
+      <div class="text-slate-500">|</div>
+      <div class="text-slate-500">
+        活动传输: <span class="text-slate-300">{$activeTerminals.length}</span>
+      </div>
+    </div>
+    <div class="text-slate-500 text-xs">
+      {new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+    </div>
   </div>
 </div>
 

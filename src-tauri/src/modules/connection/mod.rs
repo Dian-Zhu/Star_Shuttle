@@ -34,6 +34,36 @@ pub enum AuthMethod {
     },
 }
 
+// Proxy types for jump host support
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ProxyType {
+    None,
+    Socks5 {
+        host: String,
+        port: u16,
+        username: Option<String>,
+        password: Option<String>,
+    },
+    Http {
+        host: String,
+        port: u16,
+        username: Option<String>,
+        password: Option<String>,
+    },
+    JumpHost {
+        host: String,
+        port: u16,
+        username: String,
+        auth_method: AuthMethod,
+    },
+}
+
+impl Default for ProxyType {
+    fn default() -> Self {
+        ProxyType::None
+    }
+}
+
 // Connection configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConnectionConfig {
@@ -52,6 +82,10 @@ pub struct ConnectionConfig {
     pub group_id: Option<Uuid>,
     pub local_forwards: Vec<LocalForward>,
     pub remote_forwards: Vec<RemoteForward>,
+    #[serde(default)]
+    pub proxy_type: ProxyType,
+    #[serde(default)]
+    pub socks_proxy_port: Option<u16>, // For SSH dynamic port forwarding (-D)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,6 +123,8 @@ impl Default for ConnectionConfig {
             group_id: None,
             local_forwards: Vec::new(),
             remote_forwards: Vec::new(),
+            proxy_type: ProxyType::None,
+            socks_proxy_port: None,
         }
     }
 }
@@ -317,7 +353,7 @@ impl ConnectionManager for DefaultConnectionManager {
         // Use the persistent runtime to establish SSH connection
         // This ensures the connection task remains alive as long as the manager exists
         match self.runtime.block_on(async {
-            ssh_impl::connect_ssh(&host, port, &username, auth_type, &local_forwards, &remote_forwards).await
+            ssh_impl::connect_ssh(&host, port, &username, auth_type, &local_forwards, &remote_forwards, config.socks_proxy_port).await
         }) {
             Ok(ssh_connection) => {
                 // Connection successful
@@ -450,7 +486,7 @@ impl ConnectionManager for DefaultConnectionManager {
         
         // Use the persistent runtime to test the connection
         match self.runtime.block_on(async {
-            ssh_impl::connect_ssh(&host, port, &username, auth_type, &local_forwards, &remote_forwards).await
+            ssh_impl::connect_ssh(&host, port, &username, auth_type, &local_forwards, &remote_forwards, config.socks_proxy_port).await
         }) {
             Ok(_ssh_connection) => {
                 // Connection test successful
