@@ -22,6 +22,7 @@
   let showMonitor: string | null = null; // Session ID for monitor
   let monitorConnection: any = null;
   let expandedPaths = new Set<string>();
+  let didInitExpanded = false;
 
   // Filter connections based on search term
   $: filteredConnections = $connections.filter(c => {
@@ -47,6 +48,19 @@
     | { kind: 'folder'; id: string; depth: number; name: string; path: string; count: number; hasChildren: boolean }
     | { kind: 'connection'; id: string; depth: number; connection: any };
 
+  function normalizeTags(value: unknown): string[] {
+    if (Array.isArray(value)) {
+      return value.map(v => String(v).trim()).filter(Boolean);
+    }
+    if (typeof value === 'string') {
+      return value
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean);
+    }
+    return [];
+  }
+
   function splitTagPath(tag: string): string[] {
     return tag
       .split('/')
@@ -57,30 +71,28 @@
   function buildTagTree(items: any[]): TagNode {
     const root: TagNode = { name: '', path: '', children: new Map(), connections: [] };
     for (const connection of items) {
-      const tags: string[] = Array.isArray(connection.tags) ? connection.tags : [];
-      const tagPaths = tags.length > 0 ? tags : ['未分组'];
-      for (const tag of tagPaths) {
-        const parts = tag === '未分组' ? ['未分组'] : splitTagPath(tag);
-        if (parts.length === 0) continue;
-        let node = root;
-        for (const part of parts) {
-          const nextPath = node.path ? `${node.path}/${part}` : part;
-          const existing = node.children.get(part);
-          if (existing) {
-            node = existing;
-          } else {
-            const created: TagNode = { name: part, path: nextPath, children: new Map(), connections: [] };
-            node.children.set(part, created);
-            node = created;
-          }
+      const tags: string[] = normalizeTags(connection?.tags);
+      const groupTag = tags[0] ? String(tags[0]).trim() : '未分组';
+      const parts = groupTag === '未分组' ? ['未分组'] : splitTagPath(groupTag);
+      if (parts.length === 0) continue;
+      let node = root;
+      for (const part of parts) {
+        const nextPath = node.path ? `${node.path}/${part}` : part;
+        const existing = node.children.get(part);
+        if (existing) {
+          node = existing;
+        } else {
+          const created: TagNode = { name: part, path: nextPath, children: new Map(), connections: [] };
+          node.children.set(part, created);
+          node = created;
         }
-        node.connections.push(connection);
       }
+      node.connections.push(connection);
     }
     return root;
   }
 
-  function flattenTagTree(node: TagNode, depth = 0): TagRow[] {
+  function flattenTagTree(node: TagNode, expanded: Set<string>, depth = 0): TagRow[] {
     const rows: TagRow[] = [];
     const children = Array.from(node.children.values()).sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN'));
     for (const child of children) {
@@ -95,8 +107,8 @@
         count,
         hasChildren,
       });
-      if (expandedPaths.has(child.path)) {
-        rows.push(...flattenTagTree(child, depth + 1));
+      if (expanded.has(child.path)) {
+        rows.push(...flattenTagTree(child, expanded, depth + 1));
         const sortedConnections = [...child.connections].sort((a, b) =>
           String(a.name ?? '').localeCompare(String(b.name ?? ''), 'zh-Hans-CN')
         );
@@ -121,13 +133,14 @@
   }
 
   $: tagTree = buildTagTree(filteredConnections);
-  $: tagRows = flattenTagTree(tagTree);
   $: {
     const topLevelPaths = Array.from(tagTree.children.values()).map(n => n.path);
-    if (expandedPaths.size === 0 && topLevelPaths.length > 0) {
+    if (!didInitExpanded && topLevelPaths.length > 0) {
       expandedPaths = new Set(topLevelPaths);
+      didInitExpanded = true;
     }
   }
+  $: tagRows = flattenTagTree(tagTree, expandedPaths);
 
   $: filteredHistory = $connectionHistory.filter(h => 
     h.connection.name.toLowerCase().includes(searchTerm.toLowerCase()) || 

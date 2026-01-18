@@ -6,6 +6,13 @@
   "permissions": [
     "core:default",
     "fs:default",
+    {
+      "identifier": "fs:allow-read-dir",
+      "allow": [
+        { "path": "/root" },
+        { "path": "/root/**" }
+      ]
+    },
     "dialog:default"
   ]
 }

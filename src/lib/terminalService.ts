@@ -28,8 +28,21 @@ export async function connectAndOpen(connection: Connection, connectConfig?: any
   try {
     errorMessage.set(null);
 
-    // Call backend connect command
-    const sessionId = await connectWithKnownHostsPrompt(await ensureConnectConfig(connectConfig ?? connection, connection.name));
+    const baseConfig = connectConfig ?? connection;
+    let config = await ensureConnectConfig(baseConfig, connection.name);
+
+    let sessionId: string;
+    try {
+      sessionId = await connectWithKnownHostsPrompt(config);
+    } catch (error) {
+      if (shouldPromptForPasswordOnConnectError(error, config)) {
+        const prompted = await promptPassword(connection.name);
+        config = applyPromptedPassword(config, prompted);
+        sessionId = await connectWithKnownHostsPrompt(config);
+      } else {
+        throw error;
+      }
+    }
     
     // Check if session already exists (shouldn't happen with unique sessionIds usually, but good to check)
     const terminals = get(activeTerminals);
@@ -85,7 +98,33 @@ async function ensureConnectConfig(config: any, connectionName: string): Promise
   if (!passwordAuth) return config;
   const existingPassword = typeof passwordAuth.password === 'string' ? passwordAuth.password : '';
   if (existingPassword.trim()) return config;
+  if (passwordAuth.save_password === true) return config;
 
+  const password = await promptPassword(connectionName);
+  return applyPromptedPassword(config, password);
+}
+
+function normalizeErrorMessage(error: unknown): string {
+  if (error instanceof Error && typeof error.message === 'string') return error.message;
+  return String(error);
+}
+
+function shouldPromptForPasswordOnConnectError(error: unknown, config: any): boolean {
+  const msg = normalizeErrorMessage(error);
+  const needsPassword =
+    msg.includes('Password is required') ||
+    msg.includes('password is required') ||
+    msg.includes('Password is required when save_password is enabled');
+
+  if (!needsPassword) return false;
+  const passwordAuth = config?.auth_method?.Password;
+  if (!passwordAuth) return false;
+  const existingPassword = typeof passwordAuth.password === 'string' ? passwordAuth.password : '';
+  if (existingPassword.trim()) return false;
+  return true;
+}
+
+async function promptPassword(connectionName: string): Promise<string> {
   const entered = window.prompt(`请输入连接「${connectionName}」的密码`, '');
   if (entered === null) {
     throw new Error('已取消输入密码');
@@ -94,7 +133,12 @@ async function ensureConnectConfig(config: any, connectionName: string): Promise
   if (!password) {
     throw new Error('密码不能为空');
   }
+  return password;
+}
 
+function applyPromptedPassword(config: any, password: string): any {
+  const passwordAuth = config?.auth_method?.Password;
+  if (!passwordAuth) return config;
   return {
     ...config,
     auth_method: {

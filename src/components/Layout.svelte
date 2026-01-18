@@ -271,7 +271,7 @@
       <TerminalManager />
       
       <!-- Toast Messages -->
-      <div class="absolute top-4 right-4 z-50 flex flex-col gap-2 pointer-events-none">
+      <div class="fixed top-4 right-4 z-[1000] flex flex-col gap-2 pointer-events-none">
         {#if $successMessage}
           <div 
             transition:fly={{ y: -20, duration: 300 }}

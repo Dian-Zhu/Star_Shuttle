@@ -33,6 +33,19 @@ export async function deleteConnection(connectionId: string) {
   }
 }
 
+function parseTags(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map(v => String(v).trim()).filter(Boolean);
+  }
+  if (typeof value === 'string') {
+    return value
+      .split(/[,\uFF0C;\uFF1B\n]+/g)
+      .map(tag => tag.trim())
+      .filter(Boolean);
+  }
+  return [];
+}
+
 function toBackendConnectionConfig(connection: Connection, overrides?: Record<string, unknown>) {
   return {
     id: connection.id,
@@ -123,10 +136,7 @@ export async function saveConnection(connectionData: any): Promise<{ connectionI
         throw new Error('不支持的认证方式');
     }
 
-    // Parse tags
-    const tagsArray = connectionData.tags
-      ? connectionData.tags.split(',').map((tag: string) => tag.trim()).filter(Boolean)
-      : [];
+    const tagsArray = parseTags(connectionData.tags);
 
     const connectionId = connectionData.id || uuidv4();
 

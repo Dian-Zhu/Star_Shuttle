@@ -13,10 +13,15 @@ export class LocalFsService {
       // Handle special paths
       let actualPath = path;
       if (path === '~') {
-        actualPath = await homeDir();
+        try {
+          actualPath = await homeDir();
+        } catch {
+          actualPath = '.';
+        }
       } else if (path === '' || path === '.') {
         actualPath = '.'; // Current directory
       }
+      if (!actualPath) actualPath = '.';
 
       const entries = await readDir(actualPath);
       
@@ -42,7 +47,8 @@ export class LocalFsService {
         };
       }));
     } catch (error: any) {
-      throw new Error(`Failed to list directory: ${error.message}`);
+      const message = error?.message ?? String(error);
+      throw new Error(`Failed to list directory: ${message}`);
     }
   }
 
