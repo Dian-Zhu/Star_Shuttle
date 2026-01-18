@@ -11,9 +11,8 @@
   import ChevronRightIcon from './icons/ChevronRightIcon.svelte';
   import UploadIcon from './icons/UploadIcon.svelte';
   import DownloadIcon from './icons/DownloadIcon.svelte';
-  import AdvancedIcon from './icons/AdvancedIcon.svelte';
   import { importConnections, exportConnections } from '../lib/importExportService';
-  import { showAdvancedModal, connectionHistory } from '../lib/store';
+  import { connectionHistory } from '../lib/store';
   import ClockIcon from './icons/ClockIcon.svelte';
   import ActivityIcon from './icons/ActivityIcon.svelte';
   import SystemMonitorModal from './SystemMonitorModal.svelte';
@@ -181,17 +180,6 @@
         <PlusIcon class="w-4 h-4" />
         {#if !$isSidebarCollapsed}
           <span class="whitespace-nowrap">新建</span>
-        {/if}
-      </button>
-
-      <button
-        class="flex-1 flex items-center justify-center gap-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 py-2 px-3 rounded-lg font-medium transition-all"
-        on:click={() => showAdvancedModal.set(true)}
-        title="高级功能"
-      >
-        <AdvancedIcon className="w-4 h-4" />
-        {#if !$isSidebarCollapsed}
-          <span class="whitespace-nowrap">高级</span>
         {/if}
       </button>
     </div>

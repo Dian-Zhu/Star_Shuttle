@@ -69,6 +69,13 @@
     }));
   }
 
+  function updateTerminalScrollback(raw: string) {
+    const v = Number(raw);
+    if (!Number.isFinite(v)) return;
+    const clamped = Math.max(1000, Math.min(50000, Math.trunc(v)));
+    updateTerminalSetting('scrollback', clamped);
+  }
+
   function updateConnectionSetting<K extends keyof (typeof $settings)['connection']>(
     key: K,
     value: (typeof $settings)['connection'][K]
@@ -365,17 +372,6 @@
               </label>
             </div>
 
-            <!-- Shortcuts -->
-            <div>
-              <button
-                class="w-full flex items-center justify-between p-3 rounded-lg border border-slate-700 bg-slate-900 hover:bg-slate-800 transition-colors group"
-                on:click={() => activeTab = 'shortcuts'}
-              >
-                <span class="text-sm font-medium text-slate-300 group-hover:text-slate-200">快捷键设置</span>
-                <svg class="w-5 h-5 text-slate-500 group-hover:text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
-              </button>
-            </div>
-
             <!-- App Info -->
             <div class="pt-6 border-t border-slate-800">
                <div class="flex justify-between items-center">
@@ -557,6 +553,44 @@
               <p class="mt-2 text-xs text-slate-500">
                 当前字体预览: <span style="font-family: {$settings.terminal.fontFamily}">The quick brown fox jumps over the lazy dog 0123456789</span>
               </p>
+            </div>
+
+            <div class="flex items-center justify-between">
+              <div>
+                <label class="block text-sm font-medium text-slate-400" for="scrollback">
+                  滚动行数
+                </label>
+                <p class="text-xs text-slate-500 mt-0.5">保留的历史输出行数</p>
+              </div>
+              <input
+                type="number"
+                id="scrollback"
+                min="1000"
+                max="50000"
+                step="500"
+                value={$settings.terminal.scrollback}
+                on:input={(e) => updateTerminalScrollback((e.target as HTMLInputElement).value)}
+                class="w-24 bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-center text-slate-200 focus:border-blue-500 outline-none"
+              />
+            </div>
+
+            <div class="flex items-center justify-between">
+              <div>
+                <label class="block text-sm font-medium text-slate-400" for="cursorStyle">
+                  光标样式
+                </label>
+                <p class="text-xs text-slate-500 mt-0.5">设置光标的形状</p>
+              </div>
+              <select
+                id="cursorStyle"
+                value={$settings.terminal.cursorStyle}
+                on:change={(e) => updateTerminalSetting('cursorStyle', (e.target as HTMLSelectElement).value as 'block' | 'underline' | 'bar')}
+                class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 focus:border-blue-500 outline-none"
+              >
+                <option value="block">方块</option>
+                <option value="underline">下划线</option>
+                <option value="bar">竖线</option>
+              </select>
             </div>
 
             <!-- Cursor Blink -->

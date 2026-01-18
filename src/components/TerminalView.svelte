@@ -104,6 +104,8 @@
       terminalData.terminal.options.fontSize = $settings.terminal.fontSize;
       terminalData.terminal.options.fontFamily = $settings.terminal.fontFamily;
       terminalData.terminal.options.cursorBlink = $settings.terminal.cursorBlink;
+      terminalData.terminal.options.cursorStyle = $settings.terminal.cursorStyle;
+      terminalData.terminal.options.scrollback = $settings.terminal.scrollback;
       
       // Update theme
       terminalData.terminal.options.theme = $settings.theme === 'light' ? {

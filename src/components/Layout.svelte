@@ -46,7 +46,7 @@
     const requestId = keyboardInteractiveActive.request_id;
     const responses = keyboardInteractiveActive.prompts.map((_, i) => keyboardInteractiveResponses[i] ?? '');
     try {
-      await invoke('keyboard_interactive_respond', { request_id: requestId, responses });
+      await invoke('keyboard_interactive_respond', { requestId, responses });
     } finally {
       keyboardInteractiveSubmitting = false;
       keyboardInteractiveActive = null;
@@ -60,7 +60,7 @@
     keyboardInteractiveSubmitting = true;
     const requestId = keyboardInteractiveActive.request_id;
     try {
-      await invoke('keyboard_interactive_cancel', { request_id: requestId });
+      await invoke('keyboard_interactive_cancel', { requestId });
     } finally {
       keyboardInteractiveSubmitting = false;
       keyboardInteractiveActive = null;

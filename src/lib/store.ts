@@ -1,5 +1,5 @@
 import { writable, derived } from 'svelte/store';
-import type { Terminal } from 'xterm';
+import type { ITheme, Terminal } from 'xterm';
 import type { FitAddon } from 'xterm-addon-fit';
 import type { SearchAddon } from 'xterm-addon-search';
 
@@ -126,10 +126,15 @@ export interface AppSettings {
   ui: {
     sidebarCollapsed: boolean;
   };
+  appearance: {
+    terminalTheme: 'auto' | 'dracula' | 'nord' | 'solarized-dark' | 'solarized-light';
+  };
   terminal: {
     fontSize: number;
     fontFamily: string;
     cursorBlink: boolean;
+    scrollback: number;
+    cursorStyle: 'block' | 'underline' | 'bar';
   };
   connection: {
     autoReconnect: boolean;
@@ -153,10 +158,15 @@ const defaultSettings: AppSettings = {
   ui: {
     sidebarCollapsed: false,
   },
+  appearance: {
+    terminalTheme: 'auto',
+  },
   terminal: {
     fontSize: 14,
     fontFamily: 'Menlo, Monaco, "Courier New", monospace',
     cursorBlink: true,
+    scrollback: 5000,
+    cursorStyle: 'block',
   },
   connection: {
     autoReconnect: false,
@@ -191,6 +201,10 @@ const loadSettings = (): AppSettings => {
       ui: {
         ...defaultSettings.ui,
         ...(parsed.ui || {})
+      },
+      appearance: {
+        ...defaultSettings.appearance,
+        ...(parsed.appearance || {})
       },
       terminal: {
         ...defaultSettings.terminal,
@@ -243,6 +257,142 @@ const loadSettings = (): AppSettings => {
     return defaultSettings;
   }
 };
+
+export function getXtermTheme(appSettings: AppSettings): ITheme {
+  const preset = appSettings.appearance?.terminalTheme ?? 'auto';
+
+  if (preset === 'dracula') {
+    return {
+      background: '#282a36',
+      foreground: '#f8f8f2',
+      cursor: '#bd93f9',
+      selectionBackground: '#44475a',
+      black: '#21222c',
+      red: '#ff5555',
+      green: '#50fa7b',
+      yellow: '#f1fa8c',
+      blue: '#6272a4',
+      magenta: '#bd93f9',
+      cyan: '#8be9fd',
+      white: '#f8f8f2',
+      brightBlack: '#6272a4',
+      brightRed: '#ff6e6e',
+      brightGreen: '#69ff94',
+      brightYellow: '#ffffa5',
+      brightBlue: '#d6acff',
+      brightMagenta: '#ff92df',
+      brightCyan: '#a4ffff',
+      brightWhite: '#ffffff',
+    };
+  }
+
+  if (preset === 'nord') {
+    return {
+      background: '#2e3440',
+      foreground: '#d8dee9',
+      cursor: '#88c0d0',
+      selectionBackground: '#434c5e',
+      black: '#3b4252',
+      red: '#bf616a',
+      green: '#a3be8c',
+      yellow: '#ebcb8b',
+      blue: '#81a1c1',
+      magenta: '#b48ead',
+      cyan: '#88c0d0',
+      white: '#e5e9f0',
+      brightBlack: '#4c566a',
+      brightRed: '#bf616a',
+      brightGreen: '#a3be8c',
+      brightYellow: '#ebcb8b',
+      brightBlue: '#81a1c1',
+      brightMagenta: '#b48ead',
+      brightCyan: '#8fbcbb',
+      brightWhite: '#eceff4',
+    };
+  }
+
+  if (preset === 'solarized-dark') {
+    return {
+      background: '#002b36',
+      foreground: '#93a1a1',
+      cursor: '#268bd2',
+      selectionBackground: '#073642',
+      black: '#073642',
+      red: '#dc322f',
+      green: '#859900',
+      yellow: '#b58900',
+      blue: '#268bd2',
+      magenta: '#d33682',
+      cyan: '#2aa198',
+      white: '#eee8d5',
+      brightBlack: '#002b36',
+      brightRed: '#cb4b16',
+      brightGreen: '#586e75',
+      brightYellow: '#657b83',
+      brightBlue: '#839496',
+      brightMagenta: '#6c71c4',
+      brightCyan: '#93a1a1',
+      brightWhite: '#fdf6e3',
+    };
+  }
+
+  if (preset === 'solarized-light') {
+    return {
+      background: '#fdf6e3',
+      foreground: '#657b83',
+      cursor: '#268bd2',
+      selectionBackground: '#eee8d5',
+      black: '#073642',
+      red: '#dc322f',
+      green: '#859900',
+      yellow: '#b58900',
+      blue: '#268bd2',
+      magenta: '#d33682',
+      cyan: '#2aa198',
+      white: '#eee8d5',
+      brightBlack: '#002b36',
+      brightRed: '#cb4b16',
+      brightGreen: '#586e75',
+      brightYellow: '#657b83',
+      brightBlue: '#839496',
+      brightMagenta: '#6c71c4',
+      brightCyan: '#93a1a1',
+      brightWhite: '#fdf6e3',
+    };
+  }
+
+  if (appSettings.theme === 'light') {
+    return {
+      background: '#ffffff',
+      foreground: '#0f172a',
+      cursor: '#2563eb',
+      selectionBackground: '#e2e8f0',
+      black: '#000000',
+      red: '#ef4444',
+      green: '#22c55e',
+      yellow: '#eab308',
+      blue: '#3b82f6',
+      magenta: '#d946ef',
+      cyan: '#06b6d4',
+      white: '#64748b',
+      brightBlack: '#94a3b8',
+      brightRed: '#f87171',
+      brightGreen: '#4ade80',
+      brightYellow: '#facc15',
+      brightBlue: '#60a5fa',
+      brightMagenta: '#e879f9',
+      brightCyan: '#22d3ee',
+      brightWhite: '#f1f5f9',
+    };
+  }
+
+  return {
+    background: '#0f172a',
+    foreground: '#e2e8f0',
+    cursor: '#3b82f6',
+    selectionBackground: '#334155',
+  };
+}
 
 export const settings = writable<AppSettings>(loadSettings());
 

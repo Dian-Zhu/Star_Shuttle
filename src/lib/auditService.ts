@@ -142,11 +142,6 @@ export class AuditService {
   }
   
   async recordEvent(event: AuditEvent): Promise<void> {
-    const { timestamp, riskLevel, command, description } = event;
-    const timeStr = timestamp.toISOString();
-    
-    console.log(`[AUDIT ${riskLevel}] ${timeStr}: ${command} - ${description}`);
-    
     // Send to backend logging system
     try {
       await invoke('log_audit_event', { event: toBackendEvent(event) });

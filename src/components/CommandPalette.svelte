@@ -7,7 +7,8 @@
     showSettings, 
     connections, 
     editingConnection,
-    isSidebarCollapsed
+    isSidebarCollapsed,
+    settings as appSettings
   } from '../lib/store';
   import { connectAndOpen } from '../lib/terminalService';
   import { importConnections, exportConnections } from '../lib/importExportService';
@@ -34,7 +35,9 @@
   let container: HTMLDivElement;
 
   // Base commands
-  const baseCommands: Command[] = [
+  let baseCommands: Command[] = [];
+
+  $: baseCommands = [
     {
       id: 'new-connection',
       title: '新建连接',
@@ -45,7 +48,7 @@
         editingConnection.set(null);
         showConnectionForm.set(true);
       },
-      shortcut: 'N'
+      shortcut: $appSettings.shortcuts.newConnection
     },
     {
       id: 'toggle-sidebar',
@@ -66,7 +69,7 @@
       action: () => {
         showSettings.set(true);
       },
-      shortcut: ','
+      shortcut: $appSettings.shortcuts.settings
     },
     {
       id: 'import-config',
@@ -139,7 +142,60 @@
     showCommandPalette.set(false);
   }
 
+  function checkShortcut(event: KeyboardEvent, shortcut: string): boolean {
+    if (!shortcut) return false;
+    const parts = shortcut.toLowerCase().split('+');
+    const key = parts.pop();
+    if (!key) return false;
+
+    const ctrl = parts.includes('ctrl') || parts.includes('control');
+    const shift = parts.includes('shift');
+    const alt = parts.includes('alt') || parts.includes('option');
+    const meta = parts.includes('meta') || parts.includes('cmd') || parts.includes('command');
+
+    if (ctrl && !event.ctrlKey) return false;
+    if (shift && !event.shiftKey) return false;
+    if (alt && !event.altKey) return false;
+    if (meta && !event.metaKey) return false;
+
+    const eventKey = event.key.toLowerCase();
+    if (eventKey === key) return true;
+    if (key === '[' && event.code === 'BracketLeft') return true;
+    if (key === ']' && event.code === 'BracketRight') return true;
+    return false;
+  }
+
   function handleKeydown(e: KeyboardEvent) {
+    const shortcuts = $appSettings.shortcuts;
+
+    if (checkShortcut(e, shortcuts.commandPalette)) {
+      e.preventDefault();
+      e.stopPropagation();
+      close();
+      return;
+    }
+
+    if (checkShortcut(e, shortcuts.newConnection)) {
+      e.preventDefault();
+      e.stopPropagation();
+      executeCommand(allCommands.find(c => c.id === 'new-connection'));
+      return;
+    }
+
+    if (checkShortcut(e, shortcuts.settings)) {
+      e.preventDefault();
+      e.stopPropagation();
+      executeCommand(allCommands.find(c => c.id === 'open-settings'));
+      return;
+    }
+
+    if (checkShortcut(e, 'Ctrl+B')) {
+      e.preventDefault();
+      e.stopPropagation();
+      executeCommand(allCommands.find(c => c.id === 'toggle-sidebar'));
+      return;
+    }
+
     if (e.key === 'ArrowDown') {
       e.preventDefault();
       selectedIndex = (selectedIndex + 1) % filteredCommands.length;
@@ -157,11 +213,10 @@
     }
   }
 
-  function executeCommand(command: Command) {
-    if (command) {
-      command.action();
-      close();
-    }
+  function executeCommand(command: Command | undefined) {
+    if (!command) return;
+    command.action();
+    close();
   }
 
   function scrollToSelected() {

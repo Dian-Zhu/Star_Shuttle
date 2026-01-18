@@ -132,10 +132,10 @@
       try {
           // Run commands in parallel
           const [uptimeOut, freeOut, cpuOut, dfOut] = await Promise.all([
-              invoke('exec_command', { session_id: sessionId, command: 'uptime' }),
-              invoke('exec_command', { session_id: sessionId, command: 'free -m' }),
-              invoke('exec_command', { session_id: sessionId, command: 'top -bn1 | grep "Cpu(s)"' }),
-              invoke('exec_command', { session_id: sessionId, command: 'df -h | head -n 6' }) // Limit to first few
+              invoke('exec_command', { sessionId, command: 'uptime' }),
+              invoke('exec_command', { sessionId, command: 'free -m' }),
+              invoke('exec_command', { sessionId, command: 'top -bn1 | grep "Cpu(s)"' }),
+              invoke('exec_command', { sessionId, command: 'df -h | head -n 6' }) // Limit to first few
           ]);
 
           parseUptime(uptimeOut as string);

@@ -5,6 +5,8 @@ import { loadConnections } from './connectionService';
 import { successMessage, errorMessage } from './store';
 import type { Connection } from './store';
 
+const IS_DEV = import.meta.env.DEV;
+
 function sanitizeConnectionForExport(connection: Connection): Connection {
   const auth = connection.auth_method;
 
@@ -117,7 +119,7 @@ export async function importConnections() {
       try {
         // Validate basic fields
         if (!conn.name || !conn.host) {
-          console.warn('Skipping invalid connection:', conn);
+          if (IS_DEV) console.warn('Skipping invalid connection:', conn);
           failCount++;
           continue;
         }

@@ -9,6 +9,8 @@ import { activeTerminals, selectedTerminalIndex, type Connection, type ActiveTer
 import { auditService } from './auditService';
 import 'xterm/css/xterm.css';
 
+const IS_DEV = import.meta.env.DEV;
+
 // Output listeners storage
 const outputListeners = new Map<string, () => void>();
 
@@ -25,10 +27,9 @@ const MAX_AUTO_RECONNECT_DELAY_MS = 30000;
 export async function connectAndOpen(connection: Connection, connectConfig?: any) {
   try {
     errorMessage.set(null);
-    console.log('Connecting to:', connection.name);
 
     // Call backend connect command
-    const sessionId = await connectWithKnownHostsPrompt(connectConfig ?? connection);
+    const sessionId = await connectWithKnownHostsPrompt(await ensureConnectConfig(connectConfig ?? connection, connection.name));
     
     // Check if session already exists (shouldn't happen with unique sessionIds usually, but good to check)
     const terminals = get(activeTerminals);
@@ -79,8 +80,35 @@ export async function connectAndOpen(connection: Connection, connectConfig?: any
   }
 }
 
+async function ensureConnectConfig(config: any, connectionName: string): Promise<any> {
+  const passwordAuth = config?.auth_method?.Password;
+  if (!passwordAuth) return config;
+  const existingPassword = typeof passwordAuth.password === 'string' ? passwordAuth.password : '';
+  if (existingPassword.trim()) return config;
+
+  const entered = window.prompt(`请输入连接「${connectionName}」的密码`, '');
+  if (entered === null) {
+    throw new Error('已取消输入密码');
+  }
+  const password = entered.trim();
+  if (!password) {
+    throw new Error('密码不能为空');
+  }
+
+  return {
+    ...config,
+    auth_method: {
+      ...config.auth_method,
+      Password: {
+        ...passwordAuth,
+        password,
+        save_password: false
+      }
+    }
+  };
+}
+
 export async function createTerminalSession(connection: Connection): Promise<string> {
-  console.log('Connecting to:', connection.name);
   return connectWithKnownHostsPrompt(connection);
 }
 
@@ -156,8 +184,8 @@ async function connectWithKnownHostsPrompt(connection: any): Promise<string> {
       await invoke('known_hosts_save_host_key', {
         host: payload.host,
         port: payload.port,
-        key_type: payload.key_type,
-        key_base64: payload.key_base64,
+        keyType: payload.key_type,
+        keyBase64: payload.key_base64,
         replace: type === 'mismatch'
       });
     }
@@ -178,6 +206,7 @@ export async function initTerminal(container: HTMLElement, sessionId: string, co
     // Create new Terminal instance
     const term = new Terminal({
       cursorBlink: appSettings.terminal.cursorBlink,
+      cursorStyle: appSettings.terminal.cursorStyle,
       fontSize: appSettings.terminal.fontSize,
       fontFamily: appSettings.terminal.fontFamily,
       theme: appSettings.theme === 'light' ? {
@@ -207,7 +236,7 @@ export async function initTerminal(container: HTMLElement, sessionId: string, co
         cursor: '#3b82f6',     // blue-500
         selectionBackground: '#334155', // slate-700
       },
-      scrollback: 5000,
+      scrollback: appSettings.terminal.scrollback,
       allowProposedApi: true,
       convertEol: true, // Enable EOL conversion to fix line endings
     });
@@ -231,7 +260,7 @@ export async function initTerminal(container: HTMLElement, sessionId: string, co
         }
       });
     } catch (e) {
-      console.warn('WebGL addon unavailable:', e);
+      if (IS_DEV) console.warn('WebGL addon unavailable:', e);
     }
 
     // Fit terminal to container
@@ -263,7 +292,7 @@ export async function initTerminal(container: HTMLElement, sessionId: string, co
 
     // Request terminal session from backend
     const result = await invoke('start_terminal', {
-      session_id: sessionId,
+      sessionId,
       width: term.cols,
       height: term.rows,
     });
@@ -299,7 +328,7 @@ export async function initTerminal(container: HTMLElement, sessionId: string, co
 
 export async function sendTerminalData(sessionId: string, data: string) {
   try {
-    await invoke('send_terminal_data', { session_id: sessionId, data });
+    await invoke('send_terminal_data', { sessionId, data });
   } catch (error) {
     console.error('Failed to send terminal data:', error);
   }
@@ -436,7 +465,7 @@ function handleTerminalInput(sessionId: string, data: string, connection: Connec
 
 export async function sendTerminalResize(sessionId: string, width: number, height: number) {
   try {
-    await invoke('resize_terminal', { session_id: sessionId, width, height });
+    await invoke('resize_terminal', { sessionId, width, height });
   } catch (error) {
     console.error('Failed to resize terminal:', error);
   }
@@ -447,7 +476,7 @@ export async function monitorSessionStatus(sessionId: string) {
     // Listen for session status changes from backend
     const statusUnlisten = await listen(`session-status-${sessionId}`, (event: any) => {
       if (event.payload && event.payload.status) {
-        console.log('Session status changed:', sessionId, event.payload.status);
+        if (IS_DEV) console.log('Session status changed:', sessionId, event.payload.status);
         
         // Handle different status changes
         switch (event.payload.status) {
@@ -512,7 +541,7 @@ export async function closeTerminal(sessionId: string) {
 
     // Notify backend to close terminal
     try {
-      await invoke('close_terminal', { session_id: sessionId });
+      await invoke('close_terminal', { sessionId });
     } catch (error) {
       console.error('Failed to close terminal:', error);
     }
@@ -540,7 +569,7 @@ async function setupTerminalListeners(sessionId: string, term: Terminal) {
     // Session Closed listener
     const closedUnlisten = await listen(`session-closed-${sessionId}`, (event: any) => {
         const reason = event.payload?.reason || 'unknown';
-        console.log('Session closed:', sessionId, reason);
+        if (IS_DEV) console.log('Session closed:', sessionId, reason);
         
         // Only show message if not manually closed
         if (reason !== 'user_closed') {
@@ -626,7 +655,7 @@ function scheduleAutoReconnect(sessionId: string, term: Terminal, immediate: boo
         return;
       }
     } catch (e) {
-      console.warn('Auto reconnect attempt failed', e);
+      if (IS_DEV) console.warn('Auto reconnect attempt failed', e);
     }
 
     const appSettings = get(settings);
@@ -661,7 +690,7 @@ export async function reconnectTerminal(oldSessionId: string) {
       
       // Start terminal
       const result = await invoke('start_terminal', {
-          session_id: newSessionId,
+          sessionId: newSessionId,
           width: term.cols,
           height: term.rows,
       });

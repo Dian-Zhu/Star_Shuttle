@@ -351,7 +351,7 @@ mod commands {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Initialize our custom structured logger
-    crate::modules::logging::LogManager::init(log::LevelFilter::Debug)
+    crate::modules::logging::LogManager::init(log::LevelFilter::Info)
         .expect("Failed to initialize logger");
 
     let connection_manager = Arc::new(RwLock::new(DefaultConnectionManager::new()));

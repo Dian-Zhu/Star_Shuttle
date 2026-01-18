@@ -9,7 +9,6 @@ export async function loadConnections() {
     
     const result = await invoke('get_all_connection_configs');
     connections.set(result as Connection[]);
-    console.log('Connections loaded:', result);
   } catch (error) {
     console.error('Error loading connections:', error);
     errorMessage.set(`加载连接失败: ${error}`);
@@ -21,7 +20,7 @@ export async function loadConnections() {
 
 export async function deleteConnection(connectionId: string) {
   try {
-    await invoke('delete_connection_config', { connection_id: connectionId });
+    await invoke('delete_connection_config', { connectionId });
     
     successMessage.set('连接删除成功！');
     await loadConnections();
