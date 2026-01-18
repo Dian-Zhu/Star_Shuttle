@@ -1,4 +1,6 @@
-use serde::{Deserialize, Serialize}; use uuid::Uuid; use std::time::SystemTime;
+use serde::{Deserialize, Serialize};
+use std::time::SystemTime;
+use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ConnectionInfo {
@@ -101,12 +103,12 @@ impl Default for ConnectionInfo {
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64;
-        
+
         Self {
             id: Uuid::new_v4(),
             name: "New Connection".to_string(),
             host: String::new(), // 改为空字符串，避免默认连接localhost
-            port: 0, // 改为0，避免默认使用22端口
+            port: 0,             // 改为0，避免默认使用22端口
             username: "".to_string(),
             auth_type: AuthType::Password,
             created_at: now,

@@ -1,12 +1,27 @@
 <script lang="ts">
-  import { activeTerminals, selectedTerminalIndex } from '../lib/store';
+  import { activeTerminals, selectedTerminalIndex, broadcastInputEnabled, broadcastSessionIds } from '../lib/store';
   import { closeTerminal } from '../lib/terminalService';
   import TerminalView from './TerminalView.svelte';
   import XIcon from './icons/XIcon.svelte';
   import TerminalIcon from './icons/TerminalIcon.svelte';
   import { totalSpeed, formatSpeed } from '../lib/transferQueueService';
 
-  function handleTabClick(index: number) {
+  $: selectedBroadcastSet = new Set($broadcastSessionIds);
+
+  function handleTabClick(index: number, event: MouseEvent) {
+    const terminal = $activeTerminals[index];
+    if (!terminal) return;
+
+    if ($broadcastInputEnabled && (event.ctrlKey || event.metaKey)) {
+      const sessionId = terminal.sessionId;
+      if (selectedBroadcastSet.has(sessionId)) {
+        broadcastSessionIds.update(ids => ids.filter(id => id !== sessionId));
+      } else {
+        broadcastSessionIds.update(ids => [...ids, sessionId]);
+      }
+      return;
+    }
+
     $selectedTerminalIndex = index;
   }
 
@@ -14,22 +29,55 @@
     event.stopPropagation();
     closeTerminal(sessionId);
   }
+
+  function toggleBroadcast() {
+    broadcastInputEnabled.update(v => {
+      const next = !v;
+      if (!next) {
+        broadcastSessionIds.set([]);
+        return next;
+      }
+
+      const current = $activeTerminals[$selectedTerminalIndex];
+      if (current) {
+        broadcastSessionIds.set([current.sessionId]);
+      }
+      return next;
+    });
+  }
 </script>
 
 <div class="flex flex-col h-full w-full bg-white dark:bg-slate-950">
   <!-- Tabs Bar -->
   {#if $activeTerminals.length > 0}
     <div class="flex bg-slate-100 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 overflow-x-auto no-scrollbar">
+      <div class="flex items-center px-2 gap-2 border-r border-slate-200 dark:border-slate-800">
+        <button
+          class="px-2 py-1 text-xs rounded-md transition-colors border
+          {$broadcastInputEnabled
+            ? 'bg-blue-600 border-blue-600 text-white'
+            : 'bg-white/60 dark:bg-slate-950/60 border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'}"
+          on:click={toggleBroadcast}
+          type="button"
+          title="广播输入：Ctrl/⌘ 点击 Tab 选择多个会话"
+        >
+          广播{#if $broadcastInputEnabled}（{Math.max($broadcastSessionIds.length, 1)}）{/if}
+        </button>
+      </div>
       {#each $activeTerminals as terminal, index}
         <button
           class="group flex items-center gap-2 px-4 py-2.5 min-w-[160px] max-w-[240px] text-sm border-r border-slate-200 dark:border-slate-800 transition-colors relative
           {index === $selectedTerminalIndex 
             ? 'bg-white dark:bg-slate-950 text-blue-600 dark:text-blue-400 font-medium' 
             : 'bg-slate-100 dark:bg-slate-900 text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-700 dark:hover:text-slate-200'}"
-          on:click={() => handleTabClick(index)}
+          on:click={(e) => handleTabClick(index, e)}
         >
           {#if index === $selectedTerminalIndex}
             <div class="absolute top-0 left-0 right-0 h-0.5 bg-blue-500"></div>
+          {/if}
+
+          {#if $broadcastInputEnabled && selectedBroadcastSet.has(terminal.sessionId)}
+            <div class="absolute inset-y-1 left-1 w-1 rounded bg-blue-500"></div>
           {/if}
           
           <TerminalIcon class="w-4 h-4 opacity-70" />

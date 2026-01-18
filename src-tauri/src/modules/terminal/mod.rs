@@ -2,10 +2,10 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 // Re-export submodules
-pub mod emulator;
-pub mod parser;
 pub mod buffer;
+pub mod emulator;
 pub mod error;
+pub mod parser;
 
 // Terminal settings
 #[derive(Debug, Clone, Serialize, Deserialize)]

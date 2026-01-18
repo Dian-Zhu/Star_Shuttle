@@ -15,6 +15,7 @@ export interface Connection {
       password: string;
       save_password: boolean;
     };
+    KeyboardInteractive?: Record<string, never>;
     PrivateKey?: {
       key_path: string;
       passphrase?: string;
@@ -37,6 +38,14 @@ export interface Connection {
   group_id: string | null;
   local_forwards?: { local_host: string; local_port: number; remote_host: string; remote_port: number }[];
   remote_forwards?: { remote_host: string; remote_port: number; local_host: string; local_port: number }[];
+  proxy_type?: any;
+  socks_proxy_port?: number | null;
+}
+
+export interface ConnectionGroup {
+  id: string;
+  name: string;
+  createdAt: number;
 }
 
 export interface HistoryItem {
@@ -56,7 +65,10 @@ export interface ActiveTerminal {
 export const connections = writable<Connection[]>([]);
 export const activeTerminals = writable<ActiveTerminal[]>([]);
 export const selectedTerminalIndex = writable<number>(0);
+export const broadcastInputEnabled = writable<boolean>(false);
+export const broadcastSessionIds = writable<string[]>([]);
 export const showConnectionForm = writable<boolean>(false);
+export const editingConnection = writable<Connection | null>(null);
 export const showSettings = writable<boolean>(false);
 export const showAdvancedModal = writable<boolean>(false);
 export const showCommandPalette = writable<boolean>(false);
@@ -83,6 +95,28 @@ export const connectionHistory = writable<HistoryItem[]>(loadHistory());
 connectionHistory.subscribe(value => {
   if (typeof localStorage !== 'undefined') {
     localStorage.setItem('connectionHistory', JSON.stringify(value));
+  }
+});
+
+const loadGroups = (): ConnectionGroup[] => {
+  if (typeof localStorage === 'undefined') return [];
+  try {
+    const stored = localStorage.getItem('connectionGroups');
+    const parsed = stored ? (JSON.parse(stored) as ConnectionGroup[]) : [];
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      return parsed;
+    }
+  } catch (e) {
+    console.error('Failed to parse connection groups:', e);
+  }
+  return [{ id: '00000000-0000-0000-0000-000000000000', name: '默认', createdAt: Date.now() }];
+};
+
+export const connectionGroups = writable<ConnectionGroup[]>(loadGroups());
+
+connectionGroups.subscribe(value => {
+  if (typeof localStorage !== 'undefined') {
+    localStorage.setItem('connectionGroups', JSON.stringify(value));
   }
 });
 
@@ -151,7 +185,7 @@ const loadSettings = (): AppSettings => {
   try {
     const parsed = JSON.parse(stored);
     // Merge with defaults to ensure all fields exist
-    return {
+    const merged: AppSettings = {
       ...defaultSettings,
       ...parsed,
       ui: {
@@ -175,6 +209,35 @@ const loadSettings = (): AppSettings => {
         ...(parsed.security || {})
       }
     };
+
+    const shortcutOrder: Array<keyof AppSettings['shortcuts']> = [
+      'commandPalette',
+      'newConnection',
+      'settings',
+      'closeTerminal',
+      'prevTab',
+      'nextTab'
+    ];
+    const seen = new Map<string, keyof AppSettings['shortcuts']>();
+    const sanitizedShortcuts = { ...merged.shortcuts };
+    for (const key of shortcutOrder) {
+      const raw = sanitizedShortcuts[key];
+      const value = typeof raw === 'string' ? raw.trim() : '';
+      if (!value) {
+        sanitizedShortcuts[key] = '';
+        continue;
+      }
+      const normalized = value.toLowerCase().replace(/\s+/g, '');
+      const existing = seen.get(normalized);
+      if (existing) {
+        sanitizedShortcuts[key] = '';
+        continue;
+      }
+      sanitizedShortcuts[key] = value;
+      seen.set(normalized, key);
+    }
+    merged.shortcuts = sanitizedShortcuts;
+    return merged;
   } catch (e) {
     console.error('Failed to parse settings:', e);
     return defaultSettings;

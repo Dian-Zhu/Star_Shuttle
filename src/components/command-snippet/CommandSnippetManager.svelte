@@ -139,8 +139,9 @@
           </h3>
           <div class="space-y-4">
             <div>
-              <label class="block text-sm font-medium text-gray-300 mb-1">名称 *</label>
+              <label for="snippet-name" class="block text-sm font-medium text-gray-300 mb-1">名称 *</label>
               <input
+                id="snippet-name"
                 type="text"
                 class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white"
                 bind:value={name}
@@ -148,20 +149,22 @@
               />
             </div>
             <div>
-              <label class="block text-sm font-medium text-gray-300 mb-1">命令 *</label>
+              <label for="snippet-command" class="block text-sm font-medium text-gray-300 mb-1">命令 *</label>
               <textarea
+                id="snippet-command"
                 class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white font-mono text-sm h-32"
                 bind:value={command}
                 placeholder="例如：sudo systemctl restart nginx"
-              />
+              ></textarea>
               <p class="text-gray-400 text-xs mt-1">
-                使用 {{variable}} 作为参数占位符，例如：cd {{path}}
+                使用 {'{{'}variable{'}}'} 作为参数占位符，例如：cd {'{{'}path{'}}'}
               </p>
             </div>
             <div class="grid grid-cols-2 gap-4">
               <div>
-                <label class="block text-sm font-medium text-gray-300 mb-1">分类</label>
+                <label for="snippet-category" class="block text-sm font-medium text-gray-300 mb-1">分类</label>
                 <input
+                  id="snippet-category"
                   type="text"
                   class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white"
                   bind:value={category}
@@ -169,8 +172,9 @@
                 />
               </div>
               <div>
-                <label class="block text-sm font-medium text-gray-300 mb-1">标签</label>
+                <label for="snippet-tags" class="block text-sm font-medium text-gray-300 mb-1">标签</label>
                 <input
+                  id="snippet-tags"
                   type="text"
                   class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white"
                   bind:value={tags}
@@ -179,12 +183,13 @@
               </div>
             </div>
             <div>
-              <label class="block text-sm font-medium text-gray-300 mb-1">描述</label>
+              <label for="snippet-description" class="block text-sm font-medium text-gray-300 mb-1">描述</label>
               <textarea
+                id="snippet-description"
                 class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white text-sm h-20"
                 bind:value={description}
                 placeholder="可选描述"
-              />
+              ></textarea>
             </div>
           </div>
           <div class="flex justify-end space-x-3 mt-8">

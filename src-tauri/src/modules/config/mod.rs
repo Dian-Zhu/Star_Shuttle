@@ -20,17 +20,23 @@ pub struct ConfigManager {
     config: AppConfig,
 }
 
+impl Default for ConfigManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ConfigManager {
     pub fn new() -> Self {
         Self {
             config: AppConfig::default(),
         }
     }
-    
+
     pub fn get_config(&self) -> &AppConfig {
         &self.config
     }
-    
+
     pub fn update_config(&mut self, config: AppConfig) {
         self.config = config;
     }

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
+  import { listen } from '@tauri-apps/api/event';
   import Sidebar from './Sidebar.svelte';
   import TerminalManager from './TerminalManager.svelte';
   import ConnectionModal from './ConnectionModal.svelte';
@@ -8,12 +9,65 @@
   import CommandPalette from './CommandPalette.svelte';
   import AppLockOverlay from './AppLockOverlay.svelte';
   import AdvancedModal from './AdvancedModal.svelte';
-  import { showConnectionForm, showSettings, successMessage, errorMessage, settings, activeTerminals, selectedTerminalIndex, showCommandPalette, isLocked, showAdvancedModal } from '../lib/store';
+  import { showConnectionForm, editingConnection, showSettings, successMessage, errorMessage, settings, activeTerminals, selectedTerminalIndex, showCommandPalette, isLocked, showAdvancedModal } from '../lib/store';
   import { closeTerminal } from '../lib/terminalService';
   import { fade, fly } from 'svelte/transition';
 
   let isCheckingLock = true;
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
+  type KeyboardInteractivePrompt = { prompt: string; echo: boolean };
+  type KeyboardInteractivePayload = {
+    request_id: string;
+    host: string;
+    port: number;
+    username: string;
+    name: string;
+    instructions: string;
+    prompts: KeyboardInteractivePrompt[];
+  };
+
+  let keyboardInteractiveQueue: KeyboardInteractivePayload[] = [];
+  let keyboardInteractiveActive: KeyboardInteractivePayload | null = null;
+  let keyboardInteractiveResponses: string[] = [];
+  let keyboardInteractiveSubmitting = false;
+  let unlistenKeyboardInteractive: null | (() => void) = null;
+
+  function showNextKeyboardInteractive() {
+    if (keyboardInteractiveActive) return;
+    const next = keyboardInteractiveQueue.shift() ?? null;
+    if (!next) return;
+    keyboardInteractiveActive = next;
+    keyboardInteractiveResponses = new Array(next.prompts.length).fill('');
+  }
+
+  async function submitKeyboardInteractive() {
+    if (!keyboardInteractiveActive || keyboardInteractiveSubmitting) return;
+    keyboardInteractiveSubmitting = true;
+    const requestId = keyboardInteractiveActive.request_id;
+    const responses = keyboardInteractiveActive.prompts.map((_, i) => keyboardInteractiveResponses[i] ?? '');
+    try {
+      await invoke('keyboard_interactive_respond', { request_id: requestId, responses });
+    } finally {
+      keyboardInteractiveSubmitting = false;
+      keyboardInteractiveActive = null;
+      keyboardInteractiveResponses = [];
+      showNextKeyboardInteractive();
+    }
+  }
+
+  async function cancelKeyboardInteractive() {
+    if (!keyboardInteractiveActive || keyboardInteractiveSubmitting) return;
+    keyboardInteractiveSubmitting = true;
+    const requestId = keyboardInteractiveActive.request_id;
+    try {
+      await invoke('keyboard_interactive_cancel', { request_id: requestId });
+    } finally {
+      keyboardInteractiveSubmitting = false;
+      keyboardInteractiveActive = null;
+      keyboardInteractiveResponses = [];
+      showNextKeyboardInteractive();
+    }
+  }
 
   onMount(() => {
     (async () => {
@@ -22,6 +76,19 @@
         if (enabled) {
           isLocked.set(true);
         }
+        unlistenKeyboardInteractive = await listen(
+          'ssh-keyboard-interactive-request',
+          (event: any) => {
+            const payload = event.payload as KeyboardInteractivePayload;
+            if (!payload?.request_id) return;
+            if (keyboardInteractiveActive) {
+              keyboardInteractiveQueue = [...keyboardInteractiveQueue, payload];
+              return;
+            }
+            keyboardInteractiveActive = payload;
+            keyboardInteractiveResponses = new Array(payload.prompts?.length ?? 0).fill('');
+          }
+        );
       } catch (e) {
         console.error('Failed to check app lock status:', e);
       } finally {
@@ -43,8 +110,10 @@
         window.removeEventListener('keydown', resetIdleTimer);
         window.removeEventListener('click', resetIdleTimer);
         if (idleTimer) clearTimeout(idleTimer);
+        if (unlistenKeyboardInteractive) unlistenKeyboardInteractive();
     };
   });
+
 
   async function handleWindowBlur() {
     // Only lock if enabled and not already locked
@@ -73,15 +142,16 @@
                    if (enabled && !$isLocked) {
                        isLocked.set(true);
                    }
-               } catch (e) {}
+               } catch (e) {
+                   console.error('Failed to check lock status in idle timer', e);
+               }
           }, minutes * 60 * 1000);
       }
   }
   
   // React to settings change to update timer
-  $: if ($settings.security.autoLockMinutes) {
-      resetIdleTimer();
-  }
+  $: $settings.security.autoLockMinutes, resetIdleTimer();
+  $: $isLocked, resetIdleTimer();
 
   // Apply theme class to document element
   $: {
@@ -136,7 +206,8 @@
     // New Connection
     if (checkShortcut(event, shortcuts.newConnection)) {
       event.preventDefault();
-      showConnectionForm.update(v => !v);
+      editingConnection.set(null);
+      showConnectionForm.set(true);
       return;
     }
 
@@ -241,4 +312,77 @@
 
 {#if $isLocked}
   <AppLockOverlay />
+{/if}
+
+{#if keyboardInteractiveActive}
+  <div class="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm">
+    <div class="w-full max-w-lg rounded-xl border border-slate-200/50 dark:border-slate-800/50 bg-white dark:bg-slate-950 shadow-2xl p-6">
+      <div class="flex items-start justify-between gap-4">
+        <div class="min-w-0">
+          <div class="text-sm font-medium text-slate-900 dark:text-slate-200">
+            交互式认证
+          </div>
+          <div class="text-xs text-slate-500 dark:text-slate-400 mt-1">
+            {keyboardInteractiveActive.host}:{keyboardInteractiveActive.port} / {keyboardInteractiveActive.username}
+          </div>
+        </div>
+        <button
+          class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors"
+          aria-label="取消"
+          on:click={cancelKeyboardInteractive}
+          disabled={keyboardInteractiveSubmitting}
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+        </button>
+      </div>
+
+      {#if keyboardInteractiveActive.name || keyboardInteractiveActive.instructions}
+        <div class="mt-4 space-y-1">
+          {#if keyboardInteractiveActive.name}
+            <div class="text-sm text-slate-700 dark:text-slate-300">{keyboardInteractiveActive.name}</div>
+          {/if}
+          {#if keyboardInteractiveActive.instructions}
+            <div class="text-xs text-slate-500 dark:text-slate-400 whitespace-pre-wrap">{keyboardInteractiveActive.instructions}</div>
+          {/if}
+        </div>
+      {/if}
+
+      <div class="mt-4 space-y-3">
+        {#each keyboardInteractiveActive.prompts as p, i (i)}
+          <div>
+            <label
+              class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5"
+              for={`keyboard-interactive-${keyboardInteractiveActive.request_id}-${i}`}
+            >
+              {p.prompt}
+            </label>
+            <input
+              id={`keyboard-interactive-${keyboardInteractiveActive.request_id}-${i}`}
+              type={p.echo ? 'text' : 'password'}
+              bind:value={keyboardInteractiveResponses[i]}
+              class="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-200 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all"
+              autocomplete="off"
+            />
+          </div>
+        {/each}
+      </div>
+
+      <div class="mt-6 flex items-center justify-end gap-3">
+        <button
+          class="px-4 py-2 rounded-lg border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-900 transition-colors disabled:opacity-50"
+          on:click={cancelKeyboardInteractive}
+          disabled={keyboardInteractiveSubmitting}
+        >
+          取消
+        </button>
+        <button
+          class="px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 transition-colors disabled:opacity-50"
+          on:click={submitKeyboardInteractive}
+          disabled={keyboardInteractiveSubmitting}
+        >
+          确认
+        </button>
+      </div>
+    </div>
+  </div>
 {/if}

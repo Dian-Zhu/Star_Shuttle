@@ -6,6 +6,7 @@
     showConnectionForm, 
     showSettings, 
     connections, 
+    editingConnection,
     isSidebarCollapsed
   } from '../lib/store';
   import { connectAndOpen } from '../lib/terminalService';
@@ -41,6 +42,7 @@
       category: 'General',
       icon: PlusIcon,
       action: () => {
+        editingConnection.set(null);
         showConnectionForm.set(true);
       },
       shortcut: 'N'
@@ -79,11 +81,21 @@
     {
       id: 'export-config',
       title: '导出配置',
-      description: '将当前连接配置导出为 JSON 文件',
+      description: '导出为 JSON（默认不含密码/口令）',
       category: 'Data',
       icon: DownloadIcon,
       action: () => {
         exportConnections();
+      }
+    },
+    {
+      id: 'export-config-with-secrets',
+      title: '导出配置（含敏感信息）',
+      description: '导出为 JSON（包含明文密码/口令）',
+      category: 'Data',
+      icon: DownloadIcon,
+      action: () => {
+        exportConnections({ includeSensitive: true });
       }
     }
   ];

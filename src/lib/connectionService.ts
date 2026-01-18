@@ -34,9 +34,33 @@ export async function deleteConnection(connectionId: string) {
   }
 }
 
-export async function saveConnection(connectionData: any) {
+function toBackendConnectionConfig(connection: Connection, overrides?: Record<string, unknown>) {
+  return {
+    id: connection.id,
+    name: connection.name,
+    host: connection.host,
+    port: Number(connection.port),
+    username: connection.username,
+    auth_method: connection.auth_method,
+    description: connection.description ?? null,
+    tags: connection.tags ?? [],
+    group_id: connection.group_id || null,
+    local_forwards: connection.local_forwards ?? [],
+    remote_forwards: connection.remote_forwards ?? [],
+    proxy_type: (connection as any).proxy_type ?? 'None',
+    socks_proxy_port: (connection as any).socks_proxy_port ?? null,
+    ...(overrides ?? {}),
+  };
+}
+
+export async function updateConnectionConfig(connection: Connection) {
+  await invoke('save_connection_config', { config: toBackendConnectionConfig(connection) });
+}
+
+export async function saveConnection(connectionData: any): Promise<{ connectionId: string; connectConfig: any } | null> {
   try {
     errorMessage.set(null);
+    const isEditing = Boolean(connectionData.id);
     
     // Validate form data
     if (!connectionData.name.trim()) throw new Error('连接名称不能为空');
@@ -48,12 +72,23 @@ export async function saveConnection(connectionData: any) {
     let backendAuthMethod;
     switch (connectionData.authMethod) {
       case 'password':
-        if (!connectionData.password) throw new Error('密码不能为空');
+        if (!connectionData.password) {
+          if (connectionData.savePassword) {
+            if (!isEditing) throw new Error('新建连接时，勾选保存密码需要先输入密码');
+          } else {
+            throw new Error('密码不能为空');
+          }
+        }
         backendAuthMethod = {
           Password: {
             password: connectionData.password,
             save_password: connectionData.savePassword,
           },
+        };
+        break;
+      case 'keyboardInteractive':
+        backendAuthMethod = {
+          KeyboardInteractive: {},
         };
         break;
       case 'privateKey':
@@ -100,7 +135,7 @@ export async function saveConnection(connectionData: any) {
     let backendProxyType;
     switch (connectionData.proxyType) {
       case 'none':
-        backendProxyType = { None: {} };
+        backendProxyType = 'None';
         break;
       case 'socks5':
         if (!connectionData.proxyHost.trim()) throw new Error('SOCKS5代理主机不能为空');
@@ -124,23 +159,59 @@ export async function saveConnection(connectionData: any) {
           },
         };
         break;
-      case 'jumpHost':
+      case 'jumpHost': {
         if (!connectionData.proxyHost.trim()) throw new Error('跳板主机不能为空');
         if (!connectionData.jumpHostUsername.trim()) throw new Error('跳板用户名不能为空');
-        // Construct jump host auth method (simplified)
         let jumpAuthMethod;
         switch (connectionData.jumpHostAuthMethod) {
           case 'password':
-            jumpAuthMethod = { Password: { password: '', save_password: false } };
+            if (!connectionData.jumpHostPassword) {
+              if (connectionData.jumpHostSavePassword) {
+                if (!isEditing) throw new Error('新建连接时，勾选保存跳板密码需要先输入跳板密码');
+              } else {
+                throw new Error('跳板密码不能为空');
+              }
+            }
+            jumpAuthMethod = {
+              Password: {
+                password: connectionData.jumpHostPassword,
+                save_password: connectionData.jumpHostSavePassword,
+              },
+            };
+            break;
+          case 'keyboardInteractive':
+            jumpAuthMethod = {
+              KeyboardInteractive: {},
+            };
             break;
           case 'privateKey':
-            jumpAuthMethod = { PrivateKey: { key_path: '', passphrase: null, save_passphrase: false } };
+            if (!connectionData.jumpHostKeyPath) throw new Error('跳板私钥路径不能为空');
+            jumpAuthMethod = {
+              PrivateKey: {
+                key_path: connectionData.jumpHostKeyPath,
+                passphrase: connectionData.jumpHostPassphrase || undefined,
+                save_passphrase: connectionData.jumpHostSavePassphrase,
+              },
+            };
             break;
           case 'agent':
-            jumpAuthMethod = { Agent: { agent_path: null } };
+            jumpAuthMethod = {
+              Agent: {
+                agent_path: connectionData.jumpHostAgentPath || undefined,
+              },
+            };
             break;
           case 'certificate':
-            jumpAuthMethod = { Certificate: { certificate_path: '', private_key_path: '', passphrase: null, save_passphrase: false } };
+            if (!connectionData.jumpHostCertificatePath) throw new Error('跳板证书路径不能为空');
+            if (!connectionData.jumpHostPrivateKeyPath) throw new Error('跳板证书对应的私钥路径不能为空');
+            jumpAuthMethod = {
+              Certificate: {
+                certificate_path: connectionData.jumpHostCertificatePath,
+                private_key_path: connectionData.jumpHostPrivateKeyPath,
+                passphrase: connectionData.jumpHostPassphrase || undefined,
+                save_passphrase: connectionData.jumpHostSavePassphrase,
+              },
+            };
             break;
           default:
             throw new Error('不支持的跳板认证方式');
@@ -154,33 +225,36 @@ export async function saveConnection(connectionData: any) {
           },
         };
         break;
+      }
       default:
-        backendProxyType = { None: {} };
+        backendProxyType = 'None';
         break;
     }
 
-    await invoke('save_connection_config', {
-      config: {
-        id: connectionId,
-        name: connectionData.name,
-        host: connectionData.host,
-        port: Number(connectionData.port),
-        username: connectionData.username,
-        auth_method: backendAuthMethod,
-        description: connectionData.description || null,
-        tags: tagsArray,
-        group_id: null,
-        local_forwards: connectionData.local_forwards || [],
-        remote_forwards: connectionData.remote_forwards || [],
-        proxy_type: backendProxyType,
-        socks_proxy_port: connectionData.socksProxyPort || null,
-      },
-    });
+    const connectConfig = {
+      id: connectionId,
+      name: connectionData.name,
+      host: connectionData.host,
+      port: Number(connectionData.port),
+      username: connectionData.username,
+      auth_method: backendAuthMethod,
+      description: connectionData.description || null,
+      tags: tagsArray,
+      group_id: connectionData.groupId || null,
+      local_forwards: connectionData.local_forwards || [],
+      remote_forwards: connectionData.remote_forwards || [],
+      proxy_type: backendProxyType,
+      socks_proxy_port: connectionData.socksProxyPort || null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+
+    await invoke('save_connection_config', { config: connectConfig });
 
     successMessage.set('连接保存成功！');
     await loadConnections();
     setTimeout(() => successMessage.set(null), 5000);
-    return connectionId;
+    return { connectionId, connectConfig };
   } catch (error) {
     console.error('Error saving connection:', error);
     errorMessage.set(`保存连接失败：${error instanceof Error ? error.message : error}`);

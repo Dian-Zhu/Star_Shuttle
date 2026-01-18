@@ -1,10 +1,10 @@
-use std::path::PathBuf;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use chrono::{DateTime, Utc};
+use std::path::PathBuf;
 use uuid::Uuid;
-use serde::{Serialize, Deserialize};
-use std::collections::HashMap;
 
 /// Statistics for a specific channel/session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,12 +54,12 @@ impl Default for ChannelTracker {
 
 impl ChannelTracker {
     /// Creates a new `ChannelTracker`.
-    /// 
+    ///
     /// Initializes a temporary directory for logging session data.
     pub fn new() -> Self {
         let mut log_dir = std::env::temp_dir();
         log_dir.push("star_shuttle_logs");
-        
+
         if !log_dir.exists() {
             let _ = fs::create_dir_all(&log_dir);
         }
@@ -76,9 +76,9 @@ impl ChannelTracker {
     }
 
     /// Logs data transfer for a session.
-    /// 
+    ///
     /// Updates statistics and writes a log entry to disk.
-    /// 
+    ///
     /// # Arguments
     /// * `session_id` - The UUID of the session.
     /// * `data` - The data being transferred.
@@ -90,11 +90,11 @@ impl ChannelTracker {
                 "sent" => {
                     stats.bytes_sent += data.len() as u64;
                     stats.input_count += 1;
-                },
+                }
                 "received" => {
                     stats.bytes_received += data.len() as u64;
                     stats.output_count += 1;
-                },
+                }
                 _ => {}
             }
         }
@@ -137,7 +137,7 @@ mod tests {
         let mut tracker = ChannelTracker::new();
         let session_id = Uuid::new_v4();
         tracker.register_session(session_id);
-        
+
         let stats = tracker.get_stats(&session_id);
         assert!(stats.is_some());
         assert_eq!(stats.unwrap().session_id, session_id);
@@ -149,14 +149,14 @@ mod tests {
         let mut tracker = ChannelTracker::new();
         let session_id = Uuid::new_v4();
         tracker.register_session(session_id);
-        
+
         let data = b"hello world";
         tracker.log_data(session_id, data, "sent");
-        
+
         let stats = tracker.get_stats(&session_id).unwrap();
         assert_eq!(stats.bytes_sent, data.len() as u64);
         assert_eq!(stats.input_count, 1);
-        
+
         tracker.log_data(session_id, data, "received");
         let stats = tracker.get_stats(&session_id).unwrap();
         assert_eq!(stats.bytes_received, data.len() as u64);

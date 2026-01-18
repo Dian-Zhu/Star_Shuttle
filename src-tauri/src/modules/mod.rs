@@ -6,5 +6,5 @@ pub mod db;
 pub mod error;
 pub mod logging;
 pub mod session;
-pub mod terminal;
 pub mod sftp;
+pub mod terminal;

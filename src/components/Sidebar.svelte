@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { connections, showConnectionForm, isSidebarCollapsed, showSettings, activeTerminals } from '../lib/store';
-  import { loadConnections, deleteConnection } from '../lib/connectionService';
+  import { connections, showConnectionForm, editingConnection, isSidebarCollapsed, showSettings, activeTerminals, connectionGroups } from '../lib/store';
+  import { loadConnections, deleteConnection, updateConnectionConfig } from '../lib/connectionService';
   import { connectAndOpen } from '../lib/terminalService';
   import PlusIcon from './icons/PlusIcon.svelte';
   import ServerIcon from './icons/ServerIcon.svelte';
@@ -17,17 +17,33 @@
   import ClockIcon from './icons/ClockIcon.svelte';
   import ActivityIcon from './icons/ActivityIcon.svelte';
   import SystemMonitorModal from './SystemMonitorModal.svelte';
+  import { v4 as uuidv4 } from 'uuid';
 
   let searchTerm = '';
   let activeTab: 'servers' | 'history' = 'servers';
   let showMonitor: string | null = null; // Session ID for monitor
   let monitorConnection: any = null;
+  let selectedGroupId: 'all' | 'ungrouped' | string = 'all';
+
+  $: groupNameById = new Map($connectionGroups.map(g => [g.id, g.name]));
 
   // Filter connections based on search term
-  $: filteredConnections = $connections.filter(c => 
-    c.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-    c.host.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  $: filteredConnections = $connections
+    .filter(c => {
+      if (selectedGroupId === 'all') return true;
+      if (selectedGroupId === 'ungrouped') return !c.group_id;
+      return c.group_id === selectedGroupId;
+    })
+    .filter(c => {
+      const term = searchTerm.toLowerCase();
+      const tags = (c.tags || []).join(',').toLowerCase();
+      return (
+        c.name.toLowerCase().includes(term) ||
+        c.host.toLowerCase().includes(term) ||
+        c.username.toLowerCase().includes(term) ||
+        tags.includes(term)
+      );
+    });
 
   $: filteredHistory = $connectionHistory.filter(h => 
     h.connection.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
@@ -72,8 +88,52 @@
     }
   }
 
+  function handleEdit(connection: any, event: MouseEvent) {
+    event.stopPropagation();
+    editingConnection.set(connection);
+    showConnectionForm.set(true);
+  }
+
   function toggleSidebar() {
     isSidebarCollapsed.update(v => !v);
+  }
+
+  function addGroup() {
+    const name = window.prompt('请输入分组名称');
+    if (!name) return;
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const id = uuidv4();
+    connectionGroups.update(groups => [...groups, { id, name: trimmed, createdAt: Date.now() }]);
+    selectedGroupId = id;
+  }
+
+  function renameSelectedGroup() {
+    if (selectedGroupId === 'all' || selectedGroupId === 'ungrouped') return;
+    const currentName = groupNameById.get(selectedGroupId) || '';
+    const name = window.prompt('请输入新的分组名称', currentName);
+    if (!name) return;
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    connectionGroups.update(groups =>
+      groups.map(g => (g.id === selectedGroupId ? { ...g, name: trimmed } : g))
+    );
+  }
+
+  async function deleteSelectedGroup() {
+    if (selectedGroupId === 'all' || selectedGroupId === 'ungrouped') return;
+    const name = groupNameById.get(selectedGroupId) || '该分组';
+    if (!confirm(`确定要删除分组「${name}」吗？分组内连接将被设为未分组。`)) return;
+
+    const groupId = selectedGroupId;
+    selectedGroupId = 'all';
+    connectionGroups.update(groups => groups.filter(g => g.id !== groupId));
+
+    const affected = $connections.filter(c => c.group_id === groupId);
+    for (const c of affected) {
+      await updateConnectionConfig({ ...c, group_id: null });
+    }
+    await loadConnections();
   }
 
   function openMonitor(connection: any, event: MouseEvent) {
@@ -115,7 +175,7 @@
     <div class="flex gap-2">
       <button
         class="flex-1 flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-500 text-white py-2 px-3 rounded-lg font-medium transition-all shadow-md hover:shadow-blue-900/30 active:scale-95"
-        on:click={() => showConnectionForm.set(true)}
+        on:click={() => { editingConnection.set(null); showConnectionForm.set(true); }}
         title="新建连接"
       >
         <PlusIcon class="w-4 h-4" />
@@ -158,6 +218,46 @@
   <!-- Search -->
   {#if !$isSidebarCollapsed}
     <div class="px-4 py-3">
+      {#if activeTab === 'servers'}
+        <div class="flex items-center gap-2 mb-3">
+          <select
+            bind:value={selectedGroupId}
+            class="flex-1 bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg py-1.5 px-3 text-sm text-slate-900 dark:text-slate-200 focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/50 transition-all"
+          >
+            <option value="all">所有分组</option>
+            <option value="ungrouped">未分组</option>
+            {#each $connectionGroups as group}
+              <option value={group.id}>{group.name}</option>
+            {/each}
+          </select>
+          <button
+            class="px-2 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 hover:bg-slate-200 dark:hover:bg-slate-800 text-xs"
+            on:click={addGroup}
+            title="新建分组"
+            type="button"
+          >
+            新建
+          </button>
+          <button
+            class="px-2 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 hover:bg-slate-200 dark:hover:bg-slate-800 text-xs disabled:opacity-50"
+            on:click={renameSelectedGroup}
+            disabled={selectedGroupId === 'all' || selectedGroupId === 'ungrouped'}
+            title="重命名分组"
+            type="button"
+          >
+            重命名
+          </button>
+          <button
+            class="px-2 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 hover:bg-red-100 dark:hover:bg-red-900/30 text-xs text-red-600 dark:text-red-400 disabled:opacity-50"
+            on:click={deleteSelectedGroup}
+            disabled={selectedGroupId === 'all' || selectedGroupId === 'ungrouped'}
+            title="删除分组"
+            type="button"
+          >
+            删除
+          </button>
+        </div>
+      {/if}
       <div class="relative">
         <input
           type="text"
@@ -182,7 +282,7 @@
                  <button class="p-1 hover:text-slate-200 transition-colors" title="导入配置" on:click={importConnections}>
                     <UploadIcon className="w-3 h-3" />
                  </button>
-                 <button class="p-1 hover:text-slate-200 transition-colors" title="导出配置" on:click={exportConnections}>
+                 <button class="p-1 hover:text-slate-200 transition-colors" title="导出配置" on:click={() => exportConnections()}>
                     <DownloadIcon className="w-3 h-3" />
                  </button>
               </div>
@@ -205,7 +305,7 @@
                       {connection.name}
                     </div>
                     <div class="text-xs text-slate-500 truncate mt-0.5 font-mono opacity-80">
-                      {connection.username}@{connection.host}
+                      {connection.username}@{connection.host}{groupNameById.get(connection.group_id || '') ? ` · ${groupNameById.get(connection.group_id || '')}` : ''}
                     </div>
                   </div>
                 {/if}
@@ -214,13 +314,20 @@
               {#if !$isSidebarCollapsed}
                 {#if activeConnectionIds.has(connection.id)}
                   <button
-                    class="absolute right-9 top-2.5 p-1.5 rounded-md text-green-500 hover:text-green-600 hover:bg-green-100 dark:hover:bg-green-900/30 transition-all"
+                    class="absolute right-[4.25rem] top-2.5 p-1.5 rounded-md text-green-500 hover:text-green-600 hover:bg-green-100 dark:hover:bg-green-900/30 transition-all"
                     on:click={(e) => openMonitor(connection, e)}
                     title="系统监控"
                   >
                     <ActivityIcon class="w-3.5 h-3.5" />
                   </button>
                 {/if}
+                <button
+                  class="absolute right-9 top-2.5 p-1.5 rounded-md text-slate-400 dark:text-slate-500 hover:text-blue-500 dark:hover:text-blue-400 hover:bg-slate-200 dark:hover:bg-slate-700/50 opacity-0 group-hover:opacity-100 transition-all"
+                  on:click={(e) => handleEdit(connection, e)}
+                  title="编辑连接"
+                >
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 4H6a2 2 0 00-2 2v12a2 2 0 002 2h12a2 2 0 002-2v-5M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+                </button>
                 <button
                   class="absolute right-2 top-2.5 p-1.5 rounded-md text-slate-400 dark:text-slate-500 hover:text-red-500 dark:hover:text-red-400 hover:bg-slate-200 dark:hover:bg-slate-700/50 opacity-0 group-hover:opacity-100 transition-all"
                   on:click={(e) => handleDelete(connection.id, e)}

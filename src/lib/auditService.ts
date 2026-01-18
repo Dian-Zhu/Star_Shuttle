@@ -88,13 +88,10 @@ export class AuditService {
   private events: AuditEvent[] = [];
   private warningThreshold: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' = 'MEDIUM';
   
-  /**
-   * Analyze a command for high-risk patterns
-   */
-  analyzeCommand(command: string, sessionId?: string, userId?: string): AuditEvent {
+  analyzeCommand(command: string): Pick<AuditEvent, 'riskLevel' | 'detectedPatterns' | 'description'> {
     const detectedPatterns: string[] = [];
     let highestRisk: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' = 'LOW';
-    let descriptions: string[] = [];
+    const descriptions: string[] = [];
     
     for (const { pattern, risk, description } of HIGH_RISK_PATTERNS) {
       if (pattern.test(command)) {
@@ -110,28 +107,41 @@ export class AuditService {
       }
     }
     
-    const event: AuditEvent = {
-      id: crypto.randomUUID(),
-      timestamp: new Date(),
-      sessionId,
-      userId,
-      command,
+    return {
       riskLevel: highestRisk,
       description: descriptions.length > 0 ? descriptions.join(', ') : 'No high-risk patterns detected',
-      detectedPatterns,
-      action: highestRisk === 'LOW' ? 'ALLOWED' : 'WARNED'
+      detectedPatterns
     };
-    
-    this.events.push(event);
-    this.logEvent(event);
-    
-    return event;
+  }
+
+  shouldPrompt(riskLevel: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'): boolean {
+    const riskOrder = { LOW: 0, MEDIUM: 1, HIGH: 2, CRITICAL: 3 } as const;
+    return riskOrder[riskLevel] >= riskOrder[this.warningThreshold];
+  }
+
+  createEvent(params: {
+    command: string;
+    sessionId?: string;
+    userId?: string;
+    action: AuditEvent['action'];
+    details?: any;
+  }): AuditEvent {
+    const analysis = this.analyzeCommand(params.command);
+    return {
+      id: crypto.randomUUID(),
+      timestamp: new Date(),
+      sessionId: params.sessionId,
+      userId: params.userId,
+      command: params.command,
+      riskLevel: analysis.riskLevel,
+      description: analysis.description,
+      detectedPatterns: analysis.detectedPatterns,
+      action: params.action,
+      details: params.details
+    };
   }
   
-  /**
-   * Log audit event to console and potentially to backend
-   */
-  private async logEvent(event: AuditEvent): Promise<void> {
+  async recordEvent(event: AuditEvent): Promise<void> {
     const { timestamp, riskLevel, command, description } = event;
     const timeStr = timestamp.toISOString();
     
@@ -143,6 +153,8 @@ export class AuditService {
     } catch (error) {
       console.error('Failed to send audit event to backend:', error);
     }
+
+    this.events.push(event);
   }
   
   /**

@@ -1,62 +1,78 @@
-use crate::modules::error::Result; use keyring; use uuid::Uuid;
-
-pub enum CredentialType {
-    Password(String),
-    PrivateKey(String, Option<String>), // private key path, optional passphrase
-    Certificate(String, String, Option<String>), // cert path, key path, optional passphrase
-}
+use crate::modules::error::{AppError, Result};
+use keyring::Entry;
+use uuid::Uuid;
 
 pub struct CredentialManager {
     service: String,
-    username: String,
+}
+
+impl Default for CredentialManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CredentialManager {
     pub fn new() -> Self {
         Self {
             service: "ssh_remote_manager".to_string(),
-            username: "user".to_string(),
         }
     }
-    
-    pub fn save_credential(&self, connection_id: &Uuid, credential: &CredentialType) -> Result<()> {
-        let _keyring = keyring::Entry::new(&self.service, &format!("{}_{}", self.username, connection_id)); 
-        let _credential_str = match credential {
-            CredentialType::Password(password) => format!("password:{}", password),
-            CredentialType::PrivateKey(path, passphrase) => {
-                if let Some(_p) = passphrase {
-                    format!("private_key:{}:with_passphrase", path)
-                } else {
-                    format!("private_key:{}:no_passphrase", path)
-                }
-            },
-            CredentialType::Certificate(cert_path, key_path, passphrase) => {
-                if let Some(_p) = passphrase {
-                    format!("certificate:{}:{}:with_passphrase", cert_path, key_path)
-                } else {
-                    format!("certificate:{}:{}:no_passphrase", cert_path, key_path)
-                }
-            },
-        };
-        
-        // In a real implementation, we would store the credential in the keyring
-        // For now, just return Ok
+
+    fn entry(&self, connection_id: &Uuid, kind: &str) -> Result<Entry> {
+        Entry::new(&self.service, &format!("{}:{}", connection_id, kind)).map_err(AppError::from)
+    }
+
+    pub fn save_password_kind(
+        &self,
+        connection_id: &Uuid,
+        kind: &str,
+        password: &str,
+    ) -> Result<()> {
+        let entry = self.entry(connection_id, kind)?;
+        entry.set_password(password)?;
         Ok(())
     }
-    
-    pub fn get_credential(&self, connection_id: &Uuid) -> Result<CredentialType> {
-        let _keyring = keyring::Entry::new(&self.service, &format!("{}_{}", self.username, connection_id));
-        
-        // In a real implementation, we would retrieve the credential from the keyring
-        // For now, just return a dummy credential
-        Ok(CredentialType::Password("dummy_password".to_string()))
+
+    pub fn get_password_kind(&self, connection_id: &Uuid, kind: &str) -> Result<Option<String>> {
+        let entry = self.entry(connection_id, kind)?;
+        match entry.get_password() {
+            Ok(v) => Ok(Some(v)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(e) => Err(AppError::from(e)),
+        }
     }
-    
-    pub fn delete_credential(&self, connection_id: &Uuid) -> Result<()> {
-        let _keyring = keyring::Entry::new(&self.service, &format!("{}_{}", self.username, connection_id));
-        
-        // In a real implementation, we would delete the credential from the keyring
-        // For now, just return Ok
-        Ok(())
+
+    pub fn delete_password_kind(&self, connection_id: &Uuid, kind: &str) -> Result<()> {
+        let entry = self.entry(connection_id, kind)?;
+        match entry.delete_password() {
+            Ok(()) => Ok(()),
+            Err(keyring::Error::NoEntry) => Ok(()),
+            Err(e) => Err(AppError::from(e)),
+        }
+    }
+
+    pub fn save_password(&self, connection_id: &Uuid, password: &str) -> Result<()> {
+        self.save_password_kind(connection_id, "password", password)
+    }
+
+    pub fn get_password(&self, connection_id: &Uuid) -> Result<Option<String>> {
+        self.get_password_kind(connection_id, "password")
+    }
+
+    pub fn delete_password(&self, connection_id: &Uuid) -> Result<()> {
+        self.delete_password_kind(connection_id, "password")
+    }
+
+    pub fn save_passphrase(&self, connection_id: &Uuid, passphrase: &str) -> Result<()> {
+        self.save_password_kind(connection_id, "passphrase", passphrase)
+    }
+
+    pub fn get_passphrase(&self, connection_id: &Uuid) -> Result<Option<String>> {
+        self.get_password_kind(connection_id, "passphrase")
+    }
+
+    pub fn delete_passphrase(&self, connection_id: &Uuid) -> Result<()> {
+        self.delete_password_kind(connection_id, "passphrase")
     }
 }

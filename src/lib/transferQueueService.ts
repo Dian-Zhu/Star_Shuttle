@@ -117,7 +117,7 @@ export class TransferQueueService {
    * Update transfer progress
    */
   updateProgress(id: string, progress: number, speed: number = 0): void {
-    let calculatedSpeed = speed;
+    const calculatedSpeed = speed;
     const now = Date.now();
     const metrics = this.transferMetrics.get(id);
     
@@ -127,8 +127,6 @@ export class TransferQueueService {
       // For simplicity, we compute bytes per second from progress percentage change
       const timeDelta = now - metrics.lastTime;
       if (timeDelta > 0) {
-        // Progress delta in percentage points
-        const progressDelta = progress - metrics.lastProgress;
         // Estimate bytes transferred based on progress (requires total size)
         // Since we don't have total size, we'll just store progress and compute speed
         // as progress percentage per second (not very useful).
@@ -235,34 +233,48 @@ export class TransferQueueService {
         
         // Simulate progress updates with pause support
         const chunkSize = 64 * 1024; // 64KB chunks
-        for (let offset = startOffset; offset < totalSize; offset += chunkSize) {
-          // Check if transfer is paused or canceled
+        try {
+          for (let offset = startOffset; offset < totalSize; offset += chunkSize) {
+            // Check if transfer is paused or canceled
+            const currentStatus = this.getTransferStatus(id);
+            if (currentStatus === 'paused' || currentStatus === 'canceled') {
+              // Transfer was paused or canceled, exit loop
+              return;
+            }
+            
+            const end = Math.min(offset + chunkSize, totalSize);
+            const chunk = content.slice(offset, end);
+            
+            // Write chunk with append flag (append=true for resume)
+            await sftpService.writeFile(sessionId, remotePath, chunk, offset > 0);
+            
+            // Update progress
+            const progress = Math.floor((end / totalSize) * 100);
+            const speed = chunkSize * 5; // placeholder speed calculation
+            this.updateProgress(id, progress, speed);
+            
+            // Update bytes transferred in metrics
+            this.transferMetrics.set(id, {
+              lastProgress: progress,
+              lastTime: Date.now(),
+              bytesTransferred: end
+            });
+            
+            // Small delay to simulate network transfer
+            await new Promise(resolve => setTimeout(resolve, 50));
+          }
+        } catch (e) {
           const currentStatus = this.getTransferStatus(id);
           if (currentStatus === 'paused' || currentStatus === 'canceled') {
-            // Transfer was paused or canceled, exit loop
             return;
           }
-          
-          const end = Math.min(offset + chunkSize, totalSize);
-          const chunk = content.slice(offset, end);
-          
-          // Write chunk with append flag (append=true for resume)
-          await sftpService.writeFile(sessionId, remotePath, chunk, offset > 0);
-          
-          // Update progress
-          const progress = Math.floor((end / totalSize) * 100);
-          const speed = chunkSize * 5; // placeholder speed calculation
-          this.updateProgress(id, progress, speed);
-          
-          // Update bytes transferred in metrics
+          await sftpService.scpUpload(sessionId, remotePath, content);
+          this.updateProgress(id, 100, 0);
           this.transferMetrics.set(id, {
-            lastProgress: progress,
+            lastProgress: 100,
             lastTime: Date.now(),
-            bytesTransferred: end
+            bytesTransferred: totalSize
           });
-          
-          // Small delay to simulate network transfer
-          await new Promise(resolve => setTimeout(resolve, 50));
         }
       } else {
         // Download from remote via SFTP
@@ -298,7 +310,12 @@ export class TransferQueueService {
         }
         
         // After simulation, actually read the file (full read for now)
-        const content = await sftpService.readFile(sessionId, remotePath);
+        let content: Uint8Array;
+        try {
+          content = await sftpService.readFile(sessionId, remotePath);
+        } catch (e) {
+          content = await sftpService.scpDownload(sessionId, remotePath);
+        }
         await localFsService.writeFile(localPath, content, false);
       }
       
@@ -336,7 +353,7 @@ export class TransferQueueService {
    * Get statistics
    */
   getStats() {
-    let stats = {
+    return {
       active: 0,
       queued: 0,
       completed: 0,
@@ -344,9 +361,6 @@ export class TransferQueueService {
       totalSize: 0,
       averageSpeed: 0
     };
-
-    // This would be implemented with derived stores in practice
-    return stats;
   }
 }
 

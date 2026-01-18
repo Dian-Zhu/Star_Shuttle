@@ -1,7 +1,16 @@
-use serde::{Deserialize, Serialize}; use uuid::Uuid; use chrono::{DateTime, Utc}; use std::collections::HashMap; use thiserror::Error; use log::{info, debug, error};
+use chrono::{DateTime, Utc};
+use log::{debug, error, info};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use thiserror::Error;
+use uuid::Uuid;
 
 // Re-export submodules
-pub mod auth; pub mod error; pub mod ssh_impl; pub mod known_hosts; pub mod tracking;
+pub mod auth;
+pub mod error;
+pub mod known_hosts;
+pub mod ssh_impl;
+pub mod tracking;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ConnectionStatus {
     Disconnected,
@@ -18,6 +27,7 @@ pub enum AuthMethod {
         password: String,
         save_password: bool,
     },
+    KeyboardInteractive {},
     PrivateKey {
         key_path: String,
         passphrase: Option<String>,
@@ -35,8 +45,9 @@ pub enum AuthMethod {
 }
 
 // Proxy types for jump host support
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub enum ProxyType {
+    #[default]
     None,
     Socks5 {
         host: String,
@@ -56,12 +67,6 @@ pub enum ProxyType {
         username: String,
         auth_method: AuthMethod,
     },
-}
-
-impl Default for ProxyType {
-    fn default() -> Self {
-        ProxyType::None
-    }
 }
 
 // Connection configuration
@@ -110,7 +115,7 @@ impl Default for ConnectionConfig {
             id: Uuid::new_v4(),
             name: "Default Connection".to_string(),
             host: String::new(), // 改为空字符串，避免默认连接localhost
-            port: 0, // 改为0，避免默认使用22端口
+            port: 0,             // 改为0，避免默认使用22端口
             username: "".to_string(),
             auth_method: AuthMethod::Password {
                 password: "".to_string(),
@@ -132,40 +137,136 @@ impl Default for ConnectionConfig {
 impl ConnectionConfig {
     pub fn validate(&self) -> Result<(), ConnectionError> {
         if self.host.is_empty() {
-            return Err(ConnectionError::InvalidConfig("Host is required".to_string()));
+            return Err(ConnectionError::InvalidConfig(
+                "Host is required".to_string(),
+            ));
         }
-        
+
         if self.username.is_empty() {
-            return Err(ConnectionError::InvalidConfig("Username is required".to_string()));
+            return Err(ConnectionError::InvalidConfig(
+                "Username is required".to_string(),
+            ));
         }
-        
+
         if self.port == 0 {
-            return Err(ConnectionError::InvalidConfig("Port is required".to_string()));
+            return Err(ConnectionError::InvalidConfig(
+                "Port is required".to_string(),
+            ));
         }
-        
+
         match &self.auth_method {
             AuthMethod::Password { password, .. } => {
                 if password.is_empty() {
-                    return Err(ConnectionError::InvalidConfig("Password is required".to_string()));
+                    return Err(ConnectionError::InvalidConfig(
+                        "Password is required".to_string(),
+                    ));
                 }
-            },
+            }
+            AuthMethod::KeyboardInteractive {} => {}
             AuthMethod::PrivateKey { key_path, .. } => {
                 if key_path.is_empty() {
-                    return Err(ConnectionError::InvalidConfig("Private key path is required".to_string()));
+                    return Err(ConnectionError::InvalidConfig(
+                        "Private key path is required".to_string(),
+                    ));
                 }
-            },
-            AuthMethod::Agent { .. } => {},
-            AuthMethod::Certificate { certificate_path, private_key_path, .. } => {
+            }
+            AuthMethod::Agent { .. } => {}
+            AuthMethod::Certificate {
+                certificate_path,
+                private_key_path,
+                ..
+            } => {
                 if certificate_path.is_empty() {
-                    return Err(ConnectionError::InvalidConfig("Certificate path is required".to_string()));
+                    return Err(ConnectionError::InvalidConfig(
+                        "Certificate path is required".to_string(),
+                    ));
                 }
-                
+
                 if private_key_path.is_empty() {
-                    return Err(ConnectionError::InvalidConfig("Private key path is required for certificate authentication".to_string()));
+                    return Err(ConnectionError::InvalidConfig(
+                        "Private key path is required for certificate authentication".to_string(),
+                    ));
                 }
-            },
+            }
         }
-        
+
+        Ok(())
+    }
+
+    pub fn validate_for_save(&self) -> Result<(), ConnectionError> {
+        if self.host.is_empty() {
+            return Err(ConnectionError::InvalidConfig(
+                "Host is required".to_string(),
+            ));
+        }
+
+        if self.username.is_empty() {
+            return Err(ConnectionError::InvalidConfig(
+                "Username is required".to_string(),
+            ));
+        }
+
+        if self.port == 0 {
+            return Err(ConnectionError::InvalidConfig(
+                "Port is required".to_string(),
+            ));
+        }
+
+        match &self.auth_method {
+            AuthMethod::Password {
+                password,
+                save_password,
+            } => {
+                if *save_password && password.is_empty() {
+                    return Err(ConnectionError::InvalidConfig(
+                        "Password is required when save_password is enabled".to_string(),
+                    ));
+                }
+            }
+            AuthMethod::KeyboardInteractive {} => {}
+            AuthMethod::PrivateKey { key_path, .. } => {
+                if key_path.is_empty() {
+                    return Err(ConnectionError::InvalidConfig(
+                        "Private key path is required".to_string(),
+                    ));
+                }
+            }
+            AuthMethod::Agent { .. } => {}
+            AuthMethod::Certificate {
+                certificate_path,
+                private_key_path,
+                ..
+            } => {
+                if certificate_path.is_empty() {
+                    return Err(ConnectionError::InvalidConfig(
+                        "Certificate path is required".to_string(),
+                    ));
+                }
+
+                if private_key_path.is_empty() {
+                    return Err(ConnectionError::InvalidConfig(
+                        "Private key path is required for certificate authentication".to_string(),
+                    ));
+                }
+            }
+        }
+
+        if let ProxyType::JumpHost {
+            auth_method:
+                AuthMethod::Password {
+                    password,
+                    save_password,
+                },
+            ..
+        } = &self.proxy_type
+        {
+            if *save_password && password.is_empty() {
+                return Err(ConnectionError::InvalidConfig(
+                    "Jump host password is required when save_password is enabled".to_string(),
+                ));
+            }
+        }
+
         Ok(())
     }
 }
@@ -183,7 +284,11 @@ pub struct SessionInfo {
 
 // Connection manager trait
 pub trait ConnectionManager {
-    fn connect(&mut self, config: &ConnectionConfig) -> Result<Uuid, ConnectionError>;
+    fn connect(
+        &mut self,
+        app: &tauri::AppHandle,
+        config: &ConnectionConfig,
+    ) -> Result<Uuid, ConnectionError>;
     fn disconnect(&mut self, session_id: &Uuid) -> Result<(), ConnectionError>;
     fn get_session(&self, session_id: &Uuid) -> Option<&SessionInfo>;
     fn get_all_sessions(&self) -> Vec<SessionInfo>;
@@ -191,16 +296,32 @@ pub trait ConnectionManager {
     fn save_connection_config(&mut self, config: ConnectionConfig) -> Result<(), ConnectionError>;
     fn delete_connection_config(&mut self, connection_id: &Uuid) -> Result<(), ConnectionError>;
     fn get_all_connection_configs(&self) -> Vec<ConnectionConfig>;
-    fn test_connection(&self, config: &ConnectionConfig) -> Result<(), ConnectionError>;
+    fn test_connection(
+        &self,
+        app: &tauri::AppHandle,
+        config: &ConnectionConfig,
+    ) -> Result<(), ConnectionError>;
 
     // Terminal methods
-    fn start_terminal(&mut self, app: &tauri::AppHandle, session_id: &Uuid, width: u16, height: u16) -> Result<bool, ConnectionError>;
+    fn start_terminal(
+        &mut self,
+        app: &tauri::AppHandle,
+        session_id: &Uuid,
+        width: u16,
+        height: u16,
+    ) -> Result<bool, ConnectionError>;
     fn send_terminal_data(&mut self, session_id: &Uuid, data: &str) -> Result<(), ConnectionError>;
-    fn resize_terminal(&mut self, session_id: &Uuid, width: u16, height: u16) -> Result<(), ConnectionError>;
+    fn resize_terminal(
+        &mut self,
+        session_id: &Uuid,
+        width: u16,
+        height: u16,
+    ) -> Result<(), ConnectionError>;
     fn close_terminal(&mut self, session_id: &Uuid) -> Result<(), ConnectionError>;
-    
+
     // Command execution
-    fn exec_command(&mut self, session_id: &Uuid, command: &str) -> Result<String, ConnectionError>;
+    fn exec_command(&mut self, session_id: &Uuid, command: &str)
+        -> Result<String, ConnectionError>;
 }
 
 // Connection errors
@@ -228,12 +349,126 @@ pub enum ConnectionError {
     Other(String),
 }
 
-use std::sync::{Arc, Mutex};
 use crate::modules::connection::ssh_impl::SshConnection;
 use crate::modules::connection::tracking::ChannelTracker;
-use tauri::Emitter;
-use tokio::sync::mpsc;
+use crate::modules::credential::CredentialManager;
+use crate::modules::db::DatabaseManager;
+use async_trait::async_trait;
+use std::sync::{Arc, Mutex};
+use tauri::{AppHandle, Emitter};
 use tokio::runtime::Runtime;
+use tokio::sync::{mpsc, oneshot};
+
+pub const SSH_KEYBOARD_INTERACTIVE_EVENT: &str = "ssh-keyboard-interactive-request";
+
+type KeyboardInteractivePending =
+    Arc<Mutex<HashMap<String, oneshot::Sender<Result<Vec<String>, String>>>>>;
+
+#[derive(Clone)]
+pub struct KeyboardInteractiveCoordinator {
+    pending: KeyboardInteractivePending,
+}
+
+impl Default for KeyboardInteractiveCoordinator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl KeyboardInteractiveCoordinator {
+    pub fn new() -> Self {
+        Self {
+            pending: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    pub fn respond(&self, request_id: String, responses: Vec<String>) -> Result<(), String> {
+        let tx = self
+            .pending
+            .lock()
+            .map_err(|e| e.to_string())?
+            .remove(&request_id)
+            .ok_or_else(|| "unknown request_id".to_string())?;
+        let _ = tx.send(Ok(responses));
+        Ok(())
+    }
+
+    pub fn cancel(&self, request_id: String) -> Result<(), String> {
+        let tx = self
+            .pending
+            .lock()
+            .map_err(|e| e.to_string())?
+            .remove(&request_id)
+            .ok_or_else(|| "unknown request_id".to_string())?;
+        let _ = tx.send(Err("canceled".to_string()));
+        Ok(())
+    }
+
+    pub async fn request(
+        &self,
+        app: &AppHandle,
+        request: ssh_impl::KeyboardInteractivePromptRequest,
+    ) -> Result<Vec<String>, anyhow::Error> {
+        let request_id = Uuid::new_v4().to_string();
+        let (tx, rx) = oneshot::channel::<Result<Vec<String>, String>>();
+        {
+            let mut guard = self
+                .pending
+                .lock()
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            guard.insert(request_id.clone(), tx);
+        }
+
+        app.emit(
+            SSH_KEYBOARD_INTERACTIVE_EVENT,
+            serde_json::json!({
+                "request_id": request_id,
+                "host": request.host,
+                "port": request.port,
+                "username": request.username,
+                "name": request.name,
+                "instructions": request.instructions,
+                "prompts": request.prompts.iter().map(|p| serde_json::json!({
+                    "prompt": p.prompt,
+                    "echo": p.echo
+                })).collect::<Vec<_>>()
+            }),
+        )?;
+
+        let res = tokio::time::timeout(std::time::Duration::from_secs(300), rx).await;
+        match res {
+            Ok(Ok(Ok(v))) => Ok(v),
+            Ok(Ok(Err(e))) => Err(anyhow::anyhow!(e)),
+            Ok(Err(_)) => Err(anyhow::anyhow!(
+                "keyboard-interactive response channel closed"
+            )),
+            Err(_) => {
+                let _ = self
+                    .pending
+                    .lock()
+                    .map_err(|e| anyhow::anyhow!(e.to_string()))?
+                    .remove(&request_id);
+                Err(anyhow::anyhow!("keyboard-interactive prompt timeout"))
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
+struct TauriKeyboardInteractivePrompter {
+    app: AppHandle,
+    coordinator: KeyboardInteractiveCoordinator,
+}
+
+#[async_trait]
+impl ssh_impl::KeyboardInteractivePrompter for TauriKeyboardInteractivePrompter {
+    async fn prompt(
+        &self,
+        request: ssh_impl::KeyboardInteractivePromptRequest,
+    ) -> Result<Vec<String>, anyhow::Error> {
+        self.coordinator.request(&self.app, request).await
+    }
+}
 
 // Terminal session data
 #[derive(Clone)]
@@ -254,9 +489,13 @@ pub struct DefaultConnectionManager {
     connections: HashMap<Uuid, ConnectionConfig>,
     sessions: HashMap<Uuid, SessionInfo>,
     ssh_connections: HashMap<Uuid, SshConnection>,
+    jump_ssh_connections: HashMap<Uuid, SshConnection>,
     terminals: HashMap<Uuid, TerminalSession>,
     tracker: Arc<Mutex<ChannelTracker>>,
     runtime: Arc<Runtime>,
+    db: Option<Arc<Mutex<DatabaseManager>>>,
+    credential_manager: CredentialManager,
+    keyboard_interactive: KeyboardInteractiveCoordinator,
 }
 
 // Manual Debug implementation to handle the non-Debug ssh_connections and runtime fields
@@ -284,10 +523,399 @@ impl DefaultConnectionManager {
             connections: HashMap::new(),
             sessions: HashMap::new(),
             ssh_connections: HashMap::new(),
+            jump_ssh_connections: HashMap::new(),
             terminals: HashMap::new(),
             tracker: Arc::new(Mutex::new(ChannelTracker::new())),
             runtime: Arc::new(runtime),
+            db: None,
+            credential_manager: CredentialManager::new(),
+            keyboard_interactive: KeyboardInteractiveCoordinator::new(),
         }
+    }
+
+    pub fn keyboard_interactive_coordinator(&self) -> KeyboardInteractiveCoordinator {
+        self.keyboard_interactive.clone()
+    }
+
+    pub fn set_db(&mut self, db: Arc<Mutex<DatabaseManager>>) -> Result<(), ConnectionError> {
+        self.db = Some(db);
+        self.load_connection_configs_from_db()?;
+        Ok(())
+    }
+
+    fn load_connection_configs_from_db(&mut self) -> Result<(), ConnectionError> {
+        let Some(db) = self.db.as_ref() else {
+            return Ok(());
+        };
+
+        let db = db
+            .lock()
+            .map_err(|e| ConnectionError::DatabaseError(e.to_string()))?;
+        let raw = db
+            .get_setting("connection_configs")
+            .map_err(|e| ConnectionError::DatabaseError(e.to_string()))?;
+
+        self.connections.clear();
+
+        let Some(raw) = raw else {
+            return Ok(());
+        };
+
+        let configs: Vec<ConnectionConfig> = serde_json::from_str(&raw)
+            .map_err(|e| ConnectionError::DatabaseError(e.to_string()))?;
+
+        for config in configs {
+            self.connections.insert(config.id, config);
+        }
+
+        Ok(())
+    }
+
+    fn persist_connection_configs_to_db(&self) -> Result<(), ConnectionError> {
+        let Some(db) = self.db.as_ref() else {
+            return Ok(());
+        };
+
+        let mut configs: Vec<ConnectionConfig> = self.connections.values().cloned().collect();
+        configs.sort_by_key(|c| c.updated_at);
+
+        let raw = serde_json::to_string(&configs)
+            .map_err(|e| ConnectionError::DatabaseError(e.to_string()))?;
+
+        let db = db
+            .lock()
+            .map_err(|e| ConnectionError::DatabaseError(e.to_string()))?;
+        db.save_setting("connection_configs", &raw)
+            .map_err(|e| ConnectionError::DatabaseError(e.to_string()))?;
+
+        Ok(())
+    }
+
+    fn sanitize_auth_method(auth_method: &AuthMethod) -> AuthMethod {
+        match auth_method {
+            AuthMethod::Password { save_password, .. } => AuthMethod::Password {
+                password: String::new(),
+                save_password: *save_password,
+            },
+            AuthMethod::KeyboardInteractive {} => AuthMethod::KeyboardInteractive {},
+            AuthMethod::PrivateKey {
+                key_path,
+                save_passphrase,
+                ..
+            } => AuthMethod::PrivateKey {
+                key_path: key_path.clone(),
+                passphrase: None,
+                save_passphrase: *save_passphrase,
+            },
+            AuthMethod::Agent { agent_path } => AuthMethod::Agent {
+                agent_path: agent_path.clone(),
+            },
+            AuthMethod::Certificate {
+                certificate_path,
+                private_key_path,
+                save_passphrase,
+                ..
+            } => AuthMethod::Certificate {
+                certificate_path: certificate_path.clone(),
+                private_key_path: private_key_path.clone(),
+                passphrase: None,
+                save_passphrase: *save_passphrase,
+            },
+        }
+    }
+
+    fn sanitize_proxy_type(proxy_type: &ProxyType) -> ProxyType {
+        match proxy_type {
+            ProxyType::None => ProxyType::None,
+            ProxyType::Socks5 {
+                host,
+                port,
+                username,
+                password,
+            } => ProxyType::Socks5 {
+                host: host.clone(),
+                port: *port,
+                username: username.clone(),
+                password: password.clone(),
+            },
+            ProxyType::Http {
+                host,
+                port,
+                username,
+                password,
+            } => ProxyType::Http {
+                host: host.clone(),
+                port: *port,
+                username: username.clone(),
+                password: password.clone(),
+            },
+            ProxyType::JumpHost {
+                host,
+                port,
+                username,
+                auth_method,
+            } => ProxyType::JumpHost {
+                host: host.clone(),
+                port: *port,
+                username: username.clone(),
+                auth_method: Self::sanitize_auth_method(auth_method),
+            },
+        }
+    }
+
+    fn sanitize_config_for_storage(config: &ConnectionConfig) -> ConnectionConfig {
+        let mut out = config.clone();
+        out.auth_method = Self::sanitize_auth_method(&out.auth_method);
+        out.proxy_type = Self::sanitize_proxy_type(&out.proxy_type);
+        out
+    }
+
+    fn fill_saved_credentials(&self, config: &mut ConnectionConfig) -> Result<(), ConnectionError> {
+        match &mut config.auth_method {
+            AuthMethod::Password {
+                password,
+                save_password,
+            } => {
+                if *save_password && password.is_empty() {
+                    match self.credential_manager.get_password(&config.id) {
+                        Ok(Some(v)) => *password = v,
+                        Ok(None) => {}
+                        Err(e) => return Err(ConnectionError::CredentialError(e.to_string())),
+                    }
+                }
+            }
+            AuthMethod::KeyboardInteractive {} => {}
+            AuthMethod::PrivateKey {
+                passphrase,
+                save_passphrase,
+                ..
+            } => {
+                if *save_passphrase && passphrase.as_deref().unwrap_or_default().is_empty() {
+                    match self.credential_manager.get_passphrase(&config.id) {
+                        Ok(Some(v)) => *passphrase = Some(v),
+                        Ok(None) => {}
+                        Err(e) => return Err(ConnectionError::CredentialError(e.to_string())),
+                    }
+                }
+            }
+            AuthMethod::Agent { .. } => {}
+            AuthMethod::Certificate {
+                passphrase,
+                save_passphrase,
+                ..
+            } => {
+                if *save_passphrase && passphrase.as_deref().unwrap_or_default().is_empty() {
+                    match self.credential_manager.get_passphrase(&config.id) {
+                        Ok(Some(v)) => *passphrase = Some(v),
+                        Ok(None) => {}
+                        Err(e) => return Err(ConnectionError::CredentialError(e.to_string())),
+                    }
+                }
+            }
+        }
+
+        if let ProxyType::JumpHost { auth_method, .. } = &mut config.proxy_type {
+            match auth_method {
+                AuthMethod::Password {
+                    password,
+                    save_password,
+                } => {
+                    if *save_password && password.is_empty() {
+                        match self
+                            .credential_manager
+                            .get_password_kind(&config.id, "jump_password")
+                        {
+                            Ok(Some(v)) => *password = v,
+                            Ok(None) => {}
+                            Err(e) => return Err(ConnectionError::CredentialError(e.to_string())),
+                        }
+                    }
+                }
+                AuthMethod::KeyboardInteractive {} => {}
+                AuthMethod::PrivateKey {
+                    passphrase,
+                    save_passphrase,
+                    ..
+                } => {
+                    if *save_passphrase && passphrase.as_deref().unwrap_or_default().is_empty() {
+                        match self
+                            .credential_manager
+                            .get_password_kind(&config.id, "jump_passphrase")
+                        {
+                            Ok(Some(v)) => *passphrase = Some(v),
+                            Ok(None) => {}
+                            Err(e) => return Err(ConnectionError::CredentialError(e.to_string())),
+                        }
+                    }
+                }
+                AuthMethod::Agent { .. } => {}
+                AuthMethod::Certificate {
+                    passphrase,
+                    save_passphrase,
+                    ..
+                } => {
+                    if *save_passphrase && passphrase.as_deref().unwrap_or_default().is_empty() {
+                        match self
+                            .credential_manager
+                            .get_password_kind(&config.id, "jump_passphrase")
+                        {
+                            Ok(Some(v)) => *passphrase = Some(v),
+                            Ok(None) => {}
+                            Err(e) => return Err(ConnectionError::CredentialError(e.to_string())),
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn sync_credentials_for_save(&self, config: &ConnectionConfig) -> Result<(), ConnectionError> {
+        match &config.auth_method {
+            AuthMethod::Password {
+                password,
+                save_password,
+            } => {
+                if *save_password {
+                    if !password.is_empty() {
+                        let _ = self.credential_manager.save_password(&config.id, password);
+                    }
+                } else {
+                    let _ = self.credential_manager.delete_password(&config.id);
+                }
+
+                let _ = self.credential_manager.delete_passphrase(&config.id);
+            }
+            AuthMethod::KeyboardInteractive {} => {
+                let _ = self.credential_manager.delete_password(&config.id);
+                let _ = self.credential_manager.delete_passphrase(&config.id);
+            }
+            AuthMethod::PrivateKey {
+                passphrase,
+                save_passphrase,
+                ..
+            } => {
+                if *save_passphrase {
+                    if let Some(p) = passphrase.as_ref().filter(|p| !p.is_empty()) {
+                        let _ = self.credential_manager.save_passphrase(&config.id, p);
+                    }
+                } else {
+                    let _ = self.credential_manager.delete_passphrase(&config.id);
+                }
+
+                let _ = self.credential_manager.delete_password(&config.id);
+            }
+            AuthMethod::Agent { .. } => {
+                let _ = self.credential_manager.delete_password(&config.id);
+                let _ = self.credential_manager.delete_passphrase(&config.id);
+            }
+            AuthMethod::Certificate {
+                passphrase,
+                save_passphrase,
+                ..
+            } => {
+                if *save_passphrase {
+                    if let Some(p) = passphrase.as_ref().filter(|p| !p.is_empty()) {
+                        let _ = self.credential_manager.save_passphrase(&config.id, p);
+                    }
+                } else {
+                    let _ = self.credential_manager.delete_passphrase(&config.id);
+                }
+
+                let _ = self.credential_manager.delete_password(&config.id);
+            }
+        }
+
+        if let ProxyType::JumpHost { auth_method, .. } = &config.proxy_type {
+            match auth_method {
+                AuthMethod::Password {
+                    password,
+                    save_password,
+                } => {
+                    if *save_password {
+                        if !password.is_empty() {
+                            let _ = self.credential_manager.save_password_kind(
+                                &config.id,
+                                "jump_password",
+                                password,
+                            );
+                        }
+                    } else {
+                        let _ = self
+                            .credential_manager
+                            .delete_password_kind(&config.id, "jump_password");
+                    }
+
+                    let _ = self
+                        .credential_manager
+                        .delete_password_kind(&config.id, "jump_passphrase");
+                }
+                AuthMethod::KeyboardInteractive {} => {
+                    let _ = self
+                        .credential_manager
+                        .delete_password_kind(&config.id, "jump_password");
+                    let _ = self
+                        .credential_manager
+                        .delete_password_kind(&config.id, "jump_passphrase");
+                }
+                AuthMethod::PrivateKey {
+                    passphrase,
+                    save_passphrase,
+                    ..
+                } => {
+                    if *save_passphrase {
+                        if let Some(p) = passphrase.as_ref().filter(|p| !p.is_empty()) {
+                            let _ = self.credential_manager.save_password_kind(
+                                &config.id,
+                                "jump_passphrase",
+                                p,
+                            );
+                        }
+                    } else {
+                        let _ = self
+                            .credential_manager
+                            .delete_password_kind(&config.id, "jump_passphrase");
+                    }
+
+                    let _ = self
+                        .credential_manager
+                        .delete_password_kind(&config.id, "jump_password");
+                }
+                AuthMethod::Agent { .. } => {
+                    let _ = self
+                        .credential_manager
+                        .delete_password_kind(&config.id, "jump_password");
+                    let _ = self
+                        .credential_manager
+                        .delete_password_kind(&config.id, "jump_passphrase");
+                }
+                AuthMethod::Certificate {
+                    passphrase,
+                    save_passphrase,
+                    ..
+                } => {
+                    if *save_passphrase {
+                        if let Some(p) = passphrase.as_ref().filter(|p| !p.is_empty()) {
+                            let _ = self.credential_manager.save_password_kind(
+                                &config.id,
+                                "jump_passphrase",
+                                p,
+                            );
+                        }
+                    } else {
+                        let _ = self
+                            .credential_manager
+                            .delete_password_kind(&config.id, "jump_passphrase");
+                    }
+
+                    let _ = self
+                        .credential_manager
+                        .delete_password_kind(&config.id, "jump_password");
+                }
+            }
+        }
+
+        Ok(())
     }
 
     pub fn get_ssh_connection(&self, id: &Uuid) -> Option<SshConnection> {
@@ -296,19 +924,25 @@ impl DefaultConnectionManager {
 }
 
 impl ConnectionManager for DefaultConnectionManager {
-    fn connect(&mut self, config: &ConnectionConfig) -> Result<Uuid, ConnectionError> {
+    fn connect(
+        &mut self,
+        app: &tauri::AppHandle,
+        config: &ConnectionConfig,
+    ) -> Result<Uuid, ConnectionError> {
         // Log connection attempt start
         info!("Starting connection attempt for config: {:?}", config.id);
-        
+
         // 新增：验证配置合法性，确保不使用默认空配置
         info!("Validating connection configuration...");
-        config.validate()?;
+        let mut effective_config = config.clone();
+        self.fill_saved_credentials(&mut effective_config)?;
+        effective_config.validate()?;
         info!("Connection configuration validated successfully");
-        
+
         // Create a new session ID
         let session_id = Uuid::new_v4();
         info!("Created new session ID: {}", session_id);
-        
+
         // Update session status to connecting
         let mut session_info = SessionInfo {
             id: session_id,
@@ -318,47 +952,174 @@ impl ConnectionManager for DefaultConnectionManager {
             created_at: Utc::now(),
             last_active: Utc::now(),
         };
-        
+
         // Store session info
         self.sessions.insert(session_id, session_info.clone());
-        debug!("Stored session info with status: Connecting for session {}", session_id);
-        
+        debug!(
+            "Stored session info with status: Connecting for session {}",
+            session_id
+        );
+
         // Clone necessary fields from config to move into thread
-        let host = config.host.clone();
-        let port = config.port;
-        let username = config.username.clone();
-        let auth_method = config.auth_method.clone();
-        let local_forwards = config.local_forwards.clone();
-        let remote_forwards = config.remote_forwards.clone();
-        
-        // Convert our AuthMethod to ssh_impl::AuthType
-        let auth_type = match auth_method {
-            AuthMethod::Password { password, .. } => ssh_impl::AuthType::Password(Some(password)),
-            AuthMethod::PrivateKey { key_path, passphrase, .. } => {
-                ssh_impl::AuthType::PrivateKey(key_path, passphrase)
-            },
-            AuthMethod::Agent { agent_path } => ssh_impl::AuthType::Agent(agent_path),
-            AuthMethod::Certificate { certificate_path, private_key_path, passphrase, .. } => {
-                ssh_impl::AuthType::Certificate(certificate_path, private_key_path, passphrase)
-            },
-        };
-        
+        let host = effective_config.host.clone();
+        let port = effective_config.port;
+        let username = effective_config.username.clone();
+        let auth_method = effective_config.auth_method.clone();
+        let local_forwards = effective_config.local_forwards.clone();
+        let remote_forwards = effective_config.remote_forwards.clone();
+        let proxy_type = effective_config.proxy_type.clone();
+        let socks_proxy_port = effective_config.socks_proxy_port;
+
+        let auth_type = auth_method_to_auth_type(auth_method);
+        let keyboard_interactive_prompter: Option<Arc<dyn ssh_impl::KeyboardInteractivePrompter>> =
+            Some(Arc::new(TauriKeyboardInteractivePrompter {
+                app: app.clone(),
+                coordinator: self.keyboard_interactive.clone(),
+            }));
+
         // Log connection details (excluding sensitive info)
         info!("Attempting to connect to {}:{} as {}", host, port, username);
-        
+
         // Use the persistent runtime to establish SSH connection
         // This ensures the connection task remains alive as long as the manager exists
-        match self.runtime.block_on(async {
-            ssh_impl::connect_ssh(&host, port, &username, auth_type, &local_forwards, &remote_forwards, config.socks_proxy_port).await
-        }) {
+        let connect_res: Result<(SshConnection, Option<SshConnection>), anyhow::Error> =
+            self.runtime.block_on(async {
+                match proxy_type {
+                    ProxyType::JumpHost {
+                        host: jump_host,
+                        port: jump_port,
+                        username: jump_username,
+                        auth_method: jump_auth_method,
+                    } => {
+                        let jump_auth_type = auth_method_to_auth_type(jump_auth_method);
+                        let jump_connection = ssh_impl::connect_ssh(
+                            &jump_host,
+                            jump_port,
+                            &jump_username,
+                            jump_auth_type,
+                            &Vec::new(),
+                            &Vec::new(),
+                            None,
+                            keyboard_interactive_prompter.clone(),
+                        )
+                        .await?;
+
+                        let local_port = ssh_impl::start_ephemeral_direct_tcpip_listener(
+                            jump_connection.handle.clone(),
+                            host.clone(),
+                            port,
+                        )
+                        .await?;
+
+                        let target_connection = ssh_impl::connect_ssh_with_known_host(
+                            "127.0.0.1",
+                            local_port,
+                            &host,
+                            port,
+                            &username,
+                            auth_type,
+                            &local_forwards,
+                            &remote_forwards,
+                            socks_proxy_port,
+                            keyboard_interactive_prompter.clone(),
+                        )
+                        .await?;
+
+                        Ok((target_connection, Some(jump_connection)))
+                    }
+                    ProxyType::Socks5 {
+                        host: proxy_host,
+                        port: proxy_port,
+                        username: proxy_username,
+                        password: proxy_password,
+                    } => {
+                        let local_port = ssh_impl::start_ephemeral_socks5_proxy_dial_listener(
+                            proxy_host,
+                            proxy_port,
+                            proxy_username,
+                            proxy_password,
+                            host.clone(),
+                            port,
+                        )
+                        .await?;
+
+                        let target_connection = ssh_impl::connect_ssh_with_known_host(
+                            "127.0.0.1",
+                            local_port,
+                            &host,
+                            port,
+                            &username,
+                            auth_type,
+                            &local_forwards,
+                            &remote_forwards,
+                            socks_proxy_port,
+                            keyboard_interactive_prompter.clone(),
+                        )
+                        .await?;
+
+                        Ok((target_connection, None))
+                    }
+                    ProxyType::Http {
+                        host: proxy_host,
+                        port: proxy_port,
+                        username: proxy_username,
+                        password: proxy_password,
+                    } => {
+                        let local_port = ssh_impl::start_ephemeral_http_proxy_dial_listener(
+                            proxy_host,
+                            proxy_port,
+                            proxy_username,
+                            proxy_password,
+                            host.clone(),
+                            port,
+                        )
+                        .await?;
+
+                        let target_connection = ssh_impl::connect_ssh_with_known_host(
+                            "127.0.0.1",
+                            local_port,
+                            &host,
+                            port,
+                            &username,
+                            auth_type,
+                            &local_forwards,
+                            &remote_forwards,
+                            socks_proxy_port,
+                            keyboard_interactive_prompter.clone(),
+                        )
+                        .await?;
+
+                        Ok((target_connection, None))
+                    }
+                    _ => {
+                        let target_connection = ssh_impl::connect_ssh(
+                            &host,
+                            port,
+                            &username,
+                            auth_type,
+                            &local_forwards,
+                            &remote_forwards,
+                            socks_proxy_port,
+                            keyboard_interactive_prompter.clone(),
+                        )
+                        .await?;
+                        Ok((target_connection, None))
+                    }
+                }
+            });
+
+        match connect_res {
             Ok(ssh_connection) => {
                 // Connection successful
                 info!("Connection successful for session: {}", session_id);
                 session_info.status = ConnectionStatus::Connected;
                 self.sessions.insert(session_id, session_info);
-                self.ssh_connections.insert(session_id, ssh_connection);
+                self.ssh_connections.insert(session_id, ssh_connection.0);
+                if let Some(jump) = ssh_connection.1 {
+                    self.jump_ssh_connections.insert(session_id, jump);
+                }
                 Ok(session_id)
-            },
+            }
             Err(e) => {
                 // SSH connection error
                 error!("SSH connection error for session {}: {:?}", session_id, e);
@@ -370,20 +1131,26 @@ impl ConnectionManager for DefaultConnectionManager {
     }
 
     fn disconnect(&mut self, session_id: &Uuid) -> Result<(), ConnectionError> {
-        let session = self.sessions.get_mut(session_id).ok_or(ConnectionError::SessionNotFound(*session_id))?;
-        
+        let session = self
+            .sessions
+            .get_mut(session_id)
+            .ok_or(ConnectionError::SessionNotFound(*session_id))?;
+
         session.status = ConnectionStatus::Disconnecting;
         info!("Disconnecting session: {}", session_id);
-        
+
         // Remove SSH connection if it exists
         if self.ssh_connections.remove(session_id).is_some() {
             debug!("SSH connection removed for session: {}", session_id);
         }
-        
+        if self.jump_ssh_connections.remove(session_id).is_some() {
+            debug!("Jump SSH connection removed for session: {}", session_id);
+        }
+
         // Update session status
         session.status = ConnectionStatus::Disconnected;
         info!("Session disconnected: {}", session_id);
-        
+
         Ok(())
     }
 
@@ -399,15 +1166,25 @@ impl ConnectionManager for DefaultConnectionManager {
         self.connections.get(connection_id)
     }
 
-    fn save_connection_config(&mut self, mut config: ConnectionConfig) -> Result<(), ConnectionError> {
+    fn save_connection_config(
+        &mut self,
+        mut config: ConnectionConfig,
+    ) -> Result<(), ConnectionError> {
         // Log save connection attempt
         info!("Saving connection configuration for id: {:?}", config.id);
-        
+
         // Validate the connection configuration before saving
-        debug!("Validating connection configuration for id: {:?}", config.id);
-        config.validate()?;
-        debug!("Connection configuration validation passed for id: {:?}", config.id);
-        
+        debug!(
+            "Validating connection configuration for id: {:?}",
+            config.id
+        );
+        self.fill_saved_credentials(&mut config)?;
+        config.validate_for_save()?;
+        debug!(
+            "Connection configuration validation passed for id: {:?}",
+            config.id
+        );
+
         // If the connection doesn't have an ID, generate a new one
         let id = if config.id == Uuid::nil() {
             let new_id = Uuid::new_v4();
@@ -417,7 +1194,7 @@ impl ConnectionManager for DefaultConnectionManager {
         } else {
             config.id
         };
-        
+
         // Update timestamps
         let now = Utc::now();
         if config.created_at == DateTime::UNIX_EPOCH {
@@ -426,22 +1203,41 @@ impl ConnectionManager for DefaultConnectionManager {
         }
         config.updated_at = now;
         debug!("Updated updated_at timestamp for connection: {:?}", now);
-        
+
+        self.sync_credentials_for_save(&config)?;
+
         // Store connection config
-        self.connections.insert(id, config);
-        info!("Successfully saved connection configuration with id: {:?}", id);
+        let stored = Self::sanitize_config_for_storage(&config);
+        self.connections.insert(id, stored);
+        self.persist_connection_configs_to_db()?;
+        info!(
+            "Successfully saved connection configuration with id: {:?}",
+            id
+        );
         Ok(())
     }
 
     fn delete_connection_config(&mut self, connection_id: &Uuid) -> Result<(), ConnectionError> {
         // Log delete connection attempt
-        info!("Deleting connection configuration with id: {:?}", connection_id);
-        
+        info!(
+            "Deleting connection configuration with id: {:?}",
+            connection_id
+        );
+
         if self.connections.remove(connection_id).is_some() {
-            info!("Successfully deleted connection configuration with id: {:?}", connection_id);
+            let _ = self.credential_manager.delete_password(connection_id);
+            let _ = self.credential_manager.delete_passphrase(connection_id);
+            self.persist_connection_configs_to_db()?;
+            info!(
+                "Successfully deleted connection configuration with id: {:?}",
+                connection_id
+            );
             Ok(())
         } else {
-            error!("Failed to delete connection configuration: connection not found for id: {:?}", connection_id);
+            error!(
+                "Failed to delete connection configuration: connection not found for id: {:?}",
+                connection_id
+            );
             Err(ConnectionError::ConnectionNotFound(*connection_id))
         }
     }
@@ -450,45 +1246,170 @@ impl ConnectionManager for DefaultConnectionManager {
         self.connections.values().cloned().collect()
     }
 
-    fn test_connection(&self, config: &ConnectionConfig) -> Result<(), ConnectionError> {
+    fn test_connection(
+        &self,
+        app: &tauri::AppHandle,
+        config: &ConnectionConfig,
+    ) -> Result<(), ConnectionError> {
         // 新增：验证配置合法性
-        config.validate()?;
-        
-        let host = config.host.clone();
-        let port = config.port;
-        let username = config.username.clone();
-        let auth_method = config.auth_method.clone();
-        
+        let mut effective_config = config.clone();
+        self.fill_saved_credentials(&mut effective_config)?;
+        effective_config.validate()?;
+
+        let host = effective_config.host.clone();
+        let port = effective_config.port;
+        let username = effective_config.username.clone();
+        let auth_method = effective_config.auth_method.clone();
+        let proxy_type = effective_config.proxy_type.clone();
+
         // Log connection test details (excluding sensitive info)
         info!("Testing connection to {}:{} as {}", host, port, username);
-        
-        // Convert our AuthMethod to ssh_impl::AuthType
-        let auth_type = match auth_method {
-            AuthMethod::Password { password, .. } => ssh_impl::AuthType::Password(Some(password)),
-            AuthMethod::PrivateKey { key_path, passphrase, .. } => {
-                ssh_impl::AuthType::PrivateKey(key_path, passphrase)
-            },
-            AuthMethod::Agent { agent_path } => ssh_impl::AuthType::Agent(agent_path),
-            AuthMethod::Certificate { certificate_path, private_key_path, passphrase, .. } => {
-                ssh_impl::AuthType::Certificate(certificate_path, private_key_path, passphrase)
-            },
-        };
-        
+
+        let auth_type = auth_method_to_auth_type(auth_method);
+
         // Clone variables for logging
         let host_clone = host.clone();
-        let port_clone = port.clone();
-        let local_forwards = config.local_forwards.clone();
-        let remote_forwards = config.remote_forwards.clone();
-        
+        let port_clone = port;
+        let local_forwards = effective_config.local_forwards.clone();
+        let remote_forwards = effective_config.remote_forwards.clone();
+        let keyboard_interactive_prompter: Option<Arc<dyn ssh_impl::KeyboardInteractivePrompter>> =
+            Some(Arc::new(TauriKeyboardInteractivePrompter {
+                app: app.clone(),
+                coordinator: self.keyboard_interactive.clone(),
+            }));
+
         // Use the persistent runtime to test the connection
-        match self.runtime.block_on(async {
-            ssh_impl::connect_ssh(&host, port, &username, auth_type, &local_forwards, &remote_forwards, config.socks_proxy_port).await
-        }) {
-            Ok(_ssh_connection) => {
+        let res: Result<(), anyhow::Error> = self.runtime.block_on(async {
+            match proxy_type {
+                ProxyType::JumpHost {
+                    host: jump_host,
+                    port: jump_port,
+                    username: jump_username,
+                    auth_method: jump_auth_method,
+                } => {
+                    let jump_auth_type = auth_method_to_auth_type(jump_auth_method);
+                    let jump_connection = ssh_impl::connect_ssh(
+                        &jump_host,
+                        jump_port,
+                        &jump_username,
+                        jump_auth_type,
+                        &Vec::new(),
+                        &Vec::new(),
+                        None,
+                        keyboard_interactive_prompter.clone(),
+                    )
+                    .await?;
+
+                    let local_port = ssh_impl::start_ephemeral_direct_tcpip_listener(
+                        jump_connection.handle.clone(),
+                        host.clone(),
+                        port,
+                    )
+                    .await?;
+
+                    let _target_connection = ssh_impl::connect_ssh_with_known_host(
+                        "127.0.0.1",
+                        local_port,
+                        &host,
+                        port,
+                        &username,
+                        auth_type,
+                        &local_forwards,
+                        &remote_forwards,
+                        effective_config.socks_proxy_port,
+                        keyboard_interactive_prompter.clone(),
+                    )
+                    .await?;
+
+                    Ok(())
+                }
+                ProxyType::Socks5 {
+                    host: proxy_host,
+                    port: proxy_port,
+                    username: proxy_username,
+                    password: proxy_password,
+                } => {
+                    let local_port = ssh_impl::start_ephemeral_socks5_proxy_dial_listener(
+                        proxy_host,
+                        proxy_port,
+                        proxy_username,
+                        proxy_password,
+                        host.clone(),
+                        port,
+                    )
+                    .await?;
+
+                    let _target_connection = ssh_impl::connect_ssh_with_known_host(
+                        "127.0.0.1",
+                        local_port,
+                        &host,
+                        port,
+                        &username,
+                        auth_type,
+                        &local_forwards,
+                        &remote_forwards,
+                        effective_config.socks_proxy_port,
+                        keyboard_interactive_prompter.clone(),
+                    )
+                    .await?;
+
+                    Ok(())
+                }
+                ProxyType::Http {
+                    host: proxy_host,
+                    port: proxy_port,
+                    username: proxy_username,
+                    password: proxy_password,
+                } => {
+                    let local_port = ssh_impl::start_ephemeral_http_proxy_dial_listener(
+                        proxy_host,
+                        proxy_port,
+                        proxy_username,
+                        proxy_password,
+                        host.clone(),
+                        port,
+                    )
+                    .await?;
+
+                    let _target_connection = ssh_impl::connect_ssh_with_known_host(
+                        "127.0.0.1",
+                        local_port,
+                        &host,
+                        port,
+                        &username,
+                        auth_type,
+                        &local_forwards,
+                        &remote_forwards,
+                        effective_config.socks_proxy_port,
+                        keyboard_interactive_prompter.clone(),
+                    )
+                    .await?;
+
+                    Ok(())
+                }
+                _ => {
+                    let _target_connection = ssh_impl::connect_ssh(
+                        &host,
+                        port,
+                        &username,
+                        auth_type,
+                        &local_forwards,
+                        &remote_forwards,
+                        effective_config.socks_proxy_port,
+                        keyboard_interactive_prompter.clone(),
+                    )
+                    .await?;
+                    Ok(())
+                }
+            }
+        });
+
+        match res {
+            Ok(()) => {
                 // Connection test successful
                 info!("Connection test successful: {}:{}", host_clone, port_clone);
                 Ok(())
-            },
+            }
             Err(e) => {
                 // SSH connection error
                 error!("Connection test failed: {:?}", e);
@@ -497,38 +1418,58 @@ impl ConnectionManager for DefaultConnectionManager {
         }
     }
 
-    fn start_terminal(&mut self, app: &tauri::AppHandle, session_id: &Uuid, width: u16, height: u16) -> Result<bool, ConnectionError> {
+    fn start_terminal(
+        &mut self,
+        app: &tauri::AppHandle,
+        session_id: &Uuid,
+        width: u16,
+        height: u16,
+    ) -> Result<bool, ConnectionError> {
         // Check if session exists
-        let session = self.sessions.get(session_id).ok_or(ConnectionError::SessionNotFound(*session_id))?;
+        let session = self
+            .sessions
+            .get(session_id)
+            .ok_or(ConnectionError::SessionNotFound(*session_id))?;
 
         // Check if session is connected
         if session.status != ConnectionStatus::Connected {
-            return Err(ConnectionError::ConnectionFailed("Session is not connected".to_string()));
+            return Err(ConnectionError::ConnectionFailed(
+                "Session is not connected".to_string(),
+            ));
         }
 
         // Get SSH connection
-        let ssh_connection = self.ssh_connections.get(session_id).ok_or(ConnectionError::SessionNotFound(*session_id))?;
+        let ssh_connection = self
+            .ssh_connections
+            .get(session_id)
+            .ok_or(ConnectionError::SessionNotFound(*session_id))?;
 
         // Check if SSH connection is still valid
-        debug!("Skipping synchronous health check for session: {}", session_id);
+        debug!(
+            "Skipping synchronous health check for session: {}",
+            session_id
+        );
 
         info!("Starting terminal for session: {}", session_id);
 
         // Create terminal ID
         let terminal_id = Uuid::new_v4();
-        
+
         // Create command channel
         let (tx, mut rx) = mpsc::channel::<TerminalCommand>(32);
 
         let session_id_clone = *session_id;
         let app_clone = app.clone();
         let ssh_handle_clone = Arc::clone(&ssh_connection.handle);
-        
+
         // Tracker clone
         let tracker_clone = Arc::clone(&self.tracker);
-        
+
         // Register session in tracker
-        tracker_clone.lock().unwrap().register_session(session_id_clone);
+        tracker_clone
+            .lock()
+            .unwrap()
+            .register_session(session_id_clone);
 
         // Spawn a task to handle the terminal channel on the persistent runtime
         let runtime = Arc::clone(&self.runtime);
@@ -581,7 +1522,7 @@ impl ConnectionManager for DefaultConnectionManager {
                     let mut last_activity = tokio::time::Instant::now();
                     #[allow(unused_assignments)]
                     let mut exit_reason = "unknown";
-                    
+
                     loop {
                         tokio::select! {
                             // Handle incoming SSH data
@@ -590,10 +1531,10 @@ impl ConnectionManager for DefaultConnectionManager {
                                     Some(russh::ChannelMsg::Data { ref data }) => {
                                         // Update last activity time
                                         last_activity = tokio::time::Instant::now();
-                                        
+
                                         // Log received data
                                         tracker_clone.lock().unwrap().log_data(session_id_clone, data, "received");
-                                        
+
                                         let data_str = String::from_utf8_lossy(data).to_string();
                                         let event_name = format!("terminal-output-{}", session_id_clone);
                                         let _ = app_clone.emit(&event_name, serde_json::json!({ "data": data_str }));
@@ -622,7 +1563,7 @@ impl ConnectionManager for DefaultConnectionManager {
                                     Some(TerminalCommand::Data(data)) => {
                                         // Update last activity time
                                         last_activity = tokio::time::Instant::now();
-                                        
+
                                         // russh::Channel::data takes AsyncRead
                                         let _ = channel.data(&data[..]).await;
                                     },
@@ -674,11 +1615,14 @@ impl ConnectionManager for DefaultConnectionManager {
         });
 
         // Store terminal session
-        self.terminals.insert(terminal_id, TerminalSession {
-            id: terminal_id,
-            session_id: *session_id,
-            sender: tx,
-        });
+        self.terminals.insert(
+            terminal_id,
+            TerminalSession {
+                id: terminal_id,
+                session_id: *session_id,
+                sender: tx,
+            },
+        );
 
         // Update session info
         if let Some(session) = self.sessions.get_mut(session_id) {
@@ -690,12 +1634,14 @@ impl ConnectionManager for DefaultConnectionManager {
 
     fn send_terminal_data(&mut self, session_id: &Uuid, data: &str) -> Result<(), ConnectionError> {
         // Find terminal for this session
-        let terminal = self.terminals.values()
+        let terminal = self
+            .terminals
+            .values()
             .find(|t| &t.session_id == session_id)
-            .ok_or_else(|| ConnectionError::SessionNotFound(*session_id))?;
+            .ok_or(ConnectionError::SessionNotFound(*session_id))?;
 
         let data_bytes = data.as_bytes().to_vec();
-        
+
         // Log sent data
         // Log sent data
         if let Ok(mut tracker) = self.tracker.lock() {
@@ -710,16 +1656,26 @@ impl ConnectionManager for DefaultConnectionManager {
             Ok(_) => Ok(()),
             Err(e) => {
                 error!("Failed to send terminal data: {}", e);
-                Err(ConnectionError::ConnectionFailed(format!("Failed to send data: {}", e)))
+                Err(ConnectionError::ConnectionFailed(format!(
+                    "Failed to send data: {}",
+                    e
+                )))
             }
         }
     }
 
-    fn resize_terminal(&mut self, session_id: &Uuid, width: u16, height: u16) -> Result<(), ConnectionError> {
+    fn resize_terminal(
+        &mut self,
+        session_id: &Uuid,
+        width: u16,
+        height: u16,
+    ) -> Result<(), ConnectionError> {
         // Find terminal for this session
-        let terminal = self.terminals.values()
+        let terminal = self
+            .terminals
+            .values()
             .find(|t| &t.session_id == session_id)
-            .ok_or_else(|| ConnectionError::SessionNotFound(*session_id))?;
+            .ok_or(ConnectionError::SessionNotFound(*session_id))?;
 
         // Send resize command
         let sender = terminal.sender.clone();
@@ -731,13 +1687,17 @@ impl ConnectionManager for DefaultConnectionManager {
 
     fn close_terminal(&mut self, session_id: &Uuid) -> Result<(), ConnectionError> {
         // Find and remove terminal for this session
-        let terminal_id = self.terminals.values()
+        let terminal_id = self
+            .terminals
+            .values()
             .find(|t| &t.session_id == session_id)
             .map(|t| t.id)
-            .ok_or_else(|| ConnectionError::SessionNotFound(*session_id))?;
+            .ok_or(ConnectionError::SessionNotFound(*session_id))?;
 
-        let terminal = self.terminals.remove(&terminal_id)
-            .ok_or_else(|| ConnectionError::SessionNotFound(*session_id))?;
+        let terminal = self
+            .terminals
+            .remove(&terminal_id)
+            .ok_or(ConnectionError::SessionNotFound(*session_id))?;
 
         // Send close command
         let sender = terminal.sender.clone();
@@ -752,34 +1712,45 @@ impl ConnectionManager for DefaultConnectionManager {
         Ok(())
     }
 
-    fn exec_command(&mut self, session_id: &Uuid, command: &str) -> Result<String, ConnectionError> {
-        let ssh_connection = self.ssh_connections.get(session_id)
-            .ok_or_else(|| ConnectionError::SessionNotFound(*session_id))?
+    fn exec_command(
+        &mut self,
+        session_id: &Uuid,
+        command: &str,
+    ) -> Result<String, ConnectionError> {
+        let ssh_connection = self
+            .ssh_connections
+            .get(session_id)
+            .ok_or(ConnectionError::SessionNotFound(*session_id))?
             .clone();
 
         let command = command.to_string();
-        
+
         // Execute command in a blocking way using runtime
         let result = self.runtime.block_on(async move {
             let handle = ssh_connection.handle.lock().await;
-            let mut channel = handle.channel_open_session().await
-                .map_err(|e| ConnectionError::SshError(format!("Failed to open channel: {:?}", e)))?;
-            
-            channel.exec(true, command.as_bytes().to_vec()).await
-                .map_err(|e| ConnectionError::SshError(format!("Failed to execute command: {:?}", e)))?;
-            
+            let mut channel = handle.channel_open_session().await.map_err(|e| {
+                ConnectionError::SshError(format!("Failed to open channel: {:?}", e))
+            })?;
+
+            channel
+                .exec(true, command.as_bytes().to_vec())
+                .await
+                .map_err(|e| {
+                    ConnectionError::SshError(format!("Failed to execute command: {:?}", e))
+                })?;
+
             let mut output = String::new();
             while let Some(msg) = channel.wait().await {
                 match msg {
                     russh::ChannelMsg::Data { ref data } => {
                         output.push_str(&String::from_utf8_lossy(data));
-                    },
+                    }
                     russh::ChannelMsg::ExtendedData { ref data, .. } => {
                         output.push_str(&String::from_utf8_lossy(data));
-                    },
+                    }
                     russh::ChannelMsg::Eof => {
                         break;
-                    },
+                    }
                     _ => {}
                 }
             }
@@ -788,6 +1759,25 @@ impl ConnectionManager for DefaultConnectionManager {
         });
 
         result
+    }
+}
+
+fn auth_method_to_auth_type(auth_method: AuthMethod) -> ssh_impl::AuthType {
+    match auth_method {
+        AuthMethod::Password { password, .. } => ssh_impl::AuthType::Password(Some(password)),
+        AuthMethod::KeyboardInteractive {} => ssh_impl::AuthType::KeyboardInteractive,
+        AuthMethod::PrivateKey {
+            key_path,
+            passphrase,
+            ..
+        } => ssh_impl::AuthType::PrivateKey(key_path, passphrase),
+        AuthMethod::Agent { agent_path } => ssh_impl::AuthType::Agent(agent_path),
+        AuthMethod::Certificate {
+            certificate_path,
+            private_key_path,
+            passphrase,
+            ..
+        } => ssh_impl::AuthType::Certificate(certificate_path, private_key_path, passphrase),
     }
 }
 
@@ -834,7 +1824,7 @@ mod tests {
 
         // Save
         assert!(manager.save_connection_config(config.clone()).is_ok());
-        
+
         // Retrieve
         let configs = manager.get_all_connection_configs();
         assert_eq!(configs.len(), 1);

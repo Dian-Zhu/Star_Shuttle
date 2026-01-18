@@ -1,4 +1,6 @@
-use super::error::TerminalError; use crate::modules::error::Result; use std::collections::VecDeque;
+use super::error::TerminalError;
+use crate::modules::error::Result;
+use std::collections::VecDeque;
 
 #[derive(Debug, Clone)]
 pub struct Cell {
@@ -69,14 +71,13 @@ pub struct TerminalBuffer {
 }
 
 impl TerminalBuffer {
-
     pub fn new(cols: u16, rows: u16) -> Result<Self> {
         if cols < 1 || rows < 1 {
             return Err(TerminalError::InvalidSize(cols, rows).into());
         }
-        
+
         let buffer = vec![vec![Cell::default(); cols as usize]; rows as usize];
-        
+
         Ok(Self {
             cols,
             rows,
@@ -90,7 +91,7 @@ impl TerminalBuffer {
             attributes: Attributes::default(),
         })
     }
-    
+
     pub fn reset(&mut self) {
         self.buffer = vec![vec![Cell::default(); self.cols as usize]; self.rows as usize];
         self.scrollback.clear();
@@ -105,21 +106,21 @@ impl TerminalBuffer {
         if cols < 1 || rows < 1 {
             return Err(TerminalError::InvalidSize(cols, rows).into());
         }
-        
+
         // Save current buffer content if needed
         // For simplicity, we'll just recreate the buffer
         let new_buffer = vec![vec![Cell::default(); cols as usize]; rows as usize];
         self.buffer = new_buffer;
         self.cols = cols;
         self.rows = rows;
-        
+
         // Reset cursor position to avoid out-of-bounds
         self.cursor_col = 0;
         self.cursor_row = 0;
-        
+
         Ok(())
     }
-    
+
     pub fn clear(&mut self) {
         for row in &mut self.buffer {
             for cell in row {
@@ -127,7 +128,7 @@ impl TerminalBuffer {
             }
         }
     }
-    
+
     pub fn clear_line(&mut self, row: u16) {
         if row < self.rows {
             for cell in &mut self.buffer[row as usize] {
@@ -135,16 +136,16 @@ impl TerminalBuffer {
             }
         }
     }
-    
+
     pub fn write_cell(&mut self, col: u16, row: u16, cell: Cell) -> Result<()> {
         if col >= self.cols || row >= self.rows {
             return Err(TerminalError::BufferOverflow.into());
         }
-        
+
         self.buffer[row as usize][col as usize] = cell;
         Ok(())
     }
-    
+
     pub fn get_cell(&self, col: u16, row: u16) -> Option<&Cell> {
         if col < self.cols && row < self.rows {
             Some(&self.buffer[row as usize][col as usize])
@@ -152,7 +153,7 @@ impl TerminalBuffer {
             None
         }
     }
-    
+
     pub fn scroll_up(&mut self, lines: u16) {
         for _ in 0..lines {
             if let Some(first_row) = self.buffer.first().cloned() {
@@ -165,7 +166,7 @@ impl TerminalBuffer {
             self.buffer.push(vec![Cell::default(); self.cols as usize]);
         }
     }
-    
+
     pub fn scroll_down(&mut self, lines: u16) {
         for _ in 0..lines {
             if let Some(last_row) = self.scrollback.pop_front() {
@@ -174,7 +175,7 @@ impl TerminalBuffer {
             }
         }
     }
-    
+
     pub fn set_cursor_position(&mut self, col: u16, row: u16) -> Result<()> {
         if col < self.cols && row < self.rows {
             self.cursor_col = col;
@@ -222,4 +223,3 @@ impl TerminalBuffer {
         self.attributes.background = color;
     }
 }
-

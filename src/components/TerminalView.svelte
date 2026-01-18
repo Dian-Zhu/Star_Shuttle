@@ -12,6 +12,24 @@
   let mode: 'terminal' | 'sftp' = 'terminal';
   let showSearch = false;
   let searchTerm = '';
+
+  $: searchInputId = `search-input-${terminalData.sessionId}`;
+
+  function attachSearchKeybinding() {
+    if (!terminalData?.terminal) return;
+    terminalData.terminal.attachCustomKeyEventHandler((e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'f' && e.type === 'keydown') {
+        showSearch = !showSearch;
+        if (showSearch) {
+          setTimeout(() => document.getElementById(searchInputId)?.focus(), 0);
+        } else {
+          terminalData.terminal.focus();
+        }
+        return false;
+      }
+      return true;
+    });
+  }
   
   onMount(async () => {
       // If terminal instance doesn't exist, create it
@@ -23,26 +41,13 @@
               terminalData.terminal = result.terminal;
               terminalData.fitAddon = result.fitAddon;
               terminalData.searchAddon = result.searchAddon;
-              
-              // Add key binding for search (Ctrl+F)
-              terminalData.terminal.attachCustomKeyEventHandler((e) => {
-                  if (e.ctrlKey && e.key === 'f' && e.type === 'keydown') {
-                      showSearch = !showSearch;
-                      if (showSearch) {
-                          // Need to wait for DOM update
-                          setTimeout(() => document.getElementById(`search-input-${terminalData.sessionId}`)?.focus(), 100);
-                      } else {
-                          terminalData.terminal.focus();
-                      }
-                      return false; // Prevent default Ctrl+F
-                  }
-                  return true;
-              });
+              attachSearchKeybinding();
           }
       } else {
           // If terminal already exists, open it in this container
           terminalData.terminal.open(container);
           terminalData.fitAddon.fit();
+          attachSearchKeybinding();
       }
   });
 
@@ -173,7 +178,7 @@
      {#if showSearch && mode === 'terminal'}
       <div class="absolute top-2 right-2 z-10 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-lg rounded-md p-1.5 flex items-center gap-1.5">
         <input 
-          id="search-input-{terminalData.sessionId}"
+          id={searchInputId}
           type="text" 
           bind:value={searchTerm} 
           on:input={handleSearch}

@@ -127,11 +127,11 @@
     }
   }
 
-  function handleDragOver(_e: DragEvent) {
+  function handleDragOver() {
     isDragging = true;
   }
 
-  function handleDragLeave(_e: DragEvent) {
+  function handleDragLeave() {
     isDragging = false;
   }
 
@@ -173,31 +173,40 @@
     const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
 
     if (file.size === 0) {
-      await sftpService.writeFile(sessionId, path, new Uint8Array(0), false);
+      try {
+        await sftpService.writeFile(sessionId, path, new Uint8Array(0), false);
+      } catch (e) {
+        await sftpService.scpUpload(sessionId, path, new Uint8Array(0));
+      }
       return;
     }
     
-    for (let i = 0; i < totalChunks; i++) {
-      const start = i * CHUNK_SIZE;
-      const end = Math.min(start + CHUNK_SIZE, file.size);
-      const chunk = file.slice(start, end);
-      
-      await new Promise<void>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = async () => {
-          if (!reader.result) { resolve(); return; }
-          const content = new Uint8Array(reader.result as ArrayBuffer);
-          try {
-            // First chunk overwrites/creates, subsequent chunks append
-            await sftpService.writeFile(sessionId, path, content, i > 0);
-            resolve();
-          } catch (e) {
-            reject(e);
-          }
-        };
-        reader.onerror = () => reject(new Error("Failed to read file chunk"));
-        reader.readAsArrayBuffer(chunk);
-      });
+    try {
+      for (let i = 0; i < totalChunks; i++) {
+        const start = i * CHUNK_SIZE;
+        const end = Math.min(start + CHUNK_SIZE, file.size);
+        const chunk = file.slice(start, end);
+        
+        await new Promise<void>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = async () => {
+            if (!reader.result) { resolve(); return; }
+            const content = new Uint8Array(reader.result as ArrayBuffer);
+            try {
+              // First chunk overwrites/creates, subsequent chunks append
+              await sftpService.writeFile(sessionId, path, content, i > 0);
+              resolve();
+            } catch (e) {
+              reject(e);
+            }
+          };
+          reader.onerror = () => reject(new Error("Failed to read file chunk"));
+          reader.readAsArrayBuffer(chunk);
+        });
+      }
+    } catch (e) {
+      const full = new Uint8Array(await file.arrayBuffer());
+      await sftpService.scpUpload(sessionId, path, full);
     }
   }
 
@@ -207,7 +216,12 @@
     
     loading = true;
     try {
-      const content = await sftpService.readFile(sessionId, selectedFile.path);
+      let content: Uint8Array;
+      try {
+        content = await sftpService.readFile(sessionId, selectedFile.path);
+      } catch (e) {
+        content = await sftpService.scpDownload(sessionId, selectedFile.path);
+      }
       const blob = new Blob([content as any]);
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -354,12 +368,9 @@
   </div>
 
   {#if contextMenu.show}
-    <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <div 
       class="fixed bg-gray-800 border border-gray-700 rounded shadow-lg py-1 z-50 text-sm min-w-[150px]"
       style="top: {contextMenu.y}px; left: {contextMenu.x}px"
-      on:click|stopPropagation
       role="menu"
       tabindex="-1"
     >
@@ -367,20 +378,20 @@
         {#if !contextMenu.file.isDirectory}
           <button 
             class="w-full text-left px-4 py-2 hover:bg-gray-700 text-gray-200"
-            on:click={handleDownload}
+            on:click|stopPropagation={handleDownload}
           >
             Download
           </button>
         {/if}
         <button 
           class="w-full text-left px-4 py-2 hover:bg-gray-700 text-gray-200"
-          on:click={handleRename}
+          on:click|stopPropagation={handleRename}
         >
           Rename
         </button>
         <button 
           class="w-full text-left px-4 py-2 hover:bg-gray-700 text-red-400 hover:text-red-300"
-          on:click={handleDelete}
+          on:click|stopPropagation={handleDelete}
         >
           Delete
         </button>
@@ -388,13 +399,13 @@
       {/if}
       <button 
         class="w-full text-left px-4 py-2 hover:bg-gray-700 text-gray-200"
-        on:click={handleCreateFolder}
+        on:click|stopPropagation={handleCreateFolder}
       >
         New Folder
       </button>
       <button 
         class="w-full text-left px-4 py-2 hover:bg-gray-700 text-gray-200"
-        on:click={() => loadFiles(currentPath)}
+        on:click|stopPropagation={() => loadFiles(currentPath)}
       >
         Refresh
       </button>

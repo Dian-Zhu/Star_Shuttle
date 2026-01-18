@@ -126,11 +126,11 @@
     }
   }
 
-  function handleDragOver(_e: DragEvent) {
+  function handleDragOver() {
     isDragging = true;
   }
 
-  function handleDragLeave(_e: DragEvent) {
+  function handleDragLeave() {
     isDragging = false;
   }
 
@@ -327,12 +327,9 @@
   </div>
 
   {#if contextMenu.show}
-    <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <div 
       class="fixed bg-gray-800 border border-gray-700 rounded shadow-lg py-1 z-50 text-sm min-w-[150px]"
       style="top: {contextMenu.y}px; left: {contextMenu.x}px"
-      on:click|stopPropagation
       role="menu"
       tabindex="-1"
     >
@@ -340,20 +337,20 @@
         {#if !contextMenu.file.isDirectory}
           <button 
             class="w-full text-left px-4 py-2 hover:bg-gray-700 text-gray-200"
-            on:click={handleDownload}
+            on:click|stopPropagation={handleDownload}
           >
             Download
           </button>
         {/if}
         <button 
           class="w-full text-left px-4 py-2 hover:bg-gray-700 text-gray-200"
-          on:click={handleRename}
+          on:click|stopPropagation={handleRename}
         >
           Rename
         </button>
         <button 
           class="w-full text-left px-4 py-2 hover:bg-gray-700 text-red-400 hover:text-red-300"
-          on:click={handleDelete}
+          on:click|stopPropagation={handleDelete}
         >
           Delete
         </button>
@@ -361,13 +358,13 @@
       {/if}
       <button 
         class="w-full text-left px-4 py-2 hover:bg-gray-700 text-gray-200"
-        on:click={handleCreateFolder}
+        on:click|stopPropagation={handleCreateFolder}
       >
         New Folder
       </button>
       <button 
         class="w-full text-left px-4 py-2 hover:bg-gray-700 text-gray-200"
-        on:click={() => loadFiles(currentPath)}
+        on:click|stopPropagation={() => loadFiles(currentPath)}
       >
         Refresh
       </button>

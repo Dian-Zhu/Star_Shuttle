@@ -5,7 +5,47 @@ import { loadConnections } from './connectionService';
 import { successMessage, errorMessage } from './store';
 import type { Connection } from './store';
 
-export async function exportConnections() {
+function sanitizeConnectionForExport(connection: Connection): Connection {
+  const auth = connection.auth_method;
+
+  if (auth.Password) {
+    return {
+      ...connection,
+      auth_method: {
+        Password: {
+          ...auth.Password,
+          password: ''
+        }
+      }
+    };
+  }
+
+  if (auth.PrivateKey) {
+    const rest: Omit<typeof auth.PrivateKey, 'passphrase'> & { passphrase?: string } = { ...auth.PrivateKey };
+    delete rest.passphrase;
+    return {
+      ...connection,
+      auth_method: {
+        PrivateKey: rest
+      }
+    };
+  }
+
+  if (auth.Certificate) {
+    const rest: Omit<typeof auth.Certificate, 'passphrase'> & { passphrase?: string } = { ...auth.Certificate };
+    delete rest.passphrase;
+    return {
+      ...connection,
+      auth_method: {
+        Certificate: rest
+      }
+    };
+  }
+
+  return connection;
+}
+
+export async function exportConnections(options?: { includeSensitive?: boolean }) {
   try {
     const connections = await invoke('get_all_connection_configs') as Connection[];
     
@@ -13,6 +53,12 @@ export async function exportConnections() {
       errorMessage.set('没有可导出的连接');
       setTimeout(() => errorMessage.set(null), 3000);
       return;
+    }
+
+    const includeSensitive = options?.includeSensitive === true;
+    if (includeSensitive) {
+      const confirmed = window.confirm('导出文件将包含明文密码/口令，存在泄露风险。仍要继续吗？');
+      if (!confirmed) return;
     }
 
     const filePath = await save({
@@ -25,17 +71,9 @@ export async function exportConnections() {
 
     if (!filePath) return; // User cancelled
 
-    // Sanitize data before export (remove IDs to avoid conflicts on import, or keep them?)
-    // Better to keep IDs but maybe generate new ones on import if they conflict?
-    // For simple backup/restore, keeping exact data is fine.
-    // We might want to remove sensitive data if we could, but passwords are part of the config...
-    // Note: Passwords in the struct are exported if they are in the struct.
-    // The struct has `password: String`, so it WILL be exported in plain text if not handled!
-    // This is a security risk, but for "Export" it's often expected to backup everything.
-    // We should warn the user or offer encrypted export (future feature).
-    // For now, we export as is.
+    const exportData = includeSensitive ? connections : connections.map(sanitizeConnectionForExport);
 
-    await writeTextFile(filePath, JSON.stringify(connections, null, 2));
+    await writeTextFile(filePath, JSON.stringify(exportData, null, 2));
     
     successMessage.set('导出成功！');
     setTimeout(() => successMessage.set(null), 3000);

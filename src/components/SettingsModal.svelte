@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { showSettings, settings } from '../lib/store';
+  import { showSettings, settings, type AppSettings } from '../lib/store';
   import XIcon from './icons/XIcon.svelte';
   import { slide } from 'svelte/transition';
   import { onMount } from 'svelte';
@@ -24,9 +24,169 @@
   let securityMessage = '';
   let securityError = '';
 
+  type ShortcutKey = keyof AppSettings['shortcuts'];
+
+  let shortcutDrafts: AppSettings['shortcuts'] = { ...$settings.shortcuts };
+  let shortcutErrors: Partial<Record<ShortcutKey, string>> = {};
+
+  const shortcutLabels: Record<ShortcutKey, string> = {
+    commandPalette: '命令面板',
+    newConnection: '新建连接',
+    settings: '设置',
+    closeTerminal: '关闭终端',
+    prevTab: '上一个标签页',
+    nextTab: '下一个标签页'
+  };
+
   onMount(() => {
     checkLockStatus();
   });
+
+  function updateTheme(theme: 'dark' | 'light') {
+    settings.update(s => ({ ...s, theme }));
+  }
+
+  function updateUiSetting<K extends keyof (typeof $settings)['ui']>(key: K, value: (typeof $settings)['ui'][K]) {
+    settings.update(s => ({
+      ...s,
+      ui: {
+        ...s.ui,
+        [key]: value
+      }
+    }));
+  }
+
+  function updateTerminalSetting<K extends keyof (typeof $settings)['terminal']>(
+    key: K,
+    value: (typeof $settings)['terminal'][K]
+  ) {
+    settings.update(s => ({
+      ...s,
+      terminal: {
+        ...s.terminal,
+        [key]: value
+      }
+    }));
+  }
+
+  function updateConnectionSetting<K extends keyof (typeof $settings)['connection']>(
+    key: K,
+    value: (typeof $settings)['connection'][K]
+  ) {
+    settings.update(s => ({
+      ...s,
+      connection: {
+        ...s.connection,
+        [key]: value
+      }
+    }));
+  }
+
+  function updateShortcutSetting<K extends keyof (typeof $settings)['shortcuts']>(
+    key: K,
+    value: (typeof $settings)['shortcuts'][K]
+  ) {
+    settings.update(s => ({
+      ...s,
+      shortcuts: {
+        ...s.shortcuts,
+        [key]: value
+      }
+    }));
+  }
+
+  function updateSecuritySetting<K extends keyof (typeof $settings)['security']>(
+    key: K,
+    value: (typeof $settings)['security'][K]
+  ) {
+    settings.update(s => ({
+      ...s,
+      security: {
+        ...s.security,
+        [key]: value
+      }
+    }));
+  }
+
+  function normalizeShortcut(raw: string): { value: string } | { error: string } {
+    const trimmed = raw.trim();
+    if (!trimmed) return { value: '' };
+    const parts = trimmed.split('+').map(p => p.trim()).filter(Boolean);
+    if (parts.length === 0) return { value: '' };
+    if (parts.length === 1) return { value: formatShortcut([], parts[0]) };
+
+    const key = parts[parts.length - 1];
+    const modifierParts = parts.slice(0, -1);
+
+    const modifiers = new Set<'Ctrl' | 'Shift' | 'Alt' | 'Meta'>();
+    for (const m of modifierParts) {
+      const lower = m.toLowerCase();
+      if (lower === 'ctrl' || lower === 'control') modifiers.add('Ctrl');
+      else if (lower === 'shift') modifiers.add('Shift');
+      else if (lower === 'alt' || lower === 'option') modifiers.add('Alt');
+      else if (lower === 'meta' || lower === 'cmd' || lower === 'command') modifiers.add('Meta');
+      else return { error: '格式错误：只允许修饰键 + 按键' };
+    }
+
+    return { value: formatShortcut(Array.from(modifiers), key) };
+  }
+
+  function formatShortcut(modifiers: Array<'Ctrl' | 'Shift' | 'Alt' | 'Meta'>, keyRaw: string): string {
+    const order: Array<'Ctrl' | 'Shift' | 'Alt' | 'Meta'> = ['Ctrl', 'Shift', 'Alt', 'Meta'];
+    const unique = Array.from(new Set(modifiers));
+    const ordered = order.filter(m => unique.includes(m));
+
+    const key = normalizeKeyToken(keyRaw);
+    if (!ordered.length) return key;
+    return `${ordered.join('+')}+${key}`;
+  }
+
+  function normalizeKeyToken(keyRaw: string): string {
+    const t = keyRaw.trim();
+    if (!t) return '';
+    if (t.length === 1) return t.toUpperCase();
+    const lower = t.toLowerCase();
+    if (lower === 'esc') return 'Escape';
+    if (lower === 'return') return 'Enter';
+    if (lower === 'del') return 'Delete';
+    return t;
+  }
+
+  function computeShortcutConflict(
+    key: ShortcutKey,
+    normalizedValue: string
+  ): { conflictWith: ShortcutKey } | null {
+    if (!normalizedValue) return null;
+    const target = normalizedValue.toLowerCase();
+    const entries = Object.entries($settings.shortcuts) as Array<[ShortcutKey, string]>;
+    for (const [k, v] of entries) {
+      if (k === key) continue;
+      const normalized = normalizeShortcut(v);
+      const other = 'value' in normalized ? normalized.value.toLowerCase() : v.trim().toLowerCase();
+      if (other && other === target) return { conflictWith: k };
+    }
+    return null;
+  }
+
+  function handleShortcutInput(key: ShortcutKey, raw: string) {
+    shortcutDrafts = { ...shortcutDrafts, [key]: raw };
+    const normalized = normalizeShortcut(raw);
+    if ('error' in normalized) {
+      shortcutErrors = { ...shortcutErrors, [key]: normalized.error };
+      return;
+    }
+    const conflict = computeShortcutConflict(key, normalized.value);
+    if (conflict) {
+      shortcutErrors = { ...shortcutErrors, [key]: `与「${shortcutLabels[conflict.conflictWith]}」冲突` };
+      return;
+    }
+    const nextErrors = { ...shortcutErrors };
+    delete nextErrors[key];
+    shortcutErrors = nextErrors;
+
+    shortcutDrafts = { ...shortcutDrafts, [key]: normalized.value };
+    updateShortcutSetting(key, normalized.value);
+  }
 
   async function checkLockStatus() {
     try {
@@ -177,10 +337,32 @@
               <select
                 id="language"
                 class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 focus:border-blue-500 outline-none"
+                disabled
               >
                 <option value="zh-CN">简体中文</option>
                 <option value="en-US" disabled>English (Coming Soon)</option>
               </select>
+              <p class="mt-2 text-xs text-slate-500">语言设置暂未开放</p>
+            </div>
+
+            <!-- UI -->
+            <div class="flex items-center justify-between">
+              <div>
+                <label class="block text-sm font-medium text-slate-400" for="sidebarCollapsed">
+                  折叠侧边栏
+                </label>
+                <p class="text-xs text-slate-500 mt-0.5">在窗口左侧显示紧凑模式</p>
+              </div>
+              <label class="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  id="sidebarCollapsed"
+                  checked={$settings.ui.sidebarCollapsed}
+                  on:change={(e) => updateUiSetting('sidebarCollapsed', (e.target as HTMLInputElement).checked)}
+                  class="sr-only peer"
+                >
+                <div class="w-11 h-6 bg-slate-700 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+              </label>
             </div>
 
             <!-- Shortcuts -->
@@ -218,11 +400,17 @@
                     <span class="block text-sm font-medium text-slate-300">命令面板</span>
                     <span class="text-xs text-slate-500">快速访问所有命令</span>
                   </div>
-                  <input 
-                    type="text" 
-                    bind:value={$settings.shortcuts.commandPalette}
-                    class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 text-sm font-mono focus:border-blue-500 outline-none"
-                  />
+                  <div class="space-y-1">
+                    <input
+                      type="text"
+                      value={shortcutDrafts.commandPalette}
+                      on:input={(e) => handleShortcutInput('commandPalette', (e.target as HTMLInputElement).value)}
+                      class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 text-sm font-mono focus:border-blue-500 outline-none"
+                    />
+                    {#if shortcutErrors.commandPalette}
+                      <div class="text-xs text-red-400">{shortcutErrors.commandPalette}</div>
+                    {/if}
+                  </div>
                 </div>
 
                 <div class="grid grid-cols-2 gap-4 items-center border-b border-slate-800 pb-4">
@@ -230,11 +418,17 @@
                     <span class="block text-sm font-medium text-slate-300">新建连接</span>
                     <span class="text-xs text-slate-500">打开新建连接窗口</span>
                   </div>
-                  <input 
-                    type="text" 
-                    bind:value={$settings.shortcuts.newConnection}
-                    class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 text-sm font-mono focus:border-blue-500 outline-none"
-                  />
+                  <div class="space-y-1">
+                    <input
+                      type="text"
+                      value={shortcutDrafts.newConnection}
+                      on:input={(e) => handleShortcutInput('newConnection', (e.target as HTMLInputElement).value)}
+                      class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 text-sm font-mono focus:border-blue-500 outline-none"
+                    />
+                    {#if shortcutErrors.newConnection}
+                      <div class="text-xs text-red-400">{shortcutErrors.newConnection}</div>
+                    {/if}
+                  </div>
                 </div>
 
                 <div class="grid grid-cols-2 gap-4 items-center border-b border-slate-800 pb-4">
@@ -242,11 +436,17 @@
                     <span class="block text-sm font-medium text-slate-300">设置</span>
                     <span class="text-xs text-slate-500">打开设置窗口</span>
                   </div>
-                  <input 
-                    type="text" 
-                    bind:value={$settings.shortcuts.settings}
-                    class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 text-sm font-mono focus:border-blue-500 outline-none"
-                  />
+                  <div class="space-y-1">
+                    <input
+                      type="text"
+                      value={shortcutDrafts.settings}
+                      on:input={(e) => handleShortcutInput('settings', (e.target as HTMLInputElement).value)}
+                      class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 text-sm font-mono focus:border-blue-500 outline-none"
+                    />
+                    {#if shortcutErrors.settings}
+                      <div class="text-xs text-red-400">{shortcutErrors.settings}</div>
+                    {/if}
+                  </div>
                 </div>
 
                 <div class="grid grid-cols-2 gap-4 items-center border-b border-slate-800 pb-4">
@@ -254,11 +454,17 @@
                     <span class="block text-sm font-medium text-slate-300">关闭终端</span>
                     <span class="text-xs text-slate-500">关闭当前活动的终端会话</span>
                   </div>
-                  <input 
-                    type="text" 
-                    bind:value={$settings.shortcuts.closeTerminal}
-                    class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 text-sm font-mono focus:border-blue-500 outline-none"
-                  />
+                  <div class="space-y-1">
+                    <input
+                      type="text"
+                      value={shortcutDrafts.closeTerminal}
+                      on:input={(e) => handleShortcutInput('closeTerminal', (e.target as HTMLInputElement).value)}
+                      class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 text-sm font-mono focus:border-blue-500 outline-none"
+                    />
+                    {#if shortcutErrors.closeTerminal}
+                      <div class="text-xs text-red-400">{shortcutErrors.closeTerminal}</div>
+                    {/if}
+                  </div>
                 </div>
 
                 <div class="grid grid-cols-2 gap-4 items-center border-b border-slate-800 pb-4">
@@ -266,11 +472,17 @@
                     <span class="block text-sm font-medium text-slate-300">上一个标签页</span>
                     <span class="text-xs text-slate-500">切换到左侧终端标签</span>
                   </div>
-                  <input 
-                    type="text" 
-                    bind:value={$settings.shortcuts.prevTab}
-                    class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 text-sm font-mono focus:border-blue-500 outline-none"
-                  />
+                  <div class="space-y-1">
+                    <input
+                      type="text"
+                      value={shortcutDrafts.prevTab}
+                      on:input={(e) => handleShortcutInput('prevTab', (e.target as HTMLInputElement).value)}
+                      class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 text-sm font-mono focus:border-blue-500 outline-none"
+                    />
+                    {#if shortcutErrors.prevTab}
+                      <div class="text-xs text-red-400">{shortcutErrors.prevTab}</div>
+                    {/if}
+                  </div>
                 </div>
 
                 <div class="grid grid-cols-2 gap-4 items-center border-b border-slate-800 pb-4">
@@ -278,11 +490,17 @@
                     <span class="block text-sm font-medium text-slate-300">下一个标签页</span>
                     <span class="text-xs text-slate-500">切换到右侧终端标签</span>
                   </div>
-                  <input 
-                    type="text" 
-                    bind:value={$settings.shortcuts.nextTab}
-                    class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 text-sm font-mono focus:border-blue-500 outline-none"
-                  />
+                  <div class="space-y-1">
+                    <input
+                      type="text"
+                      value={shortcutDrafts.nextTab}
+                      on:input={(e) => handleShortcutInput('nextTab', (e.target as HTMLInputElement).value)}
+                      class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 text-sm font-mono focus:border-blue-500 outline-none"
+                    />
+                    {#if shortcutErrors.nextTab}
+                      <div class="text-xs text-red-400">{shortcutErrors.nextTab}</div>
+                    {/if}
+                  </div>
                 </div>
              </div>
              
@@ -305,12 +523,17 @@
                   min="10"
                   max="24"
                   step="1"
-                  bind:value={$settings.terminal.fontSize}
+                  value={$settings.terminal.fontSize}
+                  on:input={(e) => updateTerminalSetting('fontSize', Number((e.target as HTMLInputElement).value))}
                   class="flex-1 h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-600"
                 />
                 <input 
                   type="number" 
-                  bind:value={$settings.terminal.fontSize}
+                  value={$settings.terminal.fontSize}
+                  min="10"
+                  max="24"
+                  step="1"
+                  on:input={(e) => updateTerminalSetting('fontSize', Number((e.target as HTMLInputElement).value))}
                   class="w-16 bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-center text-slate-200 focus:border-blue-500 outline-none"
                 />
               </div>
@@ -323,7 +546,8 @@
               </label>
               <select
                 id="fontFamily"
-                bind:value={$settings.terminal.fontFamily}
+                value={$settings.terminal.fontFamily}
+                on:change={(e) => updateTerminalSetting('fontFamily', (e.target as HTMLSelectElement).value)}
                 class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 focus:border-blue-500 outline-none"
               >
                 {#each fontFamilies as font}
@@ -344,7 +568,13 @@
                 <p class="text-xs text-slate-500 mt-0.5">启用后光标将闪烁</p>
               </div>
               <label class="relative inline-flex items-center cursor-pointer">
-                <input type="checkbox" id="cursorBlink" bind:checked={$settings.terminal.cursorBlink} class="sr-only peer">
+                <input
+                  type="checkbox"
+                  id="cursorBlink"
+                  checked={$settings.terminal.cursorBlink}
+                  on:change={(e) => updateTerminalSetting('cursorBlink', (e.target as HTMLInputElement).checked)}
+                  class="sr-only peer"
+                >
                 <div class="w-11 h-6 bg-slate-700 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
               </label>
             </div>
@@ -361,7 +591,13 @@
                 <p class="text-xs text-slate-500 mt-0.5">意外断开连接时尝试自动重新连接</p>
               </div>
               <label class="relative inline-flex items-center cursor-pointer">
-                <input type="checkbox" id="autoReconnect" bind:checked={$settings.connection.autoReconnect} class="sr-only peer">
+                <input
+                  type="checkbox"
+                  id="autoReconnect"
+                  checked={$settings.connection.autoReconnect}
+                  on:change={(e) => updateConnectionSetting('autoReconnect', (e.target as HTMLInputElement).checked)}
+                  class="sr-only peer"
+                >
                 <div class="w-11 h-6 bg-slate-700 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
               </label>
             </div>
@@ -375,7 +611,7 @@
               <div class="grid grid-cols-2 gap-4">
                 <button
                   class="relative p-4 border rounded-xl flex flex-col items-center gap-2 transition-all {$settings.theme === 'dark' ? 'border-blue-500 bg-blue-500/10' : 'border-slate-700 hover:border-slate-600'}"
-                  on:click={() => $settings.theme = 'dark'}
+                  on:click={() => updateTheme('dark')}
                 >
                   <div class="w-full h-20 bg-slate-900 rounded-lg border border-slate-800 shadow-sm overflow-hidden relative">
                     <div class="absolute left-0 top-0 bottom-0 w-8 bg-slate-800 border-r border-slate-700"></div>
@@ -389,7 +625,7 @@
 
                 <button
                   class="relative p-4 border rounded-xl flex flex-col items-center gap-2 transition-all {$settings.theme === 'light' ? 'border-blue-500 bg-blue-500/10' : 'border-slate-700 hover:border-slate-600'}"
-                  on:click={() => $settings.theme = 'light'}
+                  on:click={() => updateTheme('light')}
                 >
                   <div class="w-full h-20 bg-slate-100 rounded-lg border border-slate-200 shadow-sm overflow-hidden relative">
                     <div class="absolute left-0 top-0 bottom-0 w-8 bg-white border-r border-slate-200"></div>
@@ -454,7 +690,8 @@
                          id="autoLockTime"
                          min="0"
                          max="120"
-                         bind:value={$settings.security.autoLockMinutes}
+                         value={$settings.security.autoLockMinutes}
+                         on:input={(e) => updateSecuritySetting('autoLockMinutes', Number((e.target as HTMLInputElement).value))}
                          class="w-16 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-center text-slate-200 focus:border-blue-500 outline-none"
                        />
                        <span class="text-sm text-slate-500">分钟</span>
@@ -469,7 +706,13 @@
                       <p class="text-xs text-slate-500 mt-0.5">当切换到其他应用窗口时自动锁定</p>
                     </div>
                     <label class="relative inline-flex items-center cursor-pointer">
-                      <input type="checkbox" id="lockOnBlur" bind:checked={$settings.security.lockOnBlur} class="sr-only peer">
+                      <input
+                        type="checkbox"
+                        id="lockOnBlur"
+                        checked={$settings.security.lockOnBlur}
+                        on:change={(e) => updateSecuritySetting('lockOnBlur', (e.target as HTMLInputElement).checked)}
+                        class="sr-only peer"
+                      >
                       <div class="w-11 h-6 bg-slate-700 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
                     </label>
                  </div>

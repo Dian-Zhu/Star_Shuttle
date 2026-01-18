@@ -1,4 +1,6 @@
-use rusqlite::{params, Connection, Result}; use serde::{Deserialize, Serialize}; use uuid::Uuid;
+use rusqlite::{params, Connection, Result};
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ConnectionProfile {
@@ -49,7 +51,7 @@ impl DatabaseManager {
         Self::create_tables(&conn)?;
         Ok(Self { conn })
     }
-    
+
     fn create_tables(conn: &Connection) -> Result<()> {
         conn.execute(
             "CREATE TABLE IF NOT EXISTS connection_profiles (
@@ -64,7 +66,7 @@ impl DatabaseManager {
             )",
             [],
         )?;
-        
+
         conn.execute(
             "CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
@@ -72,7 +74,7 @@ impl DatabaseManager {
             )",
             [],
         )?;
-        
+
         conn.execute(
             "CREATE TABLE IF NOT EXISTS command_snippets (
                 id TEXT PRIMARY KEY,
@@ -87,7 +89,7 @@ impl DatabaseManager {
             )",
             [],
         )?;
-        
+
         conn.execute(
             "CREATE TABLE IF NOT EXISTS audit_events (
                 id TEXT PRIMARY KEY,
@@ -105,7 +107,7 @@ impl DatabaseManager {
         )?;
         Ok(())
     }
-    
+
     pub fn save_setting(&self, key: &str, value: &str) -> Result<()> {
         self.conn.execute(
             "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
@@ -115,9 +117,11 @@ impl DatabaseManager {
     }
 
     pub fn get_setting(&self, key: &str) -> Result<Option<String>> {
-        let mut stmt = self.conn.prepare("SELECT value FROM settings WHERE key = ?")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT value FROM settings WHERE key = ?")?;
         let mut rows = stmt.query(params![key])?;
-        
+
         if let Some(row) = rows.next()? {
             Ok(Some(row.get(0)?))
         } else {
@@ -126,10 +130,11 @@ impl DatabaseManager {
     }
 
     pub fn delete_setting(&self, key: &str) -> Result<()> {
-        self.conn.execute("DELETE FROM settings WHERE key = ?", params![key])?;
+        self.conn
+            .execute("DELETE FROM settings WHERE key = ?", params![key])?;
         Ok(())
     }
-    
+
     pub fn save_connection_profile(&self, profile: &ConnectionProfile) -> Result<()> {
         self.conn.execute(
             "INSERT OR REPLACE INTO connection_profiles (id, name, host, port, username, auth_method, created_at, updated_at) 
@@ -147,13 +152,18 @@ impl DatabaseManager {
         )?;
         Ok(())
     }
-    
+
     pub fn get_connection_profiles(&self) -> Result<Vec<ConnectionProfile>> {
         let mut stmt = self.conn.prepare("SELECT id, name, host, port, username, auth_method, created_at, updated_at FROM connection_profiles")?;
         let profile_iter = stmt.query_map([], |row| {
             Ok(ConnectionProfile {
-                id: Uuid::parse_str(row.get::<_, String>(0)?.as_str())
-                    .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?,
+                id: Uuid::parse_str(row.get::<_, String>(0)?.as_str()).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        0,
+                        rusqlite::types::Type::Text,
+                        Box::new(e),
+                    )
+                })?,
                 name: row.get(1)?,
                 host: row.get(2)?,
                 port: row.get(3)?,
@@ -163,12 +173,12 @@ impl DatabaseManager {
                 updated_at: row.get(7)?,
             })
         })?;
-        
+
         let mut profiles = Vec::new();
         for profile in profile_iter {
             profiles.push(profile?);
         }
-        
+
         Ok(profiles)
     }
 
@@ -195,8 +205,13 @@ impl DatabaseManager {
         let mut stmt = self.conn.prepare("SELECT id, name, command, description, category, tags, created_at, updated_at, usage_count FROM command_snippets")?;
         let snippet_iter = stmt.query_map([], |row| {
             Ok(CommandSnippet {
-                id: Uuid::parse_str(row.get::<_, String>(0)?.as_str())
-                    .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?,
+                id: Uuid::parse_str(row.get::<_, String>(0)?.as_str()).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        0,
+                        rusqlite::types::Type::Text,
+                        Box::new(e),
+                    )
+                })?,
                 name: row.get(1)?,
                 command: row.get(2)?,
                 description: row.get(3)?,
@@ -207,7 +222,7 @@ impl DatabaseManager {
                 usage_count: row.get(8)?,
             })
         })?;
-        
+
         let mut snippets = Vec::new();
         for snippet in snippet_iter {
             snippets.push(snippet?);
@@ -218,11 +233,16 @@ impl DatabaseManager {
     pub fn get_command_snippet_by_id(&self, id: &Uuid) -> Result<Option<CommandSnippet>> {
         let mut stmt = self.conn.prepare("SELECT id, name, command, description, category, tags, created_at, updated_at, usage_count FROM command_snippets WHERE id = ?")?;
         let mut rows = stmt.query(params![id.to_string()])?;
-        
+
         if let Some(row) = rows.next()? {
             Ok(Some(CommandSnippet {
-                id: Uuid::parse_str(row.get::<_, String>(0)?.as_str())
-                    .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?,
+                id: Uuid::parse_str(row.get::<_, String>(0)?.as_str()).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        0,
+                        rusqlite::types::Type::Text,
+                        Box::new(e),
+                    )
+                })?,
                 name: row.get(1)?,
                 command: row.get(2)?,
                 description: row.get(3)?,
@@ -238,12 +258,18 @@ impl DatabaseManager {
     }
 
     pub fn delete_command_snippet(&self, id: &Uuid) -> Result<()> {
-        self.conn.execute("DELETE FROM command_snippets WHERE id = ?", params![id.to_string()])?;
+        self.conn.execute(
+            "DELETE FROM command_snippets WHERE id = ?",
+            params![id.to_string()],
+        )?;
         Ok(())
     }
 
     pub fn increment_usage_count(&self, id: &Uuid) -> Result<()> {
-        self.conn.execute("UPDATE command_snippets SET usage_count = usage_count + 1 WHERE id = ?", params![id.to_string()])?;
+        self.conn.execute(
+            "UPDATE command_snippets SET usage_count = usage_count + 1 WHERE id = ?",
+            params![id.to_string()],
+        )?;
         Ok(())
     }
 
@@ -275,8 +301,13 @@ impl DatabaseManager {
             let session_id_str: Option<String> = row.get(2)?;
             let session_id = session_id_str.and_then(|s| Uuid::parse_str(&s).ok());
             Ok(AuditEvent {
-                id: Uuid::parse_str(row.get::<_, String>(0)?.as_str())
-                    .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?,
+                id: Uuid::parse_str(row.get::<_, String>(0)?.as_str()).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        0,
+                        rusqlite::types::Type::Text,
+                        Box::new(e),
+                    )
+                })?,
                 timestamp: row.get(1)?,
                 session_id,
                 user_id: row.get(3)?,
@@ -288,7 +319,7 @@ impl DatabaseManager {
                 details: row.get(9)?,
             })
         })?;
-        
+
         let mut events = Vec::new();
         for event in event_iter {
             events.push(event?);
