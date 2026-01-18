@@ -141,6 +141,7 @@ export interface AppSettings {
   };
   shortcuts: {
     commandPalette: string;
+    toggleSidebar: string;
     newConnection: string;
     settings: string;
     closeTerminal: string;
@@ -173,6 +174,7 @@ const defaultSettings: AppSettings = {
   },
   shortcuts: {
     commandPalette: 'Ctrl+Shift+P',
+    toggleSidebar: 'Ctrl+B',
     newConnection: 'Ctrl+Shift+N',
     settings: 'Ctrl+Shift+S',
     closeTerminal: 'Ctrl+Shift+W',
@@ -226,6 +228,7 @@ const loadSettings = (): AppSettings => {
 
     const shortcutOrder: Array<keyof AppSettings['shortcuts']> = [
       'commandPalette',
+      'toggleSidebar',
       'newConnection',
       'settings',
       'closeTerminal',

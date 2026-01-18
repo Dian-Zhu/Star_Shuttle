@@ -58,7 +58,7 @@
       action: () => {
         isSidebarCollapsed.update(v => !v);
       },
-      shortcut: 'Ctrl+B'
+      shortcut: $appSettings.shortcuts.toggleSidebar
     },
     {
       id: 'open-settings',
@@ -189,7 +189,7 @@
       return;
     }
 
-    if (checkShortcut(e, 'Ctrl+B')) {
+    if (checkShortcut(e, shortcuts.toggleSidebar)) {
       e.preventDefault();
       e.stopPropagation();
       executeCommand(allCommands.find(c => c.id === 'toggle-sidebar'));

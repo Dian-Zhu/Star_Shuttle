@@ -539,6 +539,9 @@ impl DefaultConnectionManager {
 
     pub fn set_db(&mut self, db: Arc<Mutex<DatabaseManager>>) -> Result<(), ConnectionError> {
         self.db = Some(db);
+        if let Some(db) = self.db.as_ref() {
+            self.credential_manager.set_db(db.clone());
+        }
         self.load_connection_configs_from_db()?;
         Ok(())
     }
@@ -778,17 +781,27 @@ impl DefaultConnectionManager {
             } => {
                 if *save_password {
                     if !password.is_empty() {
-                        let _ = self.credential_manager.save_password(&config.id, password);
+                        self.credential_manager
+                            .save_password(&config.id, password)
+                            .map_err(|e| ConnectionError::CredentialError(e.to_string()))?;
                     }
                 } else {
-                    let _ = self.credential_manager.delete_password(&config.id);
+                    self.credential_manager
+                        .delete_password(&config.id)
+                        .map_err(|e| ConnectionError::CredentialError(e.to_string()))?;
                 }
 
-                let _ = self.credential_manager.delete_passphrase(&config.id);
+                self.credential_manager
+                    .delete_passphrase(&config.id)
+                    .map_err(|e| ConnectionError::CredentialError(e.to_string()))?;
             }
             AuthMethod::KeyboardInteractive {} => {
-                let _ = self.credential_manager.delete_password(&config.id);
-                let _ = self.credential_manager.delete_passphrase(&config.id);
+                self.credential_manager
+                    .delete_password(&config.id)
+                    .map_err(|e| ConnectionError::CredentialError(e.to_string()))?;
+                self.credential_manager
+                    .delete_passphrase(&config.id)
+                    .map_err(|e| ConnectionError::CredentialError(e.to_string()))?;
             }
             AuthMethod::PrivateKey {
                 passphrase,
@@ -797,17 +810,27 @@ impl DefaultConnectionManager {
             } => {
                 if *save_passphrase {
                     if let Some(p) = passphrase.as_ref().filter(|p| !p.is_empty()) {
-                        let _ = self.credential_manager.save_passphrase(&config.id, p);
+                        self.credential_manager
+                            .save_passphrase(&config.id, p)
+                            .map_err(|e| ConnectionError::CredentialError(e.to_string()))?;
                     }
                 } else {
-                    let _ = self.credential_manager.delete_passphrase(&config.id);
+                    self.credential_manager
+                        .delete_passphrase(&config.id)
+                        .map_err(|e| ConnectionError::CredentialError(e.to_string()))?;
                 }
 
-                let _ = self.credential_manager.delete_password(&config.id);
+                self.credential_manager
+                    .delete_password(&config.id)
+                    .map_err(|e| ConnectionError::CredentialError(e.to_string()))?;
             }
             AuthMethod::Agent { .. } => {
-                let _ = self.credential_manager.delete_password(&config.id);
-                let _ = self.credential_manager.delete_passphrase(&config.id);
+                self.credential_manager
+                    .delete_password(&config.id)
+                    .map_err(|e| ConnectionError::CredentialError(e.to_string()))?;
+                self.credential_manager
+                    .delete_passphrase(&config.id)
+                    .map_err(|e| ConnectionError::CredentialError(e.to_string()))?;
             }
             AuthMethod::Certificate {
                 passphrase,
@@ -816,13 +839,19 @@ impl DefaultConnectionManager {
             } => {
                 if *save_passphrase {
                     if let Some(p) = passphrase.as_ref().filter(|p| !p.is_empty()) {
-                        let _ = self.credential_manager.save_passphrase(&config.id, p);
+                        self.credential_manager
+                            .save_passphrase(&config.id, p)
+                            .map_err(|e| ConnectionError::CredentialError(e.to_string()))?;
                     }
                 } else {
-                    let _ = self.credential_manager.delete_passphrase(&config.id);
+                    self.credential_manager
+                        .delete_passphrase(&config.id)
+                        .map_err(|e| ConnectionError::CredentialError(e.to_string()))?;
                 }
 
-                let _ = self.credential_manager.delete_password(&config.id);
+                self.credential_manager
+                    .delete_password(&config.id)
+                    .map_err(|e| ConnectionError::CredentialError(e.to_string()))?;
             }
         }
 
@@ -834,29 +863,27 @@ impl DefaultConnectionManager {
                 } => {
                     if *save_password {
                         if !password.is_empty() {
-                            let _ = self.credential_manager.save_password_kind(
-                                &config.id,
-                                "jump_password",
-                                password,
-                            );
+                            self.credential_manager
+                                .save_password_kind(&config.id, "jump_password", password)
+                                .map_err(|e| ConnectionError::CredentialError(e.to_string()))?;
                         }
                     } else {
-                        let _ = self
-                            .credential_manager
-                            .delete_password_kind(&config.id, "jump_password");
+                        self.credential_manager
+                            .delete_password_kind(&config.id, "jump_password")
+                            .map_err(|e| ConnectionError::CredentialError(e.to_string()))?;
                     }
 
-                    let _ = self
-                        .credential_manager
-                        .delete_password_kind(&config.id, "jump_passphrase");
+                    self.credential_manager
+                        .delete_password_kind(&config.id, "jump_passphrase")
+                        .map_err(|e| ConnectionError::CredentialError(e.to_string()))?;
                 }
                 AuthMethod::KeyboardInteractive {} => {
-                    let _ = self
-                        .credential_manager
-                        .delete_password_kind(&config.id, "jump_password");
-                    let _ = self
-                        .credential_manager
-                        .delete_password_kind(&config.id, "jump_passphrase");
+                    self.credential_manager
+                        .delete_password_kind(&config.id, "jump_password")
+                        .map_err(|e| ConnectionError::CredentialError(e.to_string()))?;
+                    self.credential_manager
+                        .delete_password_kind(&config.id, "jump_passphrase")
+                        .map_err(|e| ConnectionError::CredentialError(e.to_string()))?;
                 }
                 AuthMethod::PrivateKey {
                     passphrase,
@@ -865,29 +892,27 @@ impl DefaultConnectionManager {
                 } => {
                     if *save_passphrase {
                         if let Some(p) = passphrase.as_ref().filter(|p| !p.is_empty()) {
-                            let _ = self.credential_manager.save_password_kind(
-                                &config.id,
-                                "jump_passphrase",
-                                p,
-                            );
+                            self.credential_manager
+                                .save_password_kind(&config.id, "jump_passphrase", p)
+                                .map_err(|e| ConnectionError::CredentialError(e.to_string()))?;
                         }
                     } else {
-                        let _ = self
-                            .credential_manager
-                            .delete_password_kind(&config.id, "jump_passphrase");
+                        self.credential_manager
+                            .delete_password_kind(&config.id, "jump_passphrase")
+                            .map_err(|e| ConnectionError::CredentialError(e.to_string()))?;
                     }
 
-                    let _ = self
-                        .credential_manager
-                        .delete_password_kind(&config.id, "jump_password");
+                    self.credential_manager
+                        .delete_password_kind(&config.id, "jump_password")
+                        .map_err(|e| ConnectionError::CredentialError(e.to_string()))?;
                 }
                 AuthMethod::Agent { .. } => {
-                    let _ = self
-                        .credential_manager
-                        .delete_password_kind(&config.id, "jump_password");
-                    let _ = self
-                        .credential_manager
-                        .delete_password_kind(&config.id, "jump_passphrase");
+                    self.credential_manager
+                        .delete_password_kind(&config.id, "jump_password")
+                        .map_err(|e| ConnectionError::CredentialError(e.to_string()))?;
+                    self.credential_manager
+                        .delete_password_kind(&config.id, "jump_passphrase")
+                        .map_err(|e| ConnectionError::CredentialError(e.to_string()))?;
                 }
                 AuthMethod::Certificate {
                     passphrase,
@@ -896,21 +921,19 @@ impl DefaultConnectionManager {
                 } => {
                     if *save_passphrase {
                         if let Some(p) = passphrase.as_ref().filter(|p| !p.is_empty()) {
-                            let _ = self.credential_manager.save_password_kind(
-                                &config.id,
-                                "jump_passphrase",
-                                p,
-                            );
+                            self.credential_manager
+                                .save_password_kind(&config.id, "jump_passphrase", p)
+                                .map_err(|e| ConnectionError::CredentialError(e.to_string()))?;
                         }
                     } else {
-                        let _ = self
-                            .credential_manager
-                            .delete_password_kind(&config.id, "jump_passphrase");
+                        self.credential_manager
+                            .delete_password_kind(&config.id, "jump_passphrase")
+                            .map_err(|e| ConnectionError::CredentialError(e.to_string()))?;
                     }
 
-                    let _ = self
-                        .credential_manager
-                        .delete_password_kind(&config.id, "jump_password");
+                    self.credential_manager
+                        .delete_password_kind(&config.id, "jump_password")
+                        .map_err(|e| ConnectionError::CredentialError(e.to_string()))?;
                 }
             }
         }

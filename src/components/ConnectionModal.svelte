@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { showConnectionForm, editingConnection, connections, connectionGroups, type Connection } from '../lib/store';
+  import { showConnectionForm, editingConnection, connections, type Connection } from '../lib/store';
   import { saveConnection } from '../lib/connectionService';
   import { connectAndOpen } from '../lib/terminalService';
   import XIcon from './icons/XIcon.svelte';
@@ -25,7 +25,6 @@
     privateKeyPath: '',
     description: '',
     tags: '', // Comma separated string for backend compatibility
-    groupId: '',
     localForwards: [] as { local_host: string; local_port: number; remote_host: string; remote_port: number }[],
     remoteForwards: [] as { remote_host: string; remote_port: number; local_host: string; local_port: number }[],
     proxyType: 'none' as 'none' | 'socks5' | 'http' | 'jumpHost',
@@ -54,7 +53,6 @@
     formData.username = connection.username ?? '';
     formData.description = connection.description ?? '';
     formData.tags = (connection.tags ?? []).join(',');
-    formData.groupId = connection.group_id ?? '';
 
     formData.localForwards = (connection.local_forwards ?? []).map(f => ({
       local_host: f.local_host,
@@ -491,19 +489,6 @@
 
             <!-- Tags & Description -->
             <div class="border-t border-slate-200 dark:border-slate-800 pt-5 space-y-4">
-               <div>
-                  <label class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1.5" for="groupId">分组</label>
-                  <select
-                    id="groupId"
-                    bind:value={formData.groupId}
-                    class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-200 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all"
-                  >
-                    <option value="">未分组</option>
-                    {#each $connectionGroups as group}
-                      <option value={group.id}>{group.name}</option>
-                    {/each}
-                  </select>
-               </div>
                <!-- Tags -->
                <div>
                   <label class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1.5" for="tags">标签</label>

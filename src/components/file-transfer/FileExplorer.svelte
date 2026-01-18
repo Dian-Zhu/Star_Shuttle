@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { sftpService } from '../../lib/sftpService';
+  import { localFsService } from '../../lib/localFsService';
   import type { FileEntry } from '../../types';
   
   export let sessionId: string;
@@ -14,6 +15,14 @@
   let contextMenu = { x: 0, y: 0, show: false, file: null as FileEntry | null };
   let fileInput: HTMLInputElement;
   let isDragging = false;
+  let isCrossDragging = false;
+
+  let editorOpen = false;
+  let editorFile: FileEntry | null = null;
+  let editorContent = '';
+  let editorLoading = false;
+  let editorSaving = false;
+  let editorError: string | null = null;
 
   async function loadFiles(path: string) {
     loading = true;
@@ -137,9 +146,34 @@
 
   async function handleDrop(e: DragEvent) {
     isDragging = false;
+    const payload = e.dataTransfer?.getData('application/x-starshuttle-file');
+    if (payload) {
+      try {
+        const data = JSON.parse(payload);
+        if (data?.source === 'local' && data?.path && data?.name) {
+          loading = true;
+          try {
+            const content = await localFsService.readFile(data.path);
+            const remotePath = currentPath === '/' ? `/${data.name}` : `${currentPath}/${data.name}`.replace('//', '/');
+            try {
+              await sftpService.writeFile(sessionId, remotePath, content, false);
+            } catch (err) {
+              await sftpService.scpUpload(sessionId, remotePath, content);
+            }
+            await loadFiles(currentPath);
+          } finally {
+            loading = false;
+          }
+          return;
+        }
+      } catch {
+        isCrossDragging = false;
+      }
+    }
+
     const items = e.dataTransfer?.files;
     if (!items || items.length === 0) return;
-    
+
     await uploadFiles(Array.from(items));
   }
 
@@ -255,6 +289,97 @@
     window.addEventListener('click', closeContextMenu);
     return () => window.removeEventListener('click', closeContextMenu);
   });
+
+  function handleDragStart(e: DragEvent, file: FileEntry) {
+    if (file.isDirectory) return;
+    e.dataTransfer?.setData(
+      'application/x-starshuttle-file',
+      JSON.stringify({
+        source: 'remote',
+        sessionId,
+        path: file.path,
+        name: file.name,
+        size: file.size,
+      })
+    );
+    e.dataTransfer?.setData('text/plain', file.name);
+    e.dataTransfer?.setDragImage?.(document.createElement('div'), 0, 0);
+  }
+
+  function handleDragEnter(e: DragEvent) {
+    const payload = e.dataTransfer?.getData('application/x-starshuttle-file');
+    if (!payload) return;
+    try {
+      const data = JSON.parse(payload);
+      if (data?.source === 'local') isCrossDragging = true;
+    } catch {
+      isCrossDragging = false;
+    }
+  }
+
+  function handleDragLeaveCross() {
+    isCrossDragging = false;
+  }
+
+  async function openEditor(file: FileEntry) {
+    if (file.isDirectory) {
+      handleNavigate(file.path);
+      return;
+    }
+    editorOpen = true;
+    editorFile = file;
+    editorContent = '';
+    editorError = null;
+    editorLoading = true;
+    try {
+      let content: Uint8Array;
+      try {
+        content = await sftpService.readFile(sessionId, file.path);
+      } catch (e) {
+        content = await sftpService.scpDownload(sessionId, file.path);
+      }
+      if (content.byteLength > 2 * 1024 * 1024) {
+        throw new Error('文件过大，暂不支持直接编辑（> 2MB）');
+      }
+      if (content.includes(0)) {
+        throw new Error('疑似二进制文件，暂不支持直接编辑');
+      }
+      editorContent = new TextDecoder('utf-8').decode(content);
+    } catch (e: any) {
+      editorError = e?.message ?? String(e);
+    } finally {
+      editorLoading = false;
+    }
+  }
+
+  function closeEditor() {
+    if (editorSaving) return;
+    editorOpen = false;
+    editorFile = null;
+    editorContent = '';
+    editorError = null;
+    editorLoading = false;
+  }
+
+  async function saveEditor() {
+    if (!editorFile || editorSaving) return;
+    editorSaving = true;
+    editorError = null;
+    try {
+      const content = new TextEncoder().encode(editorContent);
+      try {
+        await sftpService.writeFile(sessionId, editorFile.path, content, false);
+      } catch (e) {
+        await sftpService.scpUpload(sessionId, editorFile.path, content);
+      }
+      await loadFiles(currentPath);
+      closeEditor();
+    } catch (e: any) {
+      editorError = e?.message ?? String(e);
+    } finally {
+      editorSaving = false;
+    }
+  }
 </script>
 
 <div 
@@ -262,12 +387,45 @@
   on:contextmenu|preventDefault={(e) => handleContextMenu(e, null)} 
   role="presentation"
   on:dragover|preventDefault={handleDragOver}
+  on:dragenter|preventDefault={handleDragEnter}
   on:dragleave={handleDragLeave}
   on:drop|preventDefault={handleDrop}
+  on:dragleave|self={handleDragLeaveCross}
 >
+  {#if editorOpen}
+    <div class="fixed inset-0 z-50 flex items-center justify-center" role="presentation">
+      <button type="button" class="absolute inset-0 bg-black/60" on:click={closeEditor} aria-label="关闭编辑器"></button>
+      <div class="relative w-[min(900px,95vw)] h-[min(700px,90vh)] bg-gray-900 border border-gray-700 rounded-lg shadow-xl flex flex-col" role="dialog" aria-modal="true">
+        <div class="flex items-center justify-between px-4 py-2 border-b border-gray-700 gap-3">
+          <div class="text-sm text-gray-200 truncate flex-1">{editorFile?.path}</div>
+          <div class="flex items-center gap-2 flex-none">
+            <button class="px-3 py-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-200 disabled:opacity-60" on:click={closeEditor} disabled={editorSaving}>
+              关闭
+            </button>
+            <button class="px-3 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-60" on:click={saveEditor} disabled={editorSaving || editorLoading || !editorFile}>
+              {editorSaving ? '保存中…' : '保存'}
+            </button>
+          </div>
+        </div>
+        {#if editorLoading}
+          <div class="flex-1 flex items-center justify-center text-gray-300">加载中…</div>
+        {:else}
+          <textarea class="flex-1 w-full bg-gray-950 text-gray-100 font-mono text-sm p-3 outline-none resize-none" bind:value={editorContent} disabled={editorSaving}></textarea>
+        {/if}
+        {#if editorError}
+          <div class="px-4 py-2 border-t border-gray-700 text-red-400 text-sm">{editorError}</div>
+        {/if}
+      </div>
+    </div>
+  {/if}
   {#if isDragging}
     <div class="absolute inset-0 bg-blue-500/20 flex items-center justify-center z-50 pointer-events-none">
       <div class="text-2xl font-bold text-blue-200">Drop files to upload</div>
+    </div>
+  {/if}
+  {#if isCrossDragging}
+    <div class="absolute inset-0 bg-blue-500/10 flex items-center justify-center z-40 pointer-events-none">
+      <div class="text-lg font-semibold text-blue-200">拖拽到此处上传到远程</div>
     </div>
   {/if}
   <!-- Toolbar -->
@@ -351,8 +509,10 @@
           <tr 
             class="cursor-pointer border-b border-gray-800 transition-colors duration-75 {selectedFile === file ? 'bg-blue-900/30' : 'hover:bg-gray-800'}"
             on:click|stopPropagation={() => selectedFile = file}
-            on:dblclick={() => file.isDirectory && handleNavigate(file.path)}
+            on:dblclick={() => openEditor(file)}
             on:contextmenu|preventDefault|stopPropagation={(e) => handleContextMenu(e, file)}
+            draggable={!file.isDirectory}
+            on:dragstart={(e) => handleDragStart(e, file)}
           >
             <td class="p-2 flex items-center space-x-2">
               <span class="text-yellow-500">{file.isDirectory ? '📁' : '📄'}</span>

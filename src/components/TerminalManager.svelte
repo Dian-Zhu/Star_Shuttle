@@ -1,12 +1,124 @@
 <script lang="ts">
+  import { onMount, onDestroy } from 'svelte';
+  import { invoke } from '@tauri-apps/api/core';
   import { activeTerminals, selectedTerminalIndex, broadcastInputEnabled, broadcastSessionIds } from '../lib/store';
   import { closeTerminal } from '../lib/terminalService';
   import TerminalView from './TerminalView.svelte';
   import XIcon from './icons/XIcon.svelte';
   import TerminalIcon from './icons/TerminalIcon.svelte';
-  import { totalSpeed, formatSpeed } from '../lib/transferQueueService';
+  import { formatSpeed } from '../lib/transferQueueService';
 
   $: selectedBroadcastSet = new Set($broadcastSessionIds);
+  let currentTime = '';
+  let netSpeedBps = 0;
+  let cpuUsage = 0;
+  let memPercent = 0;
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
+  let clockTimer: ReturnType<typeof setInterval> | null = null;
+  const lastNetSampleBySession = new Map<string, { rx: number; tx: number; time: number }>();
+
+  function updateClock() {
+    currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+
+  function parseCpuUsage(output: string) {
+    const match = output.match(/(\d+\.\d+)\s*id/);
+    if (match) {
+      const idle = parseFloat(match[1]);
+      if (!Number.isNaN(idle)) cpuUsage = Math.max(0, Math.round((100 - idle) * 10) / 10);
+    }
+  }
+
+  function parseMemPercent(output: string) {
+    const lines = output.split('\n');
+    const memLine = lines.find(l => l.startsWith('Mem:'));
+    if (!memLine) return;
+    const parts = memLine.split(/\s+/);
+    if (parts.length < 4) return;
+    const total = parseInt(parts[1]);
+    const used = parseInt(parts[2]);
+    if (Number.isNaN(total) || total <= 0) return;
+    const value = Number.isNaN(used) ? 0 : used;
+    memPercent = Math.max(0, Math.min(100, Math.round((value / total) * 100)));
+    if (parts.length >= 7) {
+      const avail = parseInt(parts[6]);
+      if (!Number.isNaN(avail)) {
+        const adjustedUsed = total - avail;
+        memPercent = Math.max(0, Math.min(100, Math.round((adjustedUsed / total) * 100)));
+      }
+    }
+  }
+
+  function parseNetBytes(output: string): { rx: number; tx: number } {
+    const lines = output.split('\n').slice(2);
+    let rx = 0;
+    let tx = 0;
+    for (const raw of lines) {
+      const line = raw.trim();
+      if (!line) continue;
+      const parts = line.split(/[:\s]+/).filter(Boolean);
+      if (parts.length < 10) continue;
+      const iface = parts[0];
+      if (iface === 'lo') continue;
+      const rxBytes = Number(parts[1]);
+      const txBytes = Number(parts[9]);
+      if (!Number.isFinite(rxBytes) || !Number.isFinite(txBytes)) continue;
+      rx += rxBytes;
+      tx += txBytes;
+    }
+    return { rx, tx };
+  }
+
+  async function pollSelectedSession() {
+    const terminal = $activeTerminals[$selectedTerminalIndex];
+    if (!terminal) {
+      netSpeedBps = 0;
+      cpuUsage = 0;
+      memPercent = 0;
+      return;
+    }
+
+    const sessionId = terminal.sessionId;
+    try {
+      const [netOut, cpuOut, memOut] = await Promise.all([
+        invoke('exec_command', { sessionId, command: 'cat /proc/net/dev' }),
+        invoke('exec_command', { sessionId, command: 'top -bn1 | grep "Cpu(s)"' }),
+        invoke('exec_command', { sessionId, command: 'free -m' }),
+      ]);
+
+      const now = performance.now();
+      const { rx, tx } = parseNetBytes(netOut as string);
+      const last = lastNetSampleBySession.get(sessionId);
+      if (last) {
+        const dt = (now - last.time) / 1000;
+        if (dt > 0) {
+          const delta = Math.max(0, (rx - last.rx) + (tx - last.tx));
+          netSpeedBps = delta / dt;
+        }
+      }
+      lastNetSampleBySession.set(sessionId, { rx, tx, time: now });
+
+      parseCpuUsage(cpuOut as string);
+      parseMemPercent(memOut as string);
+    } catch {
+      netSpeedBps = 0;
+      cpuUsage = 0;
+      memPercent = 0;
+      lastNetSampleBySession.delete(sessionId);
+    }
+  }
+
+  onMount(() => {
+    updateClock();
+    clockTimer = setInterval(updateClock, 1000);
+    pollSelectedSession();
+    pollTimer = setInterval(pollSelectedSession, 2000);
+  });
+
+  onDestroy(() => {
+    if (clockTimer) clearInterval(clockTimer);
+    if (pollTimer) clearInterval(pollTimer);
+  });
 
   function handleTabClick(index: number, event: MouseEvent) {
     const terminal = $activeTerminals[index];
@@ -125,7 +237,11 @@
           <path fill-rule="evenodd" d="M12.293 5.293a1 1 0 011.414 0l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414-1.414L14.586 11H3a1 1 0 110-2h11.586l-2.293-2.293a1 1 0 010-1.414z" clip-rule="evenodd"></path>
         </svg>
         <span>实时流量:</span>
-        <span class="font-mono font-medium text-green-300">{formatSpeed($totalSpeed)}</span>
+        <span class="font-mono font-medium text-green-300">{formatSpeed(netSpeedBps)}</span>
+        <span class="ml-2 text-slate-500">CPU</span>
+        <span class="font-mono font-medium text-slate-200">{cpuUsage}%</span>
+        <span class="ml-2 text-slate-500">MEM</span>
+        <span class="font-mono font-medium text-slate-200">{memPercent}%</span>
       </div>
       <div class="text-slate-500">|</div>
       <div class="text-slate-500">
@@ -133,7 +249,7 @@
       </div>
     </div>
     <div class="text-slate-500 text-xs">
-      {new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+      {currentTime}
     </div>
   </div>
 </div>

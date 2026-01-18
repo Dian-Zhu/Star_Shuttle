@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { connections, showConnectionForm, editingConnection, isSidebarCollapsed, showSettings, activeTerminals, connectionGroups } from '../lib/store';
-  import { loadConnections, deleteConnection, updateConnectionConfig } from '../lib/connectionService';
+  import { connections, showConnectionForm, editingConnection, isSidebarCollapsed, showSettings, activeTerminals } from '../lib/store';
+  import { loadConnections, deleteConnection } from '../lib/connectionService';
   import { connectAndOpen } from '../lib/terminalService';
   import PlusIcon from './icons/PlusIcon.svelte';
   import ServerIcon from './icons/ServerIcon.svelte';
@@ -16,33 +16,118 @@
   import ClockIcon from './icons/ClockIcon.svelte';
   import ActivityIcon from './icons/ActivityIcon.svelte';
   import SystemMonitorModal from './SystemMonitorModal.svelte';
-  import { v4 as uuidv4 } from 'uuid';
 
   let searchTerm = '';
   let activeTab: 'servers' | 'history' = 'servers';
   let showMonitor: string | null = null; // Session ID for monitor
   let monitorConnection: any = null;
-  let selectedGroupId: 'all' | 'ungrouped' | string = 'all';
-
-  $: groupNameById = new Map($connectionGroups.map(g => [g.id, g.name]));
+  let expandedPaths = new Set<string>();
 
   // Filter connections based on search term
-  $: filteredConnections = $connections
-    .filter(c => {
-      if (selectedGroupId === 'all') return true;
-      if (selectedGroupId === 'ungrouped') return !c.group_id;
-      return c.group_id === selectedGroupId;
-    })
-    .filter(c => {
-      const term = searchTerm.toLowerCase();
-      const tags = (c.tags || []).join(',').toLowerCase();
-      return (
-        c.name.toLowerCase().includes(term) ||
-        c.host.toLowerCase().includes(term) ||
-        c.username.toLowerCase().includes(term) ||
-        tags.includes(term)
-      );
-    });
+  $: filteredConnections = $connections.filter(c => {
+    const term = searchTerm.toLowerCase();
+    if (!term) return true;
+    const tags = (c.tags || []).join(',').toLowerCase();
+    return (
+      c.name.toLowerCase().includes(term) ||
+      c.host.toLowerCase().includes(term) ||
+      c.username.toLowerCase().includes(term) ||
+      tags.includes(term)
+    );
+  });
+
+  type TagNode = {
+    name: string;
+    path: string;
+    children: Map<string, TagNode>;
+    connections: any[];
+  };
+
+  type TagRow =
+    | { kind: 'folder'; id: string; depth: number; name: string; path: string; count: number; hasChildren: boolean }
+    | { kind: 'connection'; id: string; depth: number; connection: any };
+
+  function splitTagPath(tag: string): string[] {
+    return tag
+      .split('/')
+      .map(s => s.trim())
+      .filter(Boolean);
+  }
+
+  function buildTagTree(items: any[]): TagNode {
+    const root: TagNode = { name: '', path: '', children: new Map(), connections: [] };
+    for (const connection of items) {
+      const tags: string[] = Array.isArray(connection.tags) ? connection.tags : [];
+      const tagPaths = tags.length > 0 ? tags : ['未分组'];
+      for (const tag of tagPaths) {
+        const parts = tag === '未分组' ? ['未分组'] : splitTagPath(tag);
+        if (parts.length === 0) continue;
+        let node = root;
+        for (const part of parts) {
+          const nextPath = node.path ? `${node.path}/${part}` : part;
+          const existing = node.children.get(part);
+          if (existing) {
+            node = existing;
+          } else {
+            const created: TagNode = { name: part, path: nextPath, children: new Map(), connections: [] };
+            node.children.set(part, created);
+            node = created;
+          }
+        }
+        node.connections.push(connection);
+      }
+    }
+    return root;
+  }
+
+  function flattenTagTree(node: TagNode, depth = 0): TagRow[] {
+    const rows: TagRow[] = [];
+    const children = Array.from(node.children.values()).sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN'));
+    for (const child of children) {
+      const hasChildren = child.children.size > 0;
+      const count = child.connections.length;
+      rows.push({
+        kind: 'folder',
+        id: `folder:${child.path}`,
+        depth,
+        name: child.name,
+        path: child.path,
+        count,
+        hasChildren,
+      });
+      if (expandedPaths.has(child.path)) {
+        rows.push(...flattenTagTree(child, depth + 1));
+        const sortedConnections = [...child.connections].sort((a, b) =>
+          String(a.name ?? '').localeCompare(String(b.name ?? ''), 'zh-Hans-CN')
+        );
+        for (const connection of sortedConnections) {
+          rows.push({
+            kind: 'connection',
+            id: `connection:${child.path}:${connection.id}`,
+            depth: depth + 1,
+            connection,
+          });
+        }
+      }
+    }
+    return rows;
+  }
+
+  function toggleFolder(path: string) {
+    const next = new Set(expandedPaths);
+    if (next.has(path)) next.delete(path);
+    else next.add(path);
+    expandedPaths = next;
+  }
+
+  $: tagTree = buildTagTree(filteredConnections);
+  $: tagRows = flattenTagTree(tagTree);
+  $: {
+    const topLevelPaths = Array.from(tagTree.children.values()).map(n => n.path);
+    if (expandedPaths.size === 0 && topLevelPaths.length > 0) {
+      expandedPaths = new Set(topLevelPaths);
+    }
+  }
 
   $: filteredHistory = $connectionHistory.filter(h => 
     h.connection.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
@@ -95,44 +180,6 @@
 
   function toggleSidebar() {
     isSidebarCollapsed.update(v => !v);
-  }
-
-  function addGroup() {
-    const name = window.prompt('请输入分组名称');
-    if (!name) return;
-    const trimmed = name.trim();
-    if (!trimmed) return;
-    const id = uuidv4();
-    connectionGroups.update(groups => [...groups, { id, name: trimmed, createdAt: Date.now() }]);
-    selectedGroupId = id;
-  }
-
-  function renameSelectedGroup() {
-    if (selectedGroupId === 'all' || selectedGroupId === 'ungrouped') return;
-    const currentName = groupNameById.get(selectedGroupId) || '';
-    const name = window.prompt('请输入新的分组名称', currentName);
-    if (!name) return;
-    const trimmed = name.trim();
-    if (!trimmed) return;
-    connectionGroups.update(groups =>
-      groups.map(g => (g.id === selectedGroupId ? { ...g, name: trimmed } : g))
-    );
-  }
-
-  async function deleteSelectedGroup() {
-    if (selectedGroupId === 'all' || selectedGroupId === 'ungrouped') return;
-    const name = groupNameById.get(selectedGroupId) || '该分组';
-    if (!confirm(`确定要删除分组「${name}」吗？分组内连接将被设为未分组。`)) return;
-
-    const groupId = selectedGroupId;
-    selectedGroupId = 'all';
-    connectionGroups.update(groups => groups.filter(g => g.id !== groupId));
-
-    const affected = $connections.filter(c => c.group_id === groupId);
-    for (const c of affected) {
-      await updateConnectionConfig({ ...c, group_id: null });
-    }
-    await loadConnections();
   }
 
   function openMonitor(connection: any, event: MouseEvent) {
@@ -206,46 +253,6 @@
   <!-- Search -->
   {#if !$isSidebarCollapsed}
     <div class="px-4 py-3">
-      {#if activeTab === 'servers'}
-        <div class="flex items-center gap-2 mb-3">
-          <select
-            bind:value={selectedGroupId}
-            class="flex-1 bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg py-1.5 px-3 text-sm text-slate-900 dark:text-slate-200 focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/50 transition-all"
-          >
-            <option value="all">所有分组</option>
-            <option value="ungrouped">未分组</option>
-            {#each $connectionGroups as group}
-              <option value={group.id}>{group.name}</option>
-            {/each}
-          </select>
-          <button
-            class="px-2 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 hover:bg-slate-200 dark:hover:bg-slate-800 text-xs"
-            on:click={addGroup}
-            title="新建分组"
-            type="button"
-          >
-            新建
-          </button>
-          <button
-            class="px-2 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 hover:bg-slate-200 dark:hover:bg-slate-800 text-xs disabled:opacity-50"
-            on:click={renameSelectedGroup}
-            disabled={selectedGroupId === 'all' || selectedGroupId === 'ungrouped'}
-            title="重命名分组"
-            type="button"
-          >
-            重命名
-          </button>
-          <button
-            class="px-2 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 hover:bg-red-100 dark:hover:bg-red-900/30 text-xs text-red-600 dark:text-red-400 disabled:opacity-50"
-            on:click={deleteSelectedGroup}
-            disabled={selectedGroupId === 'all' || selectedGroupId === 'ungrouped'}
-            title="删除分组"
-            type="button"
-          >
-            删除
-          </button>
-        </div>
-      {/if}
       <div class="relative">
         <input
           type="text"
@@ -276,55 +283,87 @@
               </div>
             </div>
         {/if}
-        {#if filteredConnections.length > 0}
-          {#each filteredConnections as connection}
-            <div class="group relative">
-              <button
-                class="w-full text-left flex items-center {$isSidebarCollapsed ? 'justify-center p-2' : 'gap-3 p-2.5'} rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors group-hover:shadow-sm"
-                on:click={() => handleConnect(connection)}
-                title={$isSidebarCollapsed ? `${connection.name} (${connection.username}@${connection.host})` : ''}
-              >
-                <div class="text-slate-400 group-hover:text-blue-500 dark:group-hover:text-blue-400 transition-colors shrink-0">
-                  <ServerIcon class="w-4 h-4" />
-                </div>
-                {#if !$isSidebarCollapsed}
-                  <div class="flex-1 min-w-0">
-                    <div class="font-medium text-slate-700 dark:text-slate-200 truncate group-hover:text-slate-900 dark:group-hover:text-white transition-colors">
-                      {connection.name}
-                    </div>
-                    <div class="text-xs text-slate-500 truncate mt-0.5 font-mono opacity-80">
-                      {connection.username}@{connection.host}{groupNameById.get(connection.group_id || '') ? ` · ${groupNameById.get(connection.group_id || '')}` : ''}
-                    </div>
+        {#if tagRows.length > 0}
+          {#each tagRows as row (row.id)}
+            {#if row.kind === 'folder'}
+              <div class="group relative">
+                <button
+                  class="w-full text-left flex items-center {$isSidebarCollapsed ? 'justify-center p-2' : 'gap-2 p-2'} rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                  on:click={() => toggleFolder(row.path)}
+                  title={$isSidebarCollapsed ? row.name : ''}
+                  style={!$isSidebarCollapsed ? `padding-left: ${0.5 + row.depth * 0.75}rem;` : ''}
+                >
+                  {#if !$isSidebarCollapsed}
+                    <span class="text-slate-400 dark:text-slate-500 w-4 inline-flex justify-center">
+                      {#if expandedPaths.has(row.path)}
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                        </svg>
+                      {:else}
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                        </svg>
+                      {/if}
+                    </span>
+                    <span class="flex-1 min-w-0">
+                      <span class="font-medium text-slate-700 dark:text-slate-200 truncate">{row.name}</span>
+                    </span>
+                    <span class="text-[10px] text-slate-400 dark:text-slate-500 bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded-full">
+                      {row.count}
+                    </span>
+                  {/if}
+                </button>
+              </div>
+            {:else}
+              <div class="group relative">
+                <button
+                  class="w-full text-left flex items-center {$isSidebarCollapsed ? 'justify-center p-2' : 'gap-3 p-2'} rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors group-hover:shadow-sm"
+                  on:click={() => handleConnect(row.connection)}
+                  title={$isSidebarCollapsed ? `${row.connection.name} (${row.connection.username}@${row.connection.host})` : ''}
+                  style={!$isSidebarCollapsed ? `padding-left: ${0.5 + row.depth * 0.75}rem;` : ''}
+                >
+                  <div class="text-slate-400 group-hover:text-blue-500 dark:group-hover:text-blue-400 transition-colors shrink-0">
+                    <ServerIcon class="w-4 h-4" />
                   </div>
-                {/if}
-              </button>
-              
-              {#if !$isSidebarCollapsed}
-                {#if activeConnectionIds.has(connection.id)}
+                  {#if !$isSidebarCollapsed}
+                    <div class="flex-1 min-w-0">
+                      <div class="font-medium text-slate-700 dark:text-slate-200 truncate group-hover:text-slate-900 dark:group-hover:text-white transition-colors">
+                        {row.connection.name}
+                      </div>
+                      <div class="text-xs text-slate-500 truncate mt-0.5 font-mono opacity-80">
+                        {row.connection.username}@{row.connection.host}
+                      </div>
+                    </div>
+                  {/if}
+                </button>
+
+                {#if !$isSidebarCollapsed}
+                  {#if activeConnectionIds.has(row.connection.id)}
+                    <button
+                      class="absolute right-[4.25rem] top-2.5 p-1.5 rounded-md text-green-500 hover:text-green-600 hover:bg-green-100 dark:hover:bg-green-900/30 transition-all"
+                      on:click={(e) => openMonitor(row.connection, e)}
+                      title="系统监控"
+                    >
+                      <ActivityIcon class="w-3.5 h-3.5" />
+                    </button>
+                  {/if}
                   <button
-                    class="absolute right-[4.25rem] top-2.5 p-1.5 rounded-md text-green-500 hover:text-green-600 hover:bg-green-100 dark:hover:bg-green-900/30 transition-all"
-                    on:click={(e) => openMonitor(connection, e)}
-                    title="系统监控"
+                    class="absolute right-9 top-2.5 p-1.5 rounded-md text-slate-400 dark:text-slate-500 hover:text-blue-500 dark:hover:text-blue-400 hover:bg-slate-200 dark:hover:bg-slate-700/50 opacity-0 group-hover:opacity-100 transition-all"
+                    on:click={(e) => handleEdit(row.connection, e)}
+                    title="编辑连接"
                   >
-                    <ActivityIcon class="w-3.5 h-3.5" />
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 4H6a2 2 0 00-2 2v12a2 2 0 002 2h12a2 2 0 002-2v-5M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+                  </button>
+                  <button
+                    class="absolute right-2 top-2.5 p-1.5 rounded-md text-slate-400 dark:text-slate-500 hover:text-red-500 dark:hover:text-red-400 hover:bg-slate-200 dark:hover:bg-slate-700/50 opacity-0 group-hover:opacity-100 transition-all"
+                    on:click={(e) => handleDelete(row.connection.id, e)}
+                    title="删除连接"
+                  >
+                    <TrashIcon class="w-3.5 h-3.5" />
                   </button>
                 {/if}
-                <button
-                  class="absolute right-9 top-2.5 p-1.5 rounded-md text-slate-400 dark:text-slate-500 hover:text-blue-500 dark:hover:text-blue-400 hover:bg-slate-200 dark:hover:bg-slate-700/50 opacity-0 group-hover:opacity-100 transition-all"
-                  on:click={(e) => handleEdit(connection, e)}
-                  title="编辑连接"
-                >
-                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 4H6a2 2 0 00-2 2v12a2 2 0 002 2h12a2 2 0 002-2v-5M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
-                </button>
-                <button
-                  class="absolute right-2 top-2.5 p-1.5 rounded-md text-slate-400 dark:text-slate-500 hover:text-red-500 dark:hover:text-red-400 hover:bg-slate-200 dark:hover:bg-slate-700/50 opacity-0 group-hover:opacity-100 transition-all"
-                  on:click={(e) => handleDelete(connection.id, e)}
-                  title="删除连接"
-                >
-                  <TrashIcon class="w-3.5 h-3.5" />
-                </button>
-              {/if}
-            </div>
+              </div>
+            {/if}
           {/each}
         {:else}
           {#if !$isSidebarCollapsed}

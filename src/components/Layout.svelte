@@ -9,7 +9,7 @@
   import CommandPalette from './CommandPalette.svelte';
   import AppLockOverlay from './AppLockOverlay.svelte';
   import AdvancedModal from './AdvancedModal.svelte';
-  import { showConnectionForm, editingConnection, showSettings, successMessage, errorMessage, settings, activeTerminals, selectedTerminalIndex, showCommandPalette, isLocked, showAdvancedModal } from '../lib/store';
+  import { showConnectionForm, editingConnection, showSettings, successMessage, errorMessage, settings, isSidebarCollapsed, activeTerminals, selectedTerminalIndex, showCommandPalette, isLocked, showAdvancedModal } from '../lib/store';
   import { closeTerminal } from '../lib/terminalService';
   import { fade, fly } from 'svelte/transition';
 
@@ -200,6 +200,12 @@
     if (checkShortcut(event, shortcuts.commandPalette)) {
       event.preventDefault();
       showCommandPalette.update(v => !v);
+      return;
+    }
+
+    if (checkShortcut(event, shortcuts.toggleSidebar)) {
+      event.preventDefault();
+      isSidebarCollapsed.update(v => !v);
       return;
     }
 

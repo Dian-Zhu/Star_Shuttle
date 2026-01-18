@@ -31,6 +31,7 @@
 
   const shortcutLabels: Record<ShortcutKey, string> = {
     commandPalette: '命令面板',
+    toggleSidebar: '切换侧边栏',
     newConnection: '新建连接',
     settings: '设置',
     closeTerminal: '关闭终端',

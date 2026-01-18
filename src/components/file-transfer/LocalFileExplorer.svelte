@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { localFsService } from '../../lib/localFsService';
+  import { sftpService } from '../../lib/sftpService';
   import type { FileEntry } from '../../types';
 
   export let initialPath: string = '.'; // Default to current directory
@@ -13,6 +14,7 @@
   let contextMenu = { x: 0, y: 0, show: false, file: null as FileEntry | null };
   let fileInput: HTMLInputElement;
   let isDragging = false;
+  let isCrossDragging = false;
 
   async function loadFiles(path: string) {
     loading = true;
@@ -136,6 +138,31 @@
 
   async function handleDrop(e: DragEvent) {
     isDragging = false;
+    const payload = e.dataTransfer?.getData('application/x-starshuttle-file');
+    if (payload) {
+      try {
+        const data = JSON.parse(payload);
+        if (data?.source === 'remote' && data?.sessionId && data?.path && data?.name) {
+          loading = true;
+          try {
+            let content: Uint8Array;
+            try {
+              content = await sftpService.readFile(data.sessionId, data.path);
+            } catch (err) {
+              content = await sftpService.scpDownload(data.sessionId, data.path);
+            }
+            const localPath = currentPath === '/' ? `/${data.name}` : `${currentPath}/${data.name}`.replace('//', '/');
+            await localFsService.writeFile(localPath, content, false);
+            await loadFiles(currentPath);
+          } finally {
+            loading = false;
+          }
+          return;
+        }
+      } catch {
+        isCrossDragging = false;
+      }
+    }
     const items = e.dataTransfer?.files;
     if (!items || items.length === 0) return;
     
@@ -214,6 +241,36 @@
     window.addEventListener('click', closeContextMenu);
     return () => window.removeEventListener('click', closeContextMenu);
   });
+
+  function handleDragStart(e: DragEvent, file: FileEntry) {
+    if (file.isDirectory) return;
+    e.dataTransfer?.setData(
+      'application/x-starshuttle-file',
+      JSON.stringify({
+        source: 'local',
+        path: file.path,
+        name: file.name,
+        size: file.size,
+      })
+    );
+    e.dataTransfer?.setData('text/plain', file.name);
+    e.dataTransfer?.setDragImage?.(document.createElement('div'), 0, 0);
+  }
+
+  function handleDragEnter(e: DragEvent) {
+    const payload = e.dataTransfer?.getData('application/x-starshuttle-file');
+    if (!payload) return;
+    try {
+      const data = JSON.parse(payload);
+      if (data?.source === 'remote') isCrossDragging = true;
+    } catch {
+      isCrossDragging = false;
+    }
+  }
+
+  function handleDragLeaveCross() {
+    isCrossDragging = false;
+  }
 </script>
 
 <div 
@@ -221,12 +278,19 @@
   on:contextmenu|preventDefault={(e) => handleContextMenu(e, null)} 
   role="presentation"
   on:dragover|preventDefault={handleDragOver}
+  on:dragenter|preventDefault={handleDragEnter}
   on:dragleave={handleDragLeave}
   on:drop|preventDefault={handleDrop}
+  on:dragleave|self={handleDragLeaveCross}
 >
   {#if isDragging}
     <div class="absolute inset-0 bg-blue-500/20 flex items-center justify-center z-50 pointer-events-none">
       <div class="text-2xl font-bold text-blue-200">Drop files to upload</div>
+    </div>
+  {/if}
+  {#if isCrossDragging}
+    <div class="absolute inset-0 bg-blue-500/10 flex items-center justify-center z-40 pointer-events-none">
+      <div class="text-lg font-semibold text-blue-200">拖拽到此处下载到本地</div>
     </div>
   {/if}
   <!-- Toolbar -->
@@ -312,6 +376,8 @@
             on:click|stopPropagation={() => selectedFile = file}
             on:dblclick={() => file.isDirectory && handleNavigate(file.path)}
             on:contextmenu|preventDefault|stopPropagation={(e) => handleContextMenu(e, file)}
+            draggable={!file.isDirectory}
+            on:dragstart={(e) => handleDragStart(e, file)}
           >
             <td class="p-2 flex items-center space-x-2">
               <span class="text-yellow-500">{file.isDirectory ? '📁' : '📄'}</span>

@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { initTerminal } from '../lib/terminalService';
   import { settings, type ActiveTerminal } from '../lib/store';
-  import FileExplorer from './file-transfer/FileExplorer.svelte';
+  import DualPaneFileExplorer from './file-transfer/DualPaneFileExplorer.svelte';
   
   // Props using Svelte 4 syntax for compatibility
   export let terminalData: ActiveTerminal;
@@ -205,7 +205,7 @@
      <!-- SFTP Container -->
      {#if mode === 'sftp'}
        <div class="w-full h-full absolute inset-0 z-0">
-         <FileExplorer sessionId={terminalData.sessionId} />
+         <DualPaneFileExplorer sessionId={terminalData.sessionId} />
        </div>
      {/if}
   </div>
