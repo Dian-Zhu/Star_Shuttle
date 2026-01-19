@@ -11,6 +11,7 @@
   let formData = {
     id: '',
     name: '',
+    protocol: 'Ssh' as 'Ssh' | 'Rdp' | 'Telnet',
     host: '',
     port: 22,
     username: '',
@@ -48,6 +49,7 @@
   function hydrateFromConnection(connection: Connection) {
     formData.id = connection.id;
     formData.name = connection.name ?? '';
+    formData.protocol = ((connection as any).protocol ?? 'Ssh') as any;
     formData.host = connection.host ?? '';
     formData.port = Number(connection.port ?? 22);
     formData.username = connection.username ?? '';
@@ -186,6 +188,18 @@
 
   // Tabs
   let activeTab: 'basic' | 'advanced' = 'basic';
+  let lastProtocol: 'Ssh' | 'Rdp' | 'Telnet' = formData.protocol;
+
+  $: if (formData.protocol !== lastProtocol) {
+    if (formData.protocol === 'Rdp' && (formData.port === 22 || formData.port === 23)) formData.port = 3389;
+    else if (formData.protocol === 'Telnet' && (formData.port === 22 || formData.port === 3389)) formData.port = 23;
+    else if (formData.protocol === 'Ssh' && (formData.port === 23 || formData.port === 3389)) formData.port = 22;
+    lastProtocol = formData.protocol;
+  }
+
+  $: if (formData.protocol !== 'Ssh' && activeTab === 'advanced') {
+    activeTab = 'basic';
+  }
 
   // Tag Management
   let tagInput = '';
@@ -291,7 +305,8 @@
             基本信息
           </button>
           <button 
-            class="px-3 py-1 text-xs font-medium rounded-md transition-all {activeTab === 'advanced' ? 'bg-white dark:bg-slate-700 text-blue-600 dark:text-blue-400 shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}"
+            class="px-3 py-1 text-xs font-medium rounded-md transition-all {formData.protocol !== 'Ssh' ? 'opacity-40 cursor-not-allowed' : ''} {activeTab === 'advanced' ? 'bg-white dark:bg-slate-700 text-blue-600 dark:text-blue-400 shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}"
+            disabled={formData.protocol !== 'Ssh'}
             on:click={() => activeTab = 'advanced'}
           >
             高级 & 隧道
@@ -325,6 +340,19 @@
                 />
               </div>
 
+              <div class="md:col-span-2">
+                <label class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1.5" for="protocol">协议</label>
+                <select
+                  id="protocol"
+                  bind:value={formData.protocol}
+                  class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-200 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all"
+                >
+                  <option value="Ssh">SSH</option>
+                  <option value="Rdp">RDP</option>
+                  <option value="Telnet">Telnet</option>
+                </select>
+              </div>
+
               <div class="md:col-span-2 grid grid-cols-12 gap-4">
                 <div class="col-span-8">
                   <label class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1.5" for="host">主机地址</label>
@@ -352,19 +380,22 @@
               </div>
 
               <div class="md:col-span-2">
-                <label class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1.5" for="username">用户名</label>
+                <label class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1.5" for="username">
+                  {formData.protocol === 'Ssh' ? '用户名' : '用户名 (可选)'}
+                </label>
                 <input
                   type="text"
                   id="username"
                   bind:value={formData.username}
                   class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-200 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all font-mono"
-                  placeholder="root"
-                  required
+                  placeholder={formData.protocol === 'Ssh' ? 'root' : 'Administrator'}
+                  required={formData.protocol === 'Ssh'}
                 />
               </div>
             </div>
 
             <!-- Authentication -->
+            {#if formData.protocol === 'Ssh'}
             <div class="border-t border-slate-200 dark:border-slate-800 pt-5">
               <span class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-3">认证方式</span>
               
@@ -486,6 +517,7 @@
                 {/if}
               </div>
             </div>
+            {/if}
 
             <!-- Tags & Description -->
             <div class="border-t border-slate-200 dark:border-slate-800 pt-5 space-y-4">

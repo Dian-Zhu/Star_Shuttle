@@ -50,6 +50,7 @@ function toBackendConnectionConfig(connection: Connection, overrides?: Record<st
   return {
     id: connection.id,
     name: connection.name,
+    protocol: (connection as any).protocol ?? 'Ssh',
     host: connection.host,
     port: Number(connection.port),
     username: connection.username,
@@ -73,16 +74,30 @@ export async function saveConnection(connectionData: any): Promise<{ connectionI
   try {
     errorMessage.set(null);
     const isEditing = Boolean(connectionData.id);
+    const protocol =
+      connectionData.protocol === 'Rdp'
+        ? 'Rdp'
+        : connectionData.protocol === 'Telnet'
+          ? 'Telnet'
+          : 'Ssh';
     
     // Validate form data
     if (!connectionData.name.trim()) throw new Error('连接名称不能为空');
     if (!connectionData.host.trim()) throw new Error('主机地址不能为空');
     if (connectionData.port < 1 || connectionData.port > 65535) throw new Error('端口号必须在1-65535之间');
-    if (!connectionData.username.trim()) throw new Error('用户名不能为空');
+    if (protocol === 'Ssh' && !connectionData.username.trim()) throw new Error('用户名不能为空');
     
     // Construct auth method
     let backendAuthMethod;
-    switch (connectionData.authMethod) {
+    if (protocol === 'Rdp' || protocol === 'Telnet') {
+      backendAuthMethod = {
+        Password: {
+          password: '',
+          save_password: false,
+        },
+      };
+    } else {
+      switch (connectionData.authMethod) {
       case 'password':
         if (!connectionData.password) {
           if (connectionData.savePassword) {
@@ -134,6 +149,7 @@ export async function saveConnection(connectionData: any): Promise<{ connectionI
         break;
       default:
         throw new Error('不支持的认证方式');
+      }
     }
 
     const tagsArray = parseTags(connectionData.tags);
@@ -240,9 +256,16 @@ export async function saveConnection(connectionData: any): Promise<{ connectionI
         break;
     }
 
+    const nonSsh = protocol !== 'Ssh';
+    const effectiveProxyType = nonSsh ? 'None' : backendProxyType;
+    const effectiveLocalForwards = nonSsh ? [] : (connectionData.local_forwards || []);
+    const effectiveRemoteForwards = nonSsh ? [] : (connectionData.remote_forwards || []);
+    const effectiveSocksProxyPort = nonSsh ? null : (connectionData.socksProxyPort || null);
+
     const connectConfig = {
       id: connectionId,
       name: connectionData.name,
+      protocol,
       host: connectionData.host,
       port: Number(connectionData.port),
       username: connectionData.username,
@@ -250,10 +273,10 @@ export async function saveConnection(connectionData: any): Promise<{ connectionI
       description: connectionData.description || null,
       tags: tagsArray,
       group_id: null,
-      local_forwards: connectionData.local_forwards || [],
-      remote_forwards: connectionData.remote_forwards || [],
-      proxy_type: backendProxyType,
-      socks_proxy_port: connectionData.socksProxyPort || null,
+      local_forwards: effectiveLocalForwards,
+      remote_forwards: effectiveRemoteForwards,
+      proxy_type: effectiveProxyType,
+      socks_proxy_port: effectiveSocksProxyPort,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };

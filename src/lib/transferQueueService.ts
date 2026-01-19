@@ -217,106 +217,148 @@ export class TransferQueueService {
     
     try {
       if (type === 'upload') {
-        // Read local file
-        const content = await localFsService.readFile(localPath);
-        const totalSize = content.length;
-        
-        // Determine starting offset for resume
-        const metrics = this.transferMetrics.get(id);
-        const bytesTransferred = metrics?.bytesTransferred || 0;
-        const startOffset = bytesTransferred;
+        const totalSize = await localFsService.getFileSize(localPath);
         
         // Update total size if not set
         if (transfer.totalSize === undefined) {
           this.updateTransferField(id, 'totalSize', totalSize);
         }
         
-        // Simulate progress updates with pause support
-        const chunkSize = 64 * 1024; // 64KB chunks
+        const metrics = this.transferMetrics.get(id);
+        const bytesTransferred = metrics?.bytesTransferred || 0;
+        let offset = bytesTransferred;
+        
+        const chunkSize = 128 * 1024; // 128KB chunks
+        let fileHandle: any = null;
+
         try {
-          for (let offset = startOffset; offset < totalSize; offset += chunkSize) {
+          fileHandle = await localFsService.openFile(localPath);
+          
+          // Try to seek if resuming
+          if (offset > 0) {
+            try {
+              if (fileHandle.seek) {
+                 await fileHandle.seek(offset, 0);
+              }
+            } catch (e) {
+               console.warn('Seek failed, restarting upload', e);
+               offset = 0;
+            }
+          }
+
+          let iterations = 0;
+          while (offset < totalSize) {
             // Check if transfer is paused or canceled
             const currentStatus = this.getTransferStatus(id);
             if (currentStatus === 'paused' || currentStatus === 'canceled') {
-              // Transfer was paused or canceled, exit loop
               return;
             }
             
-            const end = Math.min(offset + chunkSize, totalSize);
-            const chunk = content.slice(offset, end);
+            const remaining = totalSize - offset;
+            const currentChunkSize = Math.min(chunkSize, remaining);
             
-            // Write chunk with append flag (append=true for resume)
+            const chunk = await localFsService.readChunk(fileHandle, currentChunkSize);
+            if (chunk.length === 0) break;
+            
+            // Write chunk with append flag (append=true if offset > 0)
             await sftpService.writeFile(sessionId, remotePath, chunk, offset > 0);
             
+            offset += chunk.length;
+            
             // Update progress
-            const progress = Math.floor((end / totalSize) * 100);
-            const speed = chunkSize * 5; // placeholder speed calculation
-            this.updateProgress(id, progress, speed);
+            const progress = Math.floor((offset / totalSize) * 100);
+            this.updateProgress(id, progress, 0); // 0 means auto-calculate
             
             // Update bytes transferred in metrics
             this.transferMetrics.set(id, {
               lastProgress: progress,
               lastTime: Date.now(),
-              bytesTransferred: end
+              bytesTransferred: offset
             });
             
-            // Small delay to simulate network transfer
-            await new Promise(resolve => setTimeout(resolve, 50));
+            // Yield to UI thread occasionally
+            if (++iterations % 5 === 0) {
+                await new Promise(resolve => setTimeout(resolve, 0));
+            }
           }
-        } catch (e) {
-          const currentStatus = this.getTransferStatus(id);
-          if (currentStatus === 'paused' || currentStatus === 'canceled') {
-            return;
-          }
-          await sftpService.scpUpload(sessionId, remotePath, content);
-          this.updateProgress(id, 100, 0);
-          this.transferMetrics.set(id, {
-            lastProgress: 100,
-            lastTime: Date.now(),
-            bytesTransferred: totalSize
-          });
+          
+          this.completeTransfer(id);
+        } finally {
+           if (fileHandle) {
+               await localFsService.closeFile(fileHandle);
+           }
         }
+
       } else {
-        // Download from remote via SFTP
-        // For now, simulate with pause support
-        const totalSize = transfer.totalSize || 1024 * 1024; // default 1MB
+        let totalSize = transfer.totalSize ?? 0;
         const metrics = this.transferMetrics.get(id);
-        const bytesTransferred = metrics?.bytesTransferred || 0;
-        const startOffset = bytesTransferred;
-        
-        const chunkSize = 64 * 1024;
-        for (let offset = startOffset; offset < totalSize; offset += chunkSize) {
-          // Check if transfer is paused or canceled
+        let offset = metrics?.bytesTransferred || 0;
+        const chunkSize = 128 * 1024;
+        let fileHandle: any = null;
+        let iterations = 0;
+
+        try {
+          fileHandle = await localFsService.openWriteFile(localPath, offset === 0);
+          if (offset > 0 && fileHandle?.seek) {
+            try {
+              await fileHandle.seek(offset, 0);
+            } catch {
+              await localFsService.closeFile(fileHandle);
+              fileHandle = await localFsService.openWriteFile(localPath, true);
+              offset = 0;
+            }
+          }
+
+          let done = false;
+          while (!done) {
+            const currentStatus = this.getTransferStatus(id);
+            if (currentStatus === 'paused' || currentStatus === 'canceled') {
+              return;
+            }
+
+            const chunk = await sftpService.readChunk(sessionId, remotePath, offset, chunkSize);
+            if (chunk.length === 0) {
+              done = true;
+              break;
+            }
+            await localFsService.writeChunk(fileHandle, chunk);
+            offset += chunk.length;
+
+            const progress = totalSize > 0 ? Math.floor((offset / totalSize) * 100) : 0;
+            this.updateProgress(id, progress, 0);
+            this.transferMetrics.set(id, {
+              lastProgress: progress,
+              lastTime: Date.now(),
+              bytesTransferred: offset
+            });
+
+            if (++iterations % 5 === 0) {
+              await new Promise(resolve => setTimeout(resolve, 0));
+            }
+          }
+        } catch (e) {
           const currentStatus = this.getTransferStatus(id);
           if (currentStatus === 'paused' || currentStatus === 'canceled') {
             return;
           }
-          
-          const end = Math.min(offset + chunkSize, totalSize);
-          // Simulate reading chunk (would need SFTP read with offset)
-          // For now, just update progress
-          const progress = Math.floor((end / totalSize) * 100);
-          const speed = chunkSize * 5;
-          this.updateProgress(id, progress, speed);
-          
-          // Update bytes transferred
-          this.transferMetrics.set(id, {
-            lastProgress: progress,
-            lastTime: Date.now(),
-            bytesTransferred: end
-          });
-          
-          await new Promise(resolve => setTimeout(resolve, 50));
+          const content = await sftpService.scpDownload(sessionId, remotePath);
+          if (!fileHandle) {
+            fileHandle = await localFsService.openWriteFile(localPath, true);
+          }
+          await localFsService.writeChunk(fileHandle, content);
+          offset = content.length;
+          totalSize = content.length;
+        } finally {
+          if (fileHandle) {
+            await localFsService.closeFile(fileHandle);
+          }
         }
-        
-        // After simulation, actually read the file (full read for now)
-        let content: Uint8Array;
-        try {
-          content = await sftpService.readFile(sessionId, remotePath);
-        } catch (e) {
-          content = await sftpService.scpDownload(sessionId, remotePath);
+
+        if (totalSize === 0 && offset > 0) {
+          totalSize = offset;
+          this.updateTransferField(id, 'totalSize', totalSize);
         }
-        await localFsService.writeFile(localPath, content, false);
+        this.updateProgress(id, 100, 0);
       }
       
       this.completeTransfer(id);

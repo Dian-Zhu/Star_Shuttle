@@ -16,14 +16,44 @@
   let isDragging = false;
   let isCrossDragging = false;
 
+  function normalizePath(path: string): string {
+    return path.replace(/\\/g, '/');
+  }
+
+  async function resolvePath(path: string): Promise<string> {
+    if (path === '~') return normalizePath(await localFsService.getHomeDir());
+    if (path === '' || path === '.') return '.';
+    return normalizePath(path);
+  }
+
+  function dirname(path: string): string {
+    const normalized = normalizePath(path).replace(/\/+$/, '');
+    const matchDrive = normalized.match(/^[A-Za-z]:$/);
+    if (matchDrive) return `${normalized}/`;
+    const lastSlash = normalized.lastIndexOf('/');
+    if (lastSlash < 0) return '';
+    if (lastSlash === 0) return '/';
+    const parent = normalized.slice(0, lastSlash);
+    if (/^[A-Za-z]:$/.test(parent)) return `${parent}/`;
+    return parent;
+  }
+
+  function joinPath(base: string, name: string): string {
+    const baseNormalized = normalizePath(base);
+    const baseTrimmed = baseNormalized.replace(/\/+$/, '');
+    if (baseTrimmed === '') return `/${name}`;
+    return `${baseTrimmed}/${name}`;
+  }
+
   async function loadFiles(path: string) {
     loading = true;
     error = null;
     selectedFile = null;
     contextMenu.show = false;
     try {
-      files = await localFsService.listDirectory(path);
-      currentPath = path;
+      const resolvedPath = await resolvePath(path);
+      files = await localFsService.listDirectory(resolvedPath);
+      currentPath = resolvedPath;
       
       // Sort: Directories first, then files
       files.sort((a, b) => {
@@ -44,19 +74,15 @@
   }
 
   function handleUp() {
-    if (currentPath === '/' || currentPath === '') return;
-    if (currentPath === '.') {
-        loadFiles('..');
-        return;
+    const normalized = normalizePath(currentPath);
+    if (normalized === '' || normalized === '/') return;
+    if (normalized === '.') {
+      loadFiles('..');
+      return;
     }
-    const parts = currentPath.split('/').filter(p => p);
-    if (parts.length > 0) {
-        parts.pop();
-        const parent = parts.length === 0 ? '/' : parts.join('/');
-        loadFiles(parent === '' ? '/' : parent); 
-    } else {
-        loadFiles('..');
-    }
+    if (/^[A-Za-z]:\/?$/.test(normalized)) return;
+    const parent = dirname(normalized);
+    loadFiles(parent === '' ? '..' : parent);
   }
 
   function handleContextMenu(e: MouseEvent, file: FileEntry | null) {
@@ -79,7 +105,7 @@
     const name = prompt('Enter folder name:');
     if (!name) return;
     
-    const path = currentPath === '/' ? `/${name}` : `${currentPath}/${name}`.replace('//', '/');
+    const path = joinPath(currentPath, name);
     try {
       await localFsService.createDirectory(path);
       loadFiles(currentPath);
@@ -115,10 +141,8 @@
 
     // Construct new path. 
     // Assumption: selectedFile.path is the full path. We need to replace the filename.
-    const parts = selectedFile.path.split('/');
-    parts.pop(); // Remove old filename
-    const parentPath = parts.join('/');
-    const newPath = parentPath === '' ? `/${newName}` : `${parentPath}/${newName}`;
+    const parentPath = dirname(selectedFile.path);
+    const newPath = parentPath === '' ? newName : joinPath(parentPath, newName);
 
     try {
       await localFsService.rename(selectedFile.path, newPath);
@@ -151,7 +175,7 @@
             } catch (err) {
               content = await sftpService.scpDownload(data.sessionId, data.path);
             }
-            const localPath = currentPath === '/' ? `/${data.name}` : `${currentPath}/${data.name}`.replace('//', '/');
+            const localPath = joinPath(currentPath, data.name);
             await localFsService.writeFile(localPath, content, false);
             await loadFiles(currentPath);
           } finally {
@@ -192,7 +216,7 @@
   }
 
   async function uploadSingleFile(file: File): Promise<void> {
-    const path = currentPath === '/' ? `/${file.name}` : `${currentPath}/${file.name}`.replace('//', '/');
+    const path = joinPath(currentPath, file.name);
     
     // Read file as ArrayBuffer
     const arrayBuffer = await file.arrayBuffer();

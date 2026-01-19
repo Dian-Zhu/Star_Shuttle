@@ -7,6 +7,7 @@ import type { SearchAddon } from 'xterm-addon-search';
 export interface Connection {
   id: string;
   name: string;
+  protocol?: 'Ssh' | 'Rdp' | 'Telnet';
   host: string;
   port: number;
   username: string;

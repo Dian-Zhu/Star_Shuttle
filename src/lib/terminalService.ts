@@ -24,11 +24,81 @@ const MAX_AUTO_RECONNECT_RETRIES = 5;
 const BASE_AUTO_RECONNECT_DELAY_MS = 1500;
 const MAX_AUTO_RECONNECT_DELAY_MS = 30000;
 
+type OutputWriteState = {
+  chunks: string[];
+  scheduled: number | null;
+  writing: boolean;
+  disposed: boolean;
+};
+
+type InputSendState = {
+  buffer: string;
+  timer: number | null;
+  chain: Promise<void>;
+};
+
+const outputWriteStates = new Map<string, OutputWriteState>();
+const inputSendStates = new Map<string, InputSendState>();
+
 export async function connectAndOpen(connection: Connection, connectConfig?: any) {
   try {
     errorMessage.set(null);
 
     const baseConfig = connectConfig ?? connection;
+    const protocol = (baseConfig as any)?.protocol ?? 'Ssh';
+    if (protocol === 'Rdp') {
+      await invoke('launch_rdp', { config: baseConfig });
+
+      connectionHistory.update(history => {
+        const newHistory = history.filter(h => h.connection.id !== connection.id);
+        newHistory.unshift({
+          connection,
+          lastConnected: Date.now()
+        });
+        return newHistory.slice(0, 50);
+      });
+
+      successMessage.set(`已启动 RDP: ${connection.name}`);
+      setTimeout(() => successMessage.set(null), 3000);
+      return;
+    }
+
+    if (protocol === 'Telnet') {
+      const sessionId = await invoke('connect', { config: baseConfig }) as string;
+
+      const terminals = get(activeTerminals);
+      const existingIndex = terminals.findIndex(t => t.sessionId === sessionId);
+      if (existingIndex !== -1) {
+        selectedTerminalIndex.set(existingIndex);
+        return;
+      }
+
+      activeTerminals.update(items => [
+        ...items,
+        {
+          sessionId,
+          connection,
+          terminal: null as any,
+          fitAddon: null as any,
+          searchAddon: null as any
+        }
+      ]);
+      selectedTerminalIndex.set(terminals.length);
+
+      connectionHistory.update(history => {
+        const newHistory = history.filter(h => h.connection.id !== connection.id);
+        newHistory.unshift({
+          connection,
+          lastConnected: Date.now()
+        });
+        return newHistory.slice(0, 50);
+      });
+
+      successMessage.set(`连接成功: ${connection.name}`);
+      setTimeout(() => successMessage.set(null), 3000);
+      return;
+    }
+
     let config = await ensureConnectConfig(baseConfig, connection.name);
 
     let sessionId: string;
@@ -378,6 +448,57 @@ export async function sendTerminalData(sessionId: string, data: string) {
   }
 }
 
+function getInputSendState(sessionId: string): InputSendState {
+  const existing = inputSendStates.get(sessionId);
+  if (existing) return existing;
+  const created: InputSendState = {
+    buffer: '',
+    timer: null,
+    chain: Promise.resolve(),
+  };
+  inputSendStates.set(sessionId, created);
+  return created;
+}
+
+function flushTerminalInput(sessionId: string, state: InputSendState) {
+  const payload = state.buffer;
+  if (!payload) return;
+  state.buffer = '';
+  state.chain = state.chain
+    .then(() => invoke('send_terminal_data', { sessionId, data: payload }) as Promise<unknown>)
+    .then(() => undefined)
+    .catch((error) => {
+      console.error('Failed to send terminal data:', error);
+    });
+}
+
+function sendTerminalDataBuffered(sessionId: string, data: string, immediate: boolean) {
+  const state = getInputSendState(sessionId);
+  state.buffer += data;
+
+  if (state.buffer.length >= 1024) {
+    immediate = true;
+  }
+
+  if (state.timer !== null) {
+    if (!immediate) return state.chain;
+    clearTimeout(state.timer);
+    state.timer = null;
+  }
+
+  if (immediate) {
+    flushTerminalInput(sessionId, state);
+    return state.chain;
+  }
+
+  state.timer = window.setTimeout(() => {
+    state.timer = null;
+    flushTerminalInput(sessionId, state);
+  }, 10);
+
+  return state.chain;
+}
+
 function handleTerminalInputSingle(sessionId: string, data: string, connection: Connection) {
   const currentBuffer = inputLineBuffers.get(sessionId) ?? '';
   let buffer = currentBuffer;
@@ -391,7 +512,7 @@ function handleTerminalInputSingle(sessionId: string, data: string, connection: 
     const command = buffer.trim();
     flushBuffer('');
     if (!command) {
-      await sendTerminalData(sessionId, '\r');
+      await sendTerminalDataBuffered(sessionId, '\r', true);
       return;
     }
 
@@ -408,7 +529,7 @@ function handleTerminalInputSingle(sessionId: string, data: string, connection: 
           details
         })
       );
-      await sendTerminalData(sessionId, '\r');
+      await sendTerminalDataBuffered(sessionId, '\r', true);
       return;
     }
 
@@ -433,7 +554,7 @@ function handleTerminalInputSingle(sessionId: string, data: string, connection: 
           details
         })
       );
-      void sendTerminalData(sessionId, '\u0003');
+      void sendTerminalDataBuffered(sessionId, '\u0003', true);
       return;
     }
 
@@ -446,7 +567,7 @@ function handleTerminalInputSingle(sessionId: string, data: string, connection: 
         details
       })
     );
-    await sendTerminalData(sessionId, '\r');
+    await sendTerminalDataBuffered(sessionId, '\r', true);
   };
 
   for (const ch of data) {
@@ -457,7 +578,7 @@ function handleTerminalInputSingle(sessionId: string, data: string, connection: 
 
     if (ch === '\u0003' || ch === '\u0015') {
       flushBuffer('');
-      void sendTerminalData(sessionId, ch);
+      void sendTerminalDataBuffered(sessionId, ch, true);
       continue;
     }
 
@@ -465,22 +586,22 @@ function handleTerminalInputSingle(sessionId: string, data: string, connection: 
       if (buffer.length > 0) {
         flushBuffer(buffer.slice(0, -1));
       }
-      void sendTerminalData(sessionId, ch);
+      void sendTerminalDataBuffered(sessionId, ch, true);
       continue;
     }
 
     if (ch === '\u001b') {
-      void sendTerminalData(sessionId, data);
+      void sendTerminalDataBuffered(sessionId, data, true);
       return;
     }
 
     if (ch >= ' ' && ch <= '~') {
       flushBuffer(buffer + ch);
-      void sendTerminalData(sessionId, ch);
+      void sendTerminalDataBuffered(sessionId, ch, false);
       continue;
     }
 
-    void sendTerminalData(sessionId, ch);
+    void sendTerminalDataBuffered(sessionId, ch, true);
   }
 }
 
@@ -558,6 +679,23 @@ export async function closeTerminal(sessionId: string) {
     
     // Clean up xterm instance
     terminal.terminal.dispose();
+
+    const outputState = outputWriteStates.get(sessionId);
+    if (outputState) {
+      outputState.disposed = true;
+      if (outputState.scheduled !== null) {
+        cancelAnimationFrame(outputState.scheduled);
+      }
+      outputWriteStates.delete(sessionId);
+    }
+
+    const inputState = inputSendStates.get(sessionId);
+    if (inputState) {
+      if (inputState.timer !== null) {
+        clearTimeout(inputState.timer);
+      }
+      inputSendStates.delete(sessionId);
+    }
     
     // Remove from store
     activeTerminals.update(items => items.filter(t => t.sessionId !== sessionId));
@@ -593,10 +731,37 @@ export async function closeTerminal(sessionId: string) {
 }
 
 async function setupTerminalListeners(sessionId: string, term: Terminal) {
+    const outputState: OutputWriteState = {
+      chunks: [],
+      scheduled: null,
+      writing: false,
+      disposed: false,
+    };
+    outputWriteStates.set(sessionId, outputState);
+
+    const flushOutput = () => {
+      if (outputState.disposed) return;
+      outputState.scheduled = null;
+      if (outputState.writing) return;
+      if (outputState.chunks.length === 0) return;
+      const data = outputState.chunks.join('');
+      outputState.chunks = [];
+      outputState.writing = true;
+      term.write(data, () => {
+        outputState.writing = false;
+        if (outputState.chunks.length > 0 && !outputState.disposed && outputState.scheduled === null) {
+          outputState.scheduled = requestAnimationFrame(flushOutput);
+        }
+      });
+    };
+
     // Output listener
     const outputUnlisten = await listen(`terminal-output-${sessionId}`, (event: any) => {
       if (event.payload && event.payload.data) {
-        term.write(event.payload.data);
+        outputState.chunks.push(event.payload.data);
+        if (outputState.scheduled === null && !outputState.writing) {
+          outputState.scheduled = requestAnimationFrame(flushOutput);
+        }
       }
     });
 
@@ -638,6 +803,12 @@ async function setupTerminalListeners(sessionId: string, term: Terminal) {
     });
 
     outputListeners.set(sessionId, () => {
+        outputState.disposed = true;
+        if (outputState.scheduled !== null) {
+          cancelAnimationFrame(outputState.scheduled);
+        }
+        outputWriteStates.delete(sessionId);
+
         outputUnlisten();
         errorUnlisten();
         closedUnlisten();

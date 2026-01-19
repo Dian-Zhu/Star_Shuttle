@@ -1,5 +1,6 @@
-use crate::modules::connection::{ConnectionConfig, DefaultConnectionManager};
+use crate::modules::connection::{ConnectionConfig, ConnectionProtocol, DefaultConnectionManager};
 use crate::modules::db::DatabaseManager;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 use tauri::{AppHandle, Manager, State};
 use uuid::Uuid;
@@ -9,6 +10,7 @@ mod commands {
     use super::*;
     use crate::modules::connection::known_hosts::KnownHostsManager;
     use crate::modules::connection::ConnectionManager;
+    use std::process::Command;
     use tauri::command;
 
     #[command]
@@ -59,6 +61,69 @@ mod commands {
             .write()
             .map_err(|e| format!("Failed to acquire write lock: {}", e))?;
         manager.connect(&app, &config).map_err(|e| e.to_string())
+    }
+
+    fn write_temp_rdp_file(host: &str, port: u16, username: &str) -> Result<PathBuf, String> {
+        let filename = format!("starshuttle-{}-{}.rdp", host.replace(':', "_"), port);
+        let path = std::env::temp_dir().join(filename);
+
+        let mut content = String::new();
+        content.push_str(&format!("full address:s:{}:{}\n", host, port));
+        if !username.trim().is_empty() {
+            content.push_str(&format!("username:s:{}\n", username));
+        }
+        content.push_str("prompt for credentials:i:1\n");
+
+        std::fs::write(&path, content).map_err(|e| e.to_string())?;
+        Ok(path)
+    }
+
+    #[command]
+    pub fn launch_rdp(config: ConnectionConfig) -> Result<(), String> {
+        if config.protocol != ConnectionProtocol::Rdp {
+            return Err("Only RDP protocol is supported by this command".to_string());
+        }
+
+        let host = config.host.trim();
+        if host.is_empty() {
+            return Err("Host is required".to_string());
+        }
+        let port = if config.port == 0 { 3389 } else { config.port };
+        let username = config.username.trim();
+
+        let rdp_path = write_temp_rdp_file(host, port, username)?;
+
+        #[cfg(target_os = "windows")]
+        {
+            Command::new("mstsc")
+                .arg(rdp_path)
+                .spawn()
+                .map_err(|e| e.to_string())?;
+            return Ok(());
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            Command::new("open")
+                .arg(rdp_path)
+                .spawn()
+                .map_err(|e| e.to_string())?;
+            return Ok(());
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            Command::new("xdg-open")
+                .arg(rdp_path)
+                .spawn()
+                .map_err(|e| e.to_string())?;
+            return Ok(());
+        }
+
+        #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+        {
+            Err("Unsupported OS for launching RDP".to_string())
+        }
     }
 
     #[command]
@@ -400,6 +465,7 @@ pub fn run() {
             commands::delete_connection_config,
             commands::get_all_connection_configs,
             commands::test_connection,
+            commands::launch_rdp,
             commands::keyboard_interactive_respond,
             commands::keyboard_interactive_cancel,
             // Terminal commands
@@ -416,6 +482,7 @@ pub fn run() {
             // SFTP commands
             crate::modules::sftp::sftp_ls,
             crate::modules::sftp::sftp_read,
+            crate::modules::sftp::sftp_read_chunk,
             crate::modules::sftp::sftp_write,
             crate::modules::sftp::sftp_mkdir,
             crate::modules::sftp::sftp_rm,

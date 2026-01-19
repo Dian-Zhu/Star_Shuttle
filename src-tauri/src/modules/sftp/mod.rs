@@ -6,10 +6,12 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::sync::Arc;
+use tauri::ipc::{InvokeBody, Request, Response};
 use tauri::State;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, AsyncSeekExt};
 use tokio::sync::Mutex;
 use uuid::Uuid;
+use std::io::SeekFrom;
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct FileEntry {
@@ -551,26 +553,88 @@ pub async fn sftp_ls(
     state.list_directory(session_id, path).await
 }
 
+fn header_string(request: &Request, key: &str) -> Result<String, String> {
+    request
+        .headers()
+        .get(key)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.to_string())
+        .ok_or_else(|| format!("Missing header: {}", key))
+}
+
+fn header_uuid(request: &Request) -> Result<Uuid, String> {
+    let value = header_string(request, "session-id")?;
+    Uuid::parse_str(&value).map_err(|e| e.to_string())
+}
+
+fn body_bytes(request: &Request<'_>) -> Result<Vec<u8>, String> {
+    match request.body() {
+        InvokeBody::Raw(bytes) => Ok(bytes.clone()),
+        InvokeBody::Json(value) => serde_json::from_value::<Vec<u8>>(value.clone())
+            .map_err(|e| e.to_string()),
+    }
+}
+
+fn header_u64(request: &Request, key: &str) -> Result<u64, String> {
+    let s = header_string(request, key)?;
+    s.parse::<u64>().map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn sftp_read(
     state: State<'_, SftpManager>,
-    session_id: Uuid,
-    path: String,
-) -> Result<Vec<u8>, String> {
-    state.read_file(session_id, path).await
+    request: Request<'_>,
+) -> Result<Response, String> {
+    let session_id = header_uuid(&request)?;
+    let path = header_string(&request, "path")?;
+    let data = state.read_file(session_id, path).await?;
+    Ok(Response::new(data))
+}
+
+#[tauri::command]
+pub async fn sftp_read_chunk(
+    state: State<'_, SftpManager>,
+    request: Request<'_>,
+) -> Result<Response, String> {
+    use russh_sftp::protocol::OpenFlags;
+    let session_id = header_uuid(&request)?;
+    let path = header_string(&request, "path")?;
+    let offset = header_u64(&request, "offset")?;
+    let length = header_u64(&request, "length")?;
+
+    let session_arc = state.get_session(session_id).await?;
+    let session = session_arc.lock().await;
+    let mut file = session
+        .open_with_flags(&path, OpenFlags::READ)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Seek to offset (if supported)
+    if offset > 0 {
+        let _ = file.seek(SeekFrom::Start(offset)).await;
+    }
+
+    let mut buf = vec![0u8; length as usize];
+    let n = file.read(&mut buf).await.map_err(|e| e.to_string())?;
+    buf.truncate(n);
+    Ok(Response::new(buf))
 }
 
 #[tauri::command]
 pub async fn sftp_write(
     state: State<'_, SftpManager>,
-    session_id: Uuid,
-    path: String,
-    content: Vec<u8>,
-    append: Option<bool>,
+    request: Request<'_>,
 ) -> Result<(), String> {
-    state
-        .write_file(session_id, path, content, append.unwrap_or(false))
-        .await
+    let session_id = header_uuid(&request)?;
+    let path = header_string(&request, "path")?;
+    let append = request
+        .headers()
+        .get("append")
+        .and_then(|value: &tauri::http::HeaderValue| value.to_str().ok())
+        .and_then(|value: &str| value.parse::<bool>().ok())
+        .unwrap_or(false);
+    let content = body_bytes(&request)?;
+    state.write_file(session_id, path, content, append).await
 }
 
 #[tauri::command]
@@ -613,18 +677,21 @@ pub async fn sftp_rename(
 #[tauri::command]
 pub async fn scp_upload(
     state: State<'_, SftpManager>,
-    session_id: Uuid,
-    remote_path: String,
-    content: Vec<u8>,
+    request: Request<'_>,
 ) -> Result<(), String> {
+    let session_id = header_uuid(&request)?;
+    let remote_path = header_string(&request, "remote-path")?;
+    let content = body_bytes(&request)?;
     state.scp_upload(session_id, remote_path, content).await
 }
 
 #[tauri::command]
 pub async fn scp_download(
     state: State<'_, SftpManager>,
-    session_id: Uuid,
-    remote_path: String,
-) -> Result<Vec<u8>, String> {
-    state.scp_download(session_id, remote_path).await
+    request: Request<'_>,
+) -> Result<Response, String> {
+    let session_id = header_uuid(&request)?;
+    let remote_path = header_string(&request, "remote-path")?;
+    let data = state.scp_download(session_id, remote_path).await?;
+    Ok(Response::new(data))
 }

@@ -340,11 +340,14 @@
                   </div>
                   {#if !$isSidebarCollapsed}
                     <div class="flex-1 min-w-0">
-                      <div class="font-medium text-slate-700 dark:text-slate-200 truncate group-hover:text-slate-900 dark:group-hover:text-white transition-colors">
-                        {row.connection.name}
+                      <div class="font-medium text-slate-700 dark:text-slate-200 truncate group-hover:text-slate-900 dark:group-hover:text-white transition-colors flex items-center gap-2">
+                        <span class="truncate">{row.connection.name}</span>
+                        <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 shrink-0">
+                          {(row.connection as any).protocol === 'Rdp' ? 'RDP' : 'SSH'}
+                        </span>
                       </div>
                       <div class="text-xs text-slate-500 truncate mt-0.5 font-mono opacity-80">
-                        {row.connection.username}@{row.connection.host}
+                        {#if row.connection.username}{row.connection.username}@{/if}{row.connection.host}
                       </div>
                     </div>
                   {/if}
@@ -405,15 +408,18 @@
                 {#if !$isSidebarCollapsed}
                   <div class="flex-1 min-w-0">
                     <div class="flex justify-between items-center">
-                       <div class="font-medium text-slate-700 dark:text-slate-200 truncate group-hover:text-slate-900 dark:group-hover:text-white transition-colors">
-                         {item.connection.name}
+                       <div class="font-medium text-slate-700 dark:text-slate-200 truncate group-hover:text-slate-900 dark:group-hover:text-white transition-colors flex items-center gap-2">
+                         <span class="truncate">{item.connection.name}</span>
+                         <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 shrink-0">
+                           {(item.connection as any).protocol === 'Rdp' ? 'RDP' : 'SSH'}
+                         </span>
                        </div>
                        <span class="text-[10px] text-slate-400 bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded-full">
                          {formatTimeAgo(item.lastConnected)}
                        </span>
                     </div>
                     <div class="text-xs text-slate-500 truncate mt-0.5 font-mono opacity-80">
-                      {item.connection.username}@{item.connection.host}
+                      {#if item.connection.username}{item.connection.username}@{/if}{item.connection.host}
                     </div>
                   </div>
                 {/if}

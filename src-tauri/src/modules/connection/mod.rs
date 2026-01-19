@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use thiserror::Error;
 use uuid::Uuid;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
 
 // Re-export submodules
 pub mod auth;
@@ -11,6 +13,14 @@ pub mod error;
 pub mod known_hosts;
 pub mod ssh_impl;
 pub mod tracking;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum ConnectionProtocol {
+    #[default]
+    Ssh,
+    Rdp,
+    Telnet,
+}
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ConnectionStatus {
     Disconnected,
@@ -74,6 +84,8 @@ pub enum ProxyType {
 pub struct ConnectionConfig {
     pub id: Uuid,
     pub name: String,
+    #[serde(default)]
+    pub protocol: ConnectionProtocol,
     pub host: String,
     pub port: u16,
     pub username: String,
@@ -114,6 +126,7 @@ impl Default for ConnectionConfig {
         Self {
             id: Uuid::new_v4(),
             name: "Default Connection".to_string(),
+            protocol: ConnectionProtocol::Ssh,
             host: String::new(), // 改为空字符串，避免默认连接localhost
             port: 0,             // 改为0，避免默认使用22端口
             username: "".to_string(),
@@ -136,6 +149,20 @@ impl Default for ConnectionConfig {
 
 impl ConnectionConfig {
     pub fn validate(&self) -> Result<(), ConnectionError> {
+        if self.protocol == ConnectionProtocol::Rdp || self.protocol == ConnectionProtocol::Telnet {
+            if self.host.is_empty() {
+                return Err(ConnectionError::InvalidConfig(
+                    "Host is required".to_string(),
+                ));
+            }
+            if self.port == 0 {
+                return Err(ConnectionError::InvalidConfig(
+                    "Port is required".to_string(),
+                ));
+            }
+            return Ok(());
+        }
+
         if self.host.is_empty() {
             return Err(ConnectionError::InvalidConfig(
                 "Host is required".to_string(),
@@ -194,6 +221,20 @@ impl ConnectionConfig {
     }
 
     pub fn validate_for_save(&self) -> Result<(), ConnectionError> {
+        if self.protocol == ConnectionProtocol::Rdp || self.protocol == ConnectionProtocol::Telnet {
+            if self.host.is_empty() {
+                return Err(ConnectionError::InvalidConfig(
+                    "Host is required".to_string(),
+                ));
+            }
+            if self.port == 0 {
+                return Err(ConnectionError::InvalidConfig(
+                    "Port is required".to_string(),
+                ));
+            }
+            return Ok(());
+        }
+
         if self.host.is_empty() {
             return Err(ConnectionError::InvalidConfig(
                 "Host is required".to_string(),
@@ -484,12 +525,18 @@ pub enum TerminalCommand {
     Close,
 }
 
+struct TelnetConnection {
+    read: tokio::net::tcp::OwnedReadHalf,
+    write: tokio::net::tcp::OwnedWriteHalf,
+}
+
 // Default connection manager implementation
 pub struct DefaultConnectionManager {
     connections: HashMap<Uuid, ConnectionConfig>,
     sessions: HashMap<Uuid, SessionInfo>,
     ssh_connections: HashMap<Uuid, SshConnection>,
     jump_ssh_connections: HashMap<Uuid, SshConnection>,
+    telnet_connections: HashMap<Uuid, TelnetConnection>,
     terminals: HashMap<Uuid, TerminalSession>,
     tracker: Arc<Mutex<ChannelTracker>>,
     runtime: Arc<Runtime>,
@@ -505,6 +552,7 @@ impl std::fmt::Debug for DefaultConnectionManager {
             .field("connections", &self.connections)
             .field("sessions", &self.sessions)
             .field("ssh_connections_count", &self.ssh_connections.len())
+            .field("telnet_connections_count", &self.telnet_connections.len())
             .field("terminals_count", &self.terminals.len())
             .finish()
     }
@@ -524,6 +572,7 @@ impl DefaultConnectionManager {
             sessions: HashMap::new(),
             ssh_connections: HashMap::new(),
             jump_ssh_connections: HashMap::new(),
+            telnet_connections: HashMap::new(),
             terminals: HashMap::new(),
             tracker: Arc::new(Mutex::new(ChannelTracker::new())),
             runtime: Arc::new(runtime),
@@ -674,6 +723,10 @@ impl DefaultConnectionManager {
     }
 
     fn fill_saved_credentials(&self, config: &mut ConnectionConfig) -> Result<(), ConnectionError> {
+        if config.protocol != ConnectionProtocol::Ssh {
+            return Ok(());
+        }
+
         match &mut config.auth_method {
             AuthMethod::Password {
                 password,
@@ -774,6 +827,10 @@ impl DefaultConnectionManager {
     }
 
     fn sync_credentials_for_save(&self, config: &ConnectionConfig) -> Result<(), ConnectionError> {
+        if config.protocol != ConnectionProtocol::Ssh {
+            return Ok(());
+        }
+
         match &config.auth_method {
             AuthMethod::Password {
                 password,
@@ -952,6 +1009,12 @@ impl ConnectionManager for DefaultConnectionManager {
         app: &tauri::AppHandle,
         config: &ConnectionConfig,
     ) -> Result<Uuid, ConnectionError> {
+        if config.protocol == ConnectionProtocol::Rdp {
+            return Err(ConnectionError::InvalidConfig(
+                "RDP does not support in-app sessions".to_string(),
+            ));
+        }
+
         // Log connection attempt start
         info!("Starting connection attempt for config: {:?}", config.id);
 
@@ -961,6 +1024,52 @@ impl ConnectionManager for DefaultConnectionManager {
         self.fill_saved_credentials(&mut effective_config)?;
         effective_config.validate()?;
         info!("Connection configuration validated successfully");
+
+        if effective_config.protocol == ConnectionProtocol::Telnet {
+            let session_id = Uuid::new_v4();
+            let mut session_info = SessionInfo {
+                id: session_id,
+                connection_id: config.id,
+                status: ConnectionStatus::Connecting,
+                terminal_id: None,
+                created_at: Utc::now(),
+                last_active: Utc::now(),
+            };
+            self.sessions.insert(session_id, session_info.clone());
+
+            let host = effective_config.host.clone();
+            let port = effective_config.port;
+            let addr = format!("{}:{}", host, port);
+            info!("Attempting to connect Telnet to {}", addr);
+
+            let connect_res = self.runtime.block_on(async move {
+                tokio::time::timeout(std::time::Duration::from_secs(10), TcpStream::connect(addr))
+                    .await
+            });
+
+            return match connect_res {
+                Ok(Ok(stream)) => {
+                    let (read, write) = stream.into_split();
+                    self.telnet_connections
+                        .insert(session_id, TelnetConnection { read, write });
+                    session_info.status = ConnectionStatus::Connected;
+                    self.sessions.insert(session_id, session_info);
+                    Ok(session_id)
+                }
+                Ok(Err(e)) => {
+                    session_info.status = ConnectionStatus::Error;
+                    self.sessions.insert(session_id, session_info);
+                    Err(ConnectionError::ConnectionFailed(e.to_string()))
+                }
+                Err(_) => {
+                    session_info.status = ConnectionStatus::Error;
+                    self.sessions.insert(session_id, session_info);
+                    Err(ConnectionError::ConnectionFailed(
+                        "Telnet connection timed out".to_string(),
+                    ))
+                }
+            };
+        }
 
         // Create a new session ID
         let session_id = Uuid::new_v4();
@@ -1169,6 +1278,9 @@ impl ConnectionManager for DefaultConnectionManager {
         if self.jump_ssh_connections.remove(session_id).is_some() {
             debug!("Jump SSH connection removed for session: {}", session_id);
         }
+        if self.telnet_connections.remove(session_id).is_some() {
+            debug!("Telnet connection removed for session: {}", session_id);
+        }
 
         // Update session status
         session.status = ConnectionStatus::Disconnected;
@@ -1274,6 +1386,36 @@ impl ConnectionManager for DefaultConnectionManager {
         app: &tauri::AppHandle,
         config: &ConnectionConfig,
     ) -> Result<(), ConnectionError> {
+        if config.protocol == ConnectionProtocol::Rdp || config.protocol == ConnectionProtocol::Telnet {
+            let effective_config = config.clone();
+            effective_config.validate()?;
+
+            let host = effective_config.host.clone();
+            let port = effective_config.port;
+            info!("Testing TCP connectivity to {}:{}", host, port);
+
+            let addr = format!("{}:{}", host, port);
+            let res = self.runtime.block_on(async move {
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    tokio::net::TcpStream::connect(addr),
+                )
+                .await
+            });
+
+            return match res {
+                Ok(Ok(_)) => Ok(()),
+                Ok(Err(e)) => Err(ConnectionError::ConnectionFailed(e.to_string())),
+                Err(_) => Err(ConnectionError::ConnectionFailed(
+                    "Connection test timed out".to_string(),
+                )),
+            };
+        } else if config.protocol != ConnectionProtocol::Ssh {
+            return Err(ConnectionError::InvalidConfig(
+                "Unsupported protocol for connection test".to_string(),
+            ));
+        }
+
         // 新增：验证配置合法性
         let mut effective_config = config.clone();
         self.fill_saved_credentials(&mut effective_config)?;
@@ -1459,6 +1601,128 @@ impl ConnectionManager for DefaultConnectionManager {
             return Err(ConnectionError::ConnectionFailed(
                 "Session is not connected".to_string(),
             ));
+        }
+
+        let protocol = self
+            .connections
+            .get(&session.connection_id)
+            .map(|c| c.protocol.clone())
+            .unwrap_or_default();
+
+        if protocol == ConnectionProtocol::Telnet {
+            let telnet = self
+                .telnet_connections
+                .remove(session_id)
+                .ok_or(ConnectionError::SessionNotFound(*session_id))?;
+
+            info!("Starting Telnet terminal for session: {}", session_id);
+
+            let terminal_id = Uuid::new_v4();
+            let (tx, mut rx) = mpsc::channel::<TerminalCommand>(32);
+
+            let session_id_clone = *session_id;
+            let app_clone = app.clone();
+            let tracker_clone = Arc::clone(&self.tracker);
+
+            tracker_clone
+                .lock()
+                .unwrap()
+                .register_session(session_id_clone);
+
+            let runtime = Arc::clone(&self.runtime);
+            let mut read = telnet.read;
+            let mut write = telnet.write;
+
+            runtime.spawn(async move {
+                let mut buf = vec![0u8; 8192];
+                #[allow(unused_assignments)]
+                let mut exit_reason = "unknown";
+
+                loop {
+                    tokio::select! {
+                        read_res = read.read(&mut buf) => {
+                            match read_res {
+                                Ok(0) => {
+                                    exit_reason = "connection_lost";
+                                    break;
+                                }
+                                Ok(n) => {
+                                    let mut display = Vec::<u8>::new();
+                                    let mut replies = Vec::<u8>::new();
+                                    telnet_process_incoming(&buf[..n], &mut display, &mut replies);
+
+                                    if !replies.is_empty() {
+                                        if let Ok(mut tracker) = tracker_clone.lock() {
+                                            tracker.log_data(session_id_clone, &replies, "sent");
+                                        }
+                                        let _ = write.write_all(&replies).await;
+                                    }
+
+                                    if !display.is_empty() {
+                                        if let Ok(mut tracker) = tracker_clone.lock() {
+                                            tracker.log_data(session_id_clone, &display, "received");
+                                        }
+                                        let data_str = String::from_utf8_lossy(&display).to_string();
+                                        let event_name = format!("terminal-output-{}", session_id_clone);
+                                        let _ = app_clone.emit(&event_name, serde_json::json!({ "data": data_str }));
+                                    }
+                                }
+                                Err(e) => {
+                                    let error_msg = format!("Telnet read error: {}", e);
+                                    let event_name = format!("terminal-error-{}", session_id_clone);
+                                    let _ = app_clone.emit(&event_name, serde_json::json!({ "error": error_msg }));
+                                    exit_reason = "read_error";
+                                    break;
+                                }
+                            }
+                        }
+                        cmd = rx.recv() => {
+                            match cmd {
+                                Some(TerminalCommand::Data(data)) => {
+                                    if let Ok(mut tracker) = tracker_clone.lock() {
+                                        tracker.log_data(session_id_clone, &data, "sent");
+                                    }
+                                    if let Err(e) = write.write_all(&data).await {
+                                        let error_msg = format!("Telnet write error: {}", e);
+                                        let event_name = format!("terminal-error-{}", session_id_clone);
+                                        let _ = app_clone.emit(&event_name, serde_json::json!({ "error": error_msg }));
+                                        exit_reason = "write_error";
+                                        break;
+                                    }
+                                }
+                                Some(TerminalCommand::Resize(_, _)) => {}
+                                Some(TerminalCommand::Close) => {
+                                    let _ = write.shutdown().await;
+                                    exit_reason = "user_closed";
+                                    break;
+                                }
+                                None => {
+                                    exit_reason = "command_channel_closed";
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                let event_name = format!("session-closed-{}", session_id_clone);
+                let _ = app_clone.emit(&event_name, serde_json::json!({ "reason": exit_reason }));
+            });
+
+            self.terminals.insert(
+                terminal_id,
+                TerminalSession {
+                    id: terminal_id,
+                    session_id: *session_id,
+                    sender: tx,
+                },
+            );
+
+            if let Some(session) = self.sessions.get_mut(session_id) {
+                session.terminal_id = Some(terminal_id);
+            }
+
+            return Ok(true);
         }
 
         // Get SSH connection
@@ -1785,6 +2049,68 @@ impl ConnectionManager for DefaultConnectionManager {
     }
 }
 
+fn telnet_process_incoming(input: &[u8], display: &mut Vec<u8>, replies: &mut Vec<u8>) {
+    const IAC: u8 = 255;
+    const DONT: u8 = 254;
+    const DO: u8 = 253;
+    const WONT: u8 = 252;
+    const WILL: u8 = 251;
+    const SB: u8 = 250;
+    const SE: u8 = 240;
+
+    let mut i = 0usize;
+    while i < input.len() {
+        if input[i] != IAC {
+            display.push(input[i]);
+            i += 1;
+            continue;
+        }
+
+        if i + 1 >= input.len() {
+            break;
+        }
+
+        let cmd = input[i + 1];
+        if cmd == IAC {
+            display.push(IAC);
+            i += 2;
+            continue;
+        }
+
+        if cmd == SB {
+            i += 2;
+            while i + 1 < input.len() {
+                if input[i] == IAC && input[i + 1] == SE {
+                    i += 2;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+
+        if cmd == DO || cmd == DONT || cmd == WILL || cmd == WONT {
+            if i + 2 >= input.len() {
+                break;
+            }
+            let opt = input[i + 2];
+            match cmd {
+                DO | DONT => {
+                    replies.extend_from_slice(&[IAC, WONT, opt]);
+                }
+                WILL | WONT => {
+                    replies.extend_from_slice(&[IAC, DONT, opt]);
+                }
+                _ => {}
+            }
+            i += 3;
+            continue;
+        }
+
+        i += 2;
+    }
+}
+
 fn auth_method_to_auth_type(auth_method: AuthMethod) -> ssh_impl::AuthType {
     match auth_method {
         AuthMethod::Password { password, .. } => ssh_impl::AuthType::Password(Some(password)),
@@ -1824,6 +2150,36 @@ mod tests {
 
         config.port = 0;
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_rdp_config_validation() {
+        let mut config = ConnectionConfig::default();
+        config.protocol = ConnectionProtocol::Rdp;
+        config.host = "192.168.1.10".to_string();
+        config.port = 3389;
+        config.username = "".to_string();
+        config.auth_method = AuthMethod::Password {
+            password: "".to_string(),
+            save_password: false,
+        };
+        assert!(config.validate().is_ok());
+        assert!(config.validate_for_save().is_ok());
+    }
+
+    #[test]
+    fn test_telnet_config_validation() {
+        let mut config = ConnectionConfig::default();
+        config.protocol = ConnectionProtocol::Telnet;
+        config.host = "192.168.1.10".to_string();
+        config.port = 23;
+        config.username = "".to_string();
+        config.auth_method = AuthMethod::Password {
+            password: "".to_string(),
+            save_password: false,
+        };
+        assert!(config.validate().is_ok());
+        assert!(config.validate_for_save().is_ok());
     }
 
     #[test]

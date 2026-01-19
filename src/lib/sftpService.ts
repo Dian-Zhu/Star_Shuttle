@@ -13,6 +13,10 @@ interface BackendFileEntry {
 }
 
 export class SftpService {
+  private decodeBinaryPayload(data: ArrayBuffer | number[]): Uint8Array {
+    return data instanceof ArrayBuffer ? new Uint8Array(data) : Uint8Array.from(data);
+  }
+
   async listDirectory(sessionId: string, path: string): Promise<FileEntry[]> {
     const entries = await invoke<BackendFileEntry[]>('sftp_ls', { sessionId, path });
     return entries.map(e => ({
@@ -28,12 +32,35 @@ export class SftpService {
   }
 
   async readFile(sessionId: string, path: string): Promise<Uint8Array> {
-    const data = await invoke<number[]>('sftp_read', { sessionId, path });
-    return new Uint8Array(data);
+    const data = await invoke<ArrayBuffer | number[]>('sftp_read', undefined, {
+      headers: {
+        'session-id': sessionId,
+        path
+      }
+    });
+    return this.decodeBinaryPayload(data);
+  }
+
+  async readChunk(sessionId: string, path: string, offset: number, length: number): Promise<Uint8Array> {
+    const data = await invoke<ArrayBuffer | number[]>('sftp_read_chunk', undefined, {
+      headers: {
+        'session-id': sessionId,
+        path,
+        offset: String(offset),
+        length: String(length)
+      }
+    });
+    return this.decodeBinaryPayload(data);
   }
 
   async writeFile(sessionId: string, path: string, content: Uint8Array, append: boolean = false): Promise<void> {
-    await invoke('sftp_write', { sessionId, path, content: Array.from(content), append });
+    await invoke('sftp_write', content, {
+      headers: {
+        'session-id': sessionId,
+        path,
+        append: String(append)
+      }
+    });
   }
 
   async createDirectory(sessionId: string, path: string): Promise<void> {
@@ -53,16 +80,22 @@ export class SftpService {
   }
 
   async scpUpload(sessionId: string, remotePath: string, content: Uint8Array): Promise<void> {
-    await invoke('scp_upload', {
-      sessionId,
-      remotePath,
-      content: Array.from(content),
+    await invoke('scp_upload', content, {
+      headers: {
+        'session-id': sessionId,
+        'remote-path': remotePath
+      }
     });
   }
 
   async scpDownload(sessionId: string, remotePath: string): Promise<Uint8Array> {
-    const data = await invoke<number[]>('scp_download', { sessionId, remotePath });
-    return new Uint8Array(data);
+    const data = await invoke<ArrayBuffer | number[]>('scp_download', undefined, {
+      headers: {
+        'session-id': sessionId,
+        'remote-path': remotePath
+      }
+    });
+    return this.decodeBinaryPayload(data);
   }
 }
 
