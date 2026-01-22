@@ -6,7 +6,6 @@ import { SearchAddon } from 'xterm-addon-search';
 import { WebglAddon } from 'xterm-addon-webgl';
 import { get } from 'svelte/store';
 import { activeTerminals, selectedTerminalIndex, type Connection, type ActiveTerminal, errorMessage, successMessage, settings, connectionHistory, broadcastInputEnabled, broadcastSessionIds } from './store';
-import { auditService } from './auditService';
 import 'xterm/css/xterm.css';
 
 const IS_DEV = import.meta.env.DEV;
@@ -16,7 +15,6 @@ const outputListeners = new Map<string, () => void>();
 
 // Session status monitoring
 const sessionStatusListeners = new Map<string, () => void>();
-const inputLineBuffers = new Map<string, string>();
 const reconnectAttempts = new Map<string, number>();
 const reconnectTimers = new Map<string, number>();
 const reconnectKeyListeners = new Map<string, { dispose: () => void }>();
@@ -415,6 +413,15 @@ export async function initTerminal(container: HTMLElement, sessionId: string, co
     // Note: We don't store the resizeObserver here as it's attached to the DOM element
     // We might need to handle cleanup separately if the component is destroyed but terminal stays
     
+    // Update the store with the initialized terminal instance
+    // This is crucial for features like broadcast input to work correctly
+    activeTerminals.update(items => items.map(t => {
+      if (t.sessionId === sessionId) {
+        return { ...t, terminal: term, fitAddon, searchAddon };
+      }
+      return t;
+    }));
+
     return {
       sessionId,
       connection,
@@ -458,18 +465,17 @@ function flushTerminalInput(sessionId: string, state: InputSendState) {
   // 使用微任务队列避免阻塞UI线程
   state.chain = state.chain
     .then(() => {
-      // 批量发送：如果payload长度超过200字符，拆分成多个批次
+      // 批量发送：如果payload长度超过4096字符，拆分成多个批次
       // 避免单个大块数据阻塞IPC通道
-      if (payload.length > 200) {
+      if (payload.length > 4096) {
         const chunks = [];
-        for (let i = 0; i < payload.length; i += 200) {
-          chunks.push(payload.slice(i, i + 200));
+        for (let i = 0; i < payload.length; i += 4096) {
+          chunks.push(payload.slice(i, i + 4096));
         }
-        return Promise.all(
-          chunks.map(chunk => 
-            invoke('send_terminal_data', { sessionId, data: chunk }) as Promise<unknown>
-          )
-        );
+        // 串行发送大块数据，避免瞬间并发压力过大
+        return chunks.reduce((promise, chunk) => {
+          return promise.then(() => invoke('send_terminal_data', { sessionId, data: chunk }) as Promise<unknown>);
+        }, Promise.resolve() as Promise<unknown>);
       } else {
         return invoke('send_terminal_data', { sessionId, data: payload }) as Promise<unknown>;
       }
@@ -484,16 +490,10 @@ function sendTerminalDataBuffered(sessionId: string, data: string, immediate: bo
   const state = getInputSendState(sessionId);
   state.buffer += data;
 
-  // 动态阈值：根据缓冲区长度调整，快速输入时降低阈值以提高响应速度
-  const dynamicThreshold = Math.max(64, Math.min(512, 512 / (state.buffer.length % 10 + 1)));
-  if (state.buffer.length >= dynamicThreshold) {
+  // 设定一个固定的较大阈值，防止缓冲区过大
+  // 1024 字符已经相当多了，足以覆盖大多数快速输入场景
+  if (state.buffer.length >= 1024) {
     immediate = true;
-  }
-
-  // 特殊处理：退格键等控制字符使用小批量发送而非立即发送
-  // 只有当连续退格超过3个字符或缓冲区较大时才立即发送
-  if (data === '\u007f' && state.buffer.length < 8) {
-    immediate = false;
   }
 
   if (state.timer !== null) {
@@ -517,171 +517,33 @@ function sendTerminalDataBuffered(sessionId: string, data: string, immediate: bo
   return state.chain;
 }
 
-function handleTerminalInputSingle(sessionId: string, data: string, connection: Connection) {
-  // 获取当前输入缓冲区
-  const currentBuffer = inputLineBuffers.get(sessionId) ?? '';
-  let buffer = currentBuffer;
-
-  const flushBuffer = (next: string) => {
-    buffer = next;
-    inputLineBuffers.set(sessionId, next);
-  };
-
-  // 性能优化：一次性获取终端对象，避免重复查找
-  const terminals = get(activeTerminals);
-  const terminalEntry = terminals.find(t => t.sessionId === sessionId);
-  const term = terminalEntry?.terminal;
-
-  // 多行命令提交函数
-  const commitBuffer = async () => {
-    const command = buffer;
-    flushBuffer('');
-    
-    if (!command.trim()) {
-      // 发送回车到后端执行空命令
-      void invoke('send_terminal_data', { sessionId, data: '\r' });
-      return;
-    }
-
-    const analysis = auditService.analyzeCommand(command);
-    const details = { detectedPatterns: analysis.detectedPatterns };
-
-    if (!auditService.shouldPrompt(analysis.riskLevel)) {
-      await auditService.recordEvent(
-        auditService.createEvent({
-          command,
-          sessionId,
-          userId: connection.username,
-          action: 'ALLOWED',
-          details
-        })
-      );
-      // 发送完整命令 + 回车到后端执行
-      void invoke('send_terminal_data', { sessionId, data: command + '\r' });
-      return;
-    }
-
-    const confirmed = window.confirm(
-      [
-        `检测到高危命令（${analysis.riskLevel}）`,
-        `描述：${analysis.description}`,
-        '',
-        command,
-        '',
-        '是否继续执行？'
-      ].join('\n')
-    );
-
-    if (!confirmed) {
-      await auditService.recordEvent(
-        auditService.createEvent({
-          command,
-          sessionId,
-          userId: connection.username,
-          action: 'BLOCKED',
-          details
-        })
-      );
-      // 发送Ctrl+C取消命令
-      void invoke('send_terminal_data', { sessionId, data: '\u0003' });
-      return;
-    }
-
-    await auditService.recordEvent(
-      auditService.createEvent({
-        command,
-        sessionId,
-        userId: connection.username,
-        action: 'ALLOWED',
-        details
-      })
-    );
-    // 发送完整命令 + 回车到后端执行
-    void invoke('send_terminal_data', { sessionId, data: command + '\r' });
-  };
-
-  // 性能优化：批量处理输入数据
-  let outputBuffer = '';
-  let hasControlChar = false;
-  
-  for (const ch of data) {
-    // 回车键：提交当前缓冲区的内容
-    if (ch === '\r' || ch === '\n') {
-      void commitBuffer();
-      // 同时显示换行符
-      outputBuffer += '\r\n';
-      continue;
-    }
-
-    // 控制字符（Ctrl+C, Ctrl+U等）：立即发送到后端
-    if (ch === '\u0003' || ch === '\u0015') {
-      flushBuffer('');
-      void invoke('send_terminal_data', { sessionId, data: ch });
-      hasControlChar = true;
-      continue;
-    }
-
-    // 退格键：前端处理，不发送到后端
-    if (ch === '\u007f') {
-      if (buffer.length > 0) {
-        flushBuffer(buffer.slice(0, -1));
-        outputBuffer += '\b \b'; // 批量处理退格
-      }
-      continue;
-    }
-
-    // ESC序列：立即发送到后端
-    if (ch === '\u001b') {
-      void invoke('send_terminal_data', { sessionId, data: data });
-      hasControlChar = true;
-      return;
-    }
-
-    // 普通字符：前端处理，不发送到后端
-    if (ch >= ' ' && ch <= '~') {
-      flushBuffer(buffer + ch);
-      outputBuffer += ch; // 批量处理普通字符
-      continue;
-    }
-
-    // Tab键：发送到后端，但前端也显示
-    if (ch === '\t') {
-      flushBuffer(buffer + '    '); // 4个空格代替Tab
-      outputBuffer += '    ';
-      continue;
-    }
-
-    // 其他字符（如方向键等）：发送到后端
-    void invoke('send_terminal_data', { sessionId, data: ch });
-    hasControlChar = true;
-  }
-
-  // 批量写入终端显示（如果没有控制字符需要立即处理）
-  if (!hasControlChar && outputBuffer && term) {
-    term.write(outputBuffer);
-  }
+function handleTerminalInputSingle(sessionId: string, data: string) {
+  const hasControl =
+    data.includes('\r') ||
+    data.includes('\n') ||
+    data.includes('\x03') ||
+    data.includes('\x1b');
+  void sendTerminalDataBuffered(sessionId, data, hasControl);
 }
 
-function handleTerminalInput(sessionId: string, data: string, connection: Connection) {
+export function handleTerminalInput(sessionId: string, data: string, connection: Connection) {
   const enabled = get(broadcastInputEnabled);
-  const selected = get(broadcastSessionIds);
-
   if (!enabled) {
-    handleTerminalInputSingle(sessionId, data, connection);
+    handleTerminalInputSingle(sessionId, data);
     return;
   }
+
+  const selected = get(broadcastSessionIds);
+  const baseTargets = selected.length > 0 ? selected : [sessionId];
+  const targets = baseTargets.includes(sessionId) ? baseTargets : [sessionId, ...baseTargets];
 
   const terminals = get(activeTerminals);
   const connectionBySessionId = new Map(terminals.map(t => [t.sessionId, t.connection] as const));
 
-  const targets = (selected.length > 0 ? selected : [sessionId]).includes(sessionId)
-    ? (selected.length > 0 ? selected : [sessionId])
-    : [sessionId, ...(selected.length > 0 ? selected : [])];
-
   for (const targetSessionId of targets) {
-    const targetConnection = connectionBySessionId.get(targetSessionId);
+    const targetConnection = connectionBySessionId.get(targetSessionId) ?? connection;
     if (!targetConnection) continue;
-    handleTerminalInputSingle(targetSessionId, data, targetConnection);
+    handleTerminalInputSingle(targetSessionId, data);
   }
 }
 
