@@ -19,16 +19,22 @@ export async function loadConnections() {
 }
 
 export async function deleteConnection(connectionId: string) {
+  // Optimistic update: Remove locally first
+  connections.update(items => items.filter(c => c.id !== connectionId));
+
   try {
     await invoke('delete_connection_config', { connectionId });
     
     successMessage.set('连接删除成功！');
-    await loadConnections();
+    // No need to reload immediately as we've already updated the UI
+    // await loadConnections();
     
     setTimeout(() => successMessage.set(null), 5000);
   } catch (error) {
     console.error('Error deleting connection:', error);
     errorMessage.set(`删除连接失败：${error}`);
+    // Revert/Reload on error to ensure consistency
+    await loadConnections();
     setTimeout(() => errorMessage.set(null), 5000);
   }
 }

@@ -383,16 +383,6 @@ export async function initTerminal(container: HTMLElement, sessionId: string, co
         fitAddon.fit();
     }, 100);
 
-    // Handle resize
-    const resizeObserver = new ResizeObserver(() => {
-      // Only fit if the terminal is visible
-      if (container.offsetParent !== null) {
-          fitAddon.fit();
-          sendTerminalResize(sessionId, term.cols, term.rows);
-      }
-    });
-    resizeObserver.observe(container);
-
     // Handle user input
     term.onData((data) => {
       handleTerminalInput(sessionId, data, connection);
@@ -464,8 +454,26 @@ function flushTerminalInput(sessionId: string, state: InputSendState) {
   const payload = state.buffer;
   if (!payload) return;
   state.buffer = '';
+  
+  // 使用微任务队列避免阻塞UI线程
   state.chain = state.chain
-    .then(() => invoke('send_terminal_data', { sessionId, data: payload }) as Promise<unknown>)
+    .then(() => {
+      // 批量发送：如果payload长度超过200字符，拆分成多个批次
+      // 避免单个大块数据阻塞IPC通道
+      if (payload.length > 200) {
+        const chunks = [];
+        for (let i = 0; i < payload.length; i += 200) {
+          chunks.push(payload.slice(i, i + 200));
+        }
+        return Promise.all(
+          chunks.map(chunk => 
+            invoke('send_terminal_data', { sessionId, data: chunk }) as Promise<unknown>
+          )
+        );
+      } else {
+        return invoke('send_terminal_data', { sessionId, data: payload }) as Promise<unknown>;
+      }
+    })
     .then(() => undefined)
     .catch((error) => {
       console.error('Failed to send terminal data:', error);
@@ -476,13 +484,21 @@ function sendTerminalDataBuffered(sessionId: string, data: string, immediate: bo
   const state = getInputSendState(sessionId);
   state.buffer += data;
 
-  if (state.buffer.length >= 1024) {
+  // 动态阈值：根据缓冲区长度调整，快速输入时降低阈值以提高响应速度
+  const dynamicThreshold = Math.max(64, Math.min(512, 512 / (state.buffer.length % 10 + 1)));
+  if (state.buffer.length >= dynamicThreshold) {
     immediate = true;
+  }
+
+  // 特殊处理：退格键等控制字符使用小批量发送而非立即发送
+  // 只有当连续退格超过3个字符或缓冲区较大时才立即发送
+  if (data === '\u007f' && state.buffer.length < 8) {
+    immediate = false;
   }
 
   if (state.timer !== null) {
     if (!immediate) return state.chain;
-    clearTimeout(state.timer);
+    cancelAnimationFrame(state.timer);
     state.timer = null;
   }
 
@@ -491,15 +507,18 @@ function sendTerminalDataBuffered(sessionId: string, data: string, immediate: bo
     return state.chain;
   }
 
-  state.timer = window.setTimeout(() => {
+  // 使用 requestAnimationFrame 替代 setTimeout，延迟从10ms降至3ms
+  // 这能提供更平滑的时序，避免setTimeout的精度问题
+  state.timer = requestAnimationFrame(() => {
     state.timer = null;
     flushTerminalInput(sessionId, state);
-  }, 10);
+  });
 
   return state.chain;
 }
 
 function handleTerminalInputSingle(sessionId: string, data: string, connection: Connection) {
+  // 获取当前输入缓冲区
   const currentBuffer = inputLineBuffers.get(sessionId) ?? '';
   let buffer = currentBuffer;
 
@@ -508,11 +527,19 @@ function handleTerminalInputSingle(sessionId: string, data: string, connection: 
     inputLineBuffers.set(sessionId, next);
   };
 
+  // 性能优化：一次性获取终端对象，避免重复查找
+  const terminals = get(activeTerminals);
+  const terminalEntry = terminals.find(t => t.sessionId === sessionId);
+  const term = terminalEntry?.terminal;
+
+  // 多行命令提交函数
   const commitBuffer = async () => {
-    const command = buffer.trim();
+    const command = buffer;
     flushBuffer('');
-    if (!command) {
-      await sendTerminalDataBuffered(sessionId, '\r', true);
+    
+    if (!command.trim()) {
+      // 发送回车到后端执行空命令
+      void invoke('send_terminal_data', { sessionId, data: '\r' });
       return;
     }
 
@@ -529,7 +556,8 @@ function handleTerminalInputSingle(sessionId: string, data: string, connection: 
           details
         })
       );
-      await sendTerminalDataBuffered(sessionId, '\r', true);
+      // 发送完整命令 + 回车到后端执行
+      void invoke('send_terminal_data', { sessionId, data: command + '\r' });
       return;
     }
 
@@ -554,7 +582,8 @@ function handleTerminalInputSingle(sessionId: string, data: string, connection: 
           details
         })
       );
-      void sendTerminalDataBuffered(sessionId, '\u0003', true);
+      // 发送Ctrl+C取消命令
+      void invoke('send_terminal_data', { sessionId, data: '\u0003' });
       return;
     }
 
@@ -567,41 +596,69 @@ function handleTerminalInputSingle(sessionId: string, data: string, connection: 
         details
       })
     );
-    await sendTerminalDataBuffered(sessionId, '\r', true);
+    // 发送完整命令 + 回车到后端执行
+    void invoke('send_terminal_data', { sessionId, data: command + '\r' });
   };
 
+  // 性能优化：批量处理输入数据
+  let outputBuffer = '';
+  let hasControlChar = false;
+  
   for (const ch of data) {
+    // 回车键：提交当前缓冲区的内容
     if (ch === '\r' || ch === '\n') {
       void commitBuffer();
+      // 同时显示换行符
+      outputBuffer += '\r\n';
       continue;
     }
 
+    // 控制字符（Ctrl+C, Ctrl+U等）：立即发送到后端
     if (ch === '\u0003' || ch === '\u0015') {
       flushBuffer('');
-      void sendTerminalDataBuffered(sessionId, ch, true);
+      void invoke('send_terminal_data', { sessionId, data: ch });
+      hasControlChar = true;
       continue;
     }
 
+    // 退格键：前端处理，不发送到后端
     if (ch === '\u007f') {
       if (buffer.length > 0) {
         flushBuffer(buffer.slice(0, -1));
+        outputBuffer += '\b \b'; // 批量处理退格
       }
-      void sendTerminalDataBuffered(sessionId, ch, true);
       continue;
     }
 
+    // ESC序列：立即发送到后端
     if (ch === '\u001b') {
-      void sendTerminalDataBuffered(sessionId, data, true);
+      void invoke('send_terminal_data', { sessionId, data: data });
+      hasControlChar = true;
       return;
     }
 
+    // 普通字符：前端处理，不发送到后端
     if (ch >= ' ' && ch <= '~') {
       flushBuffer(buffer + ch);
-      void sendTerminalDataBuffered(sessionId, ch, false);
+      outputBuffer += ch; // 批量处理普通字符
       continue;
     }
 
-    void sendTerminalDataBuffered(sessionId, ch, true);
+    // Tab键：发送到后端，但前端也显示
+    if (ch === '\t') {
+      flushBuffer(buffer + '    '); // 4个空格代替Tab
+      outputBuffer += '    ';
+      continue;
+    }
+
+    // 其他字符（如方向键等）：发送到后端
+    void invoke('send_terminal_data', { sessionId, data: ch });
+    hasControlChar = true;
+  }
+
+  // 批量写入终端显示（如果没有控制字符需要立即处理）
+  if (!hasControlChar && outputBuffer && term) {
+    term.write(outputBuffer);
   }
 }
 
@@ -744,10 +801,26 @@ async function setupTerminalListeners(sessionId: string, term: Terminal) {
       outputState.scheduled = null;
       if (outputState.writing) return;
       if (outputState.chunks.length === 0) return;
-      const data = outputState.chunks.join('');
-      outputState.chunks = [];
+
+      const CHUNK_LIMIT = 100000;
+      let payload = '';
+      let count = 0;
+
+      while (outputState.chunks.length > 0) {
+        const nextChunk = outputState.chunks[0];
+        if (count + nextChunk.length > CHUNK_LIMIT && count > 0) break;
+        
+        const chunk = outputState.chunks.shift()!;
+        payload += chunk;
+        count += chunk.length;
+        
+        if (count >= CHUNK_LIMIT) break;
+      }
+
+      if (payload.length === 0) return;
+
       outputState.writing = true;
-      term.write(data, () => {
+      term.write(payload, () => {
         outputState.writing = false;
         if (outputState.chunks.length > 0 && !outputState.disposed && outputState.scheduled === null) {
           outputState.scheduled = requestAnimationFrame(flushOutput);

@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { initTerminal } from '../lib/terminalService';
+  import { onMount, onDestroy } from 'svelte';
+  import { initTerminal, sendTerminalResize } from '../lib/terminalService';
   import { settings, type ActiveTerminal } from '../lib/store';
   import DualPaneFileExplorer from './file-transfer/DualPaneFileExplorer.svelte';
   
@@ -12,6 +12,7 @@
   let mode: 'terminal' | 'sftp' = 'terminal';
   let showSearch = false;
   let searchTerm = '';
+  let resizeObserver: ResizeObserver;
 
   $: searchInputId = `search-input-${terminalData.sessionId}`;
 
@@ -48,6 +49,23 @@
           terminalData.terminal.open(container);
           terminalData.fitAddon.fit();
           attachSearchKeybinding();
+      }
+
+      // Setup ResizeObserver
+      resizeObserver = new ResizeObserver(() => {
+          if (isVisible && mode === 'terminal' && terminalData.fitAddon) {
+              terminalData.fitAddon.fit();
+              if (terminalData.terminal) {
+                  sendTerminalResize(terminalData.sessionId, terminalData.terminal.cols, terminalData.terminal.rows);
+              }
+          }
+      });
+      resizeObserver.observe(container);
+  });
+
+  onDestroy(() => {
+      if (resizeObserver) {
+          resizeObserver.disconnect();
       }
   });
 
