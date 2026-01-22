@@ -457,43 +457,24 @@ function getInputSendState(sessionId: string): InputSendState {
   return created;
 }
 
-function requestAnimationFrameAsync() {
-  return new Promise<void>((resolve) => {
-    requestAnimationFrame(() => resolve());
-  });
-}
-
 async function flushTerminalInput(sessionId: string, state: InputSendState) {
   if (state.sending) return;
   if (!state.buffer) return;
   state.sending = true;
   try {
-    while (state.buffer.length > 0) {
-      const payload = state.buffer;
-      state.buffer = '';
-
-      if (payload.length > 4096) {
-        let sent = 0;
-        while (sent < payload.length) {
-          const chunk = payload.slice(sent, sent + 4096);
-          sent += chunk.length;
-          await invoke('send_terminal_data', { sessionId, data: chunk });
-          if (sent % (4096 * 4) === 0) {
-            await requestAnimationFrameAsync();
-          }
-        }
-      } else {
-        await invoke('send_terminal_data', { sessionId, data: payload });
-      }
-
-      if (state.buffer.length > 0) {
-        await requestAnimationFrameAsync();
-      }
-    }
+    const payload = state.buffer.slice(0, 2048);
+    state.buffer = state.buffer.slice(payload.length);
+    await invoke('send_terminal_data', { sessionId, data: payload });
   } catch (error) {
     console.error('Failed to send terminal data:', error);
   } finally {
     state.sending = false;
+    if (state.buffer.length > 0 && state.timer === null) {
+      state.timer = requestAnimationFrame(() => {
+        state.timer = null;
+        void flushTerminalInput(sessionId, state);
+      });
+    }
   }
 }
 
@@ -533,8 +514,11 @@ function handleTerminalInputSingle(sessionId: string, data: string) {
     data.includes('\r') ||
     data.includes('\n') ||
     data.includes('\x03') ||
-    data.includes('\x1b');
-  void sendTerminalDataBuffered(sessionId, data, hasControl);
+    data.includes('\x1b') ||
+    data.includes('\x7f') ||
+    data.includes('\x08');
+  const shouldImmediate = hasControl || data.length <= 8;
+  void sendTerminalDataBuffered(sessionId, data, shouldImmediate);
 }
 
 export function handleTerminalInput(sessionId: string, data: string, connection: Connection) {

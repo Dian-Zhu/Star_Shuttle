@@ -12,6 +12,7 @@
   import UploadIcon from './icons/UploadIcon.svelte';
   import DownloadIcon from './icons/DownloadIcon.svelte';
   import { importConnections, exportConnections } from '../lib/importExportService';
+  import { confirm } from '@tauri-apps/plugin-dialog';
   import { connectionHistory } from '../lib/store';
   import ClockIcon from './icons/ClockIcon.svelte';
   import ActivityIcon from './icons/ActivityIcon.svelte';
@@ -178,11 +179,11 @@
     connectAndOpen(connection);
   }
 
-  function handleDelete(id: string, event: MouseEvent) {
+  async function handleDelete(id: string, event: MouseEvent) {
     event.stopPropagation();
-    if (confirm('确定要删除此连接吗？')) {
-      deleteConnection(id);
-    }
+    const confirmed = await confirm('确定要删除此连接吗？', { title: '删除连接', kind: 'warning' });
+    if (!confirmed) return;
+    deleteConnection(id);
   }
 
   function handleEdit(connection: any, event: MouseEvent) {

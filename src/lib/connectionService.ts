@@ -89,9 +89,12 @@ export async function saveConnection(connectionData: any): Promise<{ connectionI
     
     // Validate form data
     if (!connectionData.name.trim()) throw new Error('连接名称不能为空');
-    if (!connectionData.host.trim()) throw new Error('主机地址不能为空');
+    const trimmedHost = String(connectionData.host || '').trim();
+    if (!trimmedHost) throw new Error('主机地址不能为空');
     if (connectionData.port < 1 || connectionData.port > 65535) throw new Error('端口号必须在1-65535之间');
-    if (protocol === 'Ssh' && !connectionData.username.trim()) throw new Error('用户名不能为空');
+    const effectiveUsername = protocol === 'Ssh'
+      ? (String(connectionData.username || '').trim() || 'root')
+      : String(connectionData.username || '').trim();
     
     // Construct auth method
     let backendAuthMethod;
@@ -272,9 +275,9 @@ export async function saveConnection(connectionData: any): Promise<{ connectionI
       id: connectionId,
       name: connectionData.name,
       protocol,
-      host: connectionData.host,
+      host: trimmedHost,
       port: Number(connectionData.port),
-      username: connectionData.username,
+      username: effectiveUsername,
       auth_method: backendAuthMethod,
       description: connectionData.description || null,
       tags: tagsArray,

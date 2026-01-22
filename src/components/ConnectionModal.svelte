@@ -4,8 +4,6 @@
   import { connectAndOpen } from '../lib/terminalService';
   import XIcon from './icons/XIcon.svelte';
   import { slide } from 'svelte/transition';
-  import { get } from 'svelte/store';
-  import { onMount } from 'svelte';
 
   // Form state
   let formData = {
@@ -46,6 +44,19 @@
     socksProxyPort: undefined as number | undefined,
   };
 
+  function normalizeTagsValue(value: unknown): string[] {
+    if (Array.isArray(value)) {
+      return value.map(v => String(v).trim()).filter(Boolean);
+    }
+    if (typeof value === 'string') {
+      return value
+        .split(/[,\uFF0C;\uFF1B\n]+/g)
+        .map(tag => tag.trim())
+        .filter(Boolean);
+    }
+    return [];
+  }
+
   function hydrateFromConnection(connection: Connection) {
     formData.id = connection.id;
     formData.name = connection.name ?? '';
@@ -54,7 +65,7 @@
     formData.port = Number(connection.port ?? 22);
     formData.username = connection.username ?? '';
     formData.description = connection.description ?? '';
-    formData.tags = (connection.tags ?? []).join(',');
+    formData.tags = normalizeTagsValue((connection as any).tags).join(',');
 
     formData.localForwards = (connection.local_forwards ?? []).map(f => ({
       local_host: f.local_host,
@@ -229,20 +240,29 @@
     }
   }
 
+  function commitPendingTag() {
+    if (tagInput.trim()) {
+      addTag(tagInput);
+    }
+  }
+
+  function trimHost() {
+    formData.host = (formData.host ?? '').trim();
+  }
+
   // Temporary variables for adding new forwards
   let newLocalForward = { local_host: 'localhost', local_port: 0, remote_host: 'localhost', remote_port: 0 };
   let newRemoteForward = { remote_host: 'localhost', remote_port: 0, local_host: 'localhost', local_port: 0 };
 
   let isSaving = false;
 
-  onMount(() => {
-    const c = get(editingConnection);
-    if (c) {
-      hydrateFromConnection(c);
-    }
-  });
+  $: if ($editingConnection) {
+    hydrateFromConnection($editingConnection);
+  }
 
   async function handleSubmit() {
+    commitPendingTag();
+    trimHost();
     const isEditing = Boolean(formData.id);
     isSaving = true;
     const result = await saveConnection({
@@ -360,6 +380,7 @@
                     type="text"
                     id="host"
                     bind:value={formData.host}
+                    on:blur={trimHost}
                     class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-200 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all font-mono"
                     placeholder="192.168.1.1 或 example.com"
                     required
@@ -389,7 +410,6 @@
                   bind:value={formData.username}
                   class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-200 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all font-mono"
                   placeholder={formData.protocol === 'Ssh' ? 'root' : 'Administrator'}
-                  required={formData.protocol === 'Ssh'}
                 />
               </div>
             </div>
@@ -537,6 +557,7 @@
                       type="text"
                       bind:value={tagInput}
                       on:keydown={handleTagKeydown}
+                      on:blur={commitPendingTag}
                       class="bg-transparent border-none outline-none text-sm min-w-[80px] flex-1 text-slate-900 dark:text-slate-200 placeholder-slate-400"
                       placeholder={currentTags.length === 0 ? "输入标签并回车..." : ""}
                     />
@@ -1156,7 +1177,7 @@
           <span>处理中...</span>
         {:else}
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
-          <span>保存并连接</span>
+          <span>{$editingConnection ? '保存' : '保存并连接'}</span>
         {/if}
       </button>
     </div>
