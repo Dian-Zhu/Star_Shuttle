@@ -32,7 +32,7 @@ type OutputWriteState = {
 type InputSendState = {
   buffer: string;
   timer: number | null;
-  chain: Promise<void>;
+  sending: boolean;
 };
 
 const outputWriteStates = new Map<string, OutputWriteState>();
@@ -451,39 +451,50 @@ function getInputSendState(sessionId: string): InputSendState {
   const created: InputSendState = {
     buffer: '',
     timer: null,
-    chain: Promise.resolve(),
+    sending: false,
   };
   inputSendStates.set(sessionId, created);
   return created;
 }
 
-function flushTerminalInput(sessionId: string, state: InputSendState) {
-  const payload = state.buffer;
-  if (!payload) return;
-  state.buffer = '';
-  
-  // 使用微任务队列避免阻塞UI线程
-  state.chain = state.chain
-    .then(() => {
-      // 批量发送：如果payload长度超过4096字符，拆分成多个批次
-      // 避免单个大块数据阻塞IPC通道
+function requestAnimationFrameAsync() {
+  return new Promise<void>((resolve) => {
+    requestAnimationFrame(() => resolve());
+  });
+}
+
+async function flushTerminalInput(sessionId: string, state: InputSendState) {
+  if (state.sending) return;
+  if (!state.buffer) return;
+  state.sending = true;
+  try {
+    while (state.buffer.length > 0) {
+      const payload = state.buffer;
+      state.buffer = '';
+
       if (payload.length > 4096) {
-        const chunks = [];
-        for (let i = 0; i < payload.length; i += 4096) {
-          chunks.push(payload.slice(i, i + 4096));
+        let sent = 0;
+        while (sent < payload.length) {
+          const chunk = payload.slice(sent, sent + 4096);
+          sent += chunk.length;
+          await invoke('send_terminal_data', { sessionId, data: chunk });
+          if (sent % (4096 * 4) === 0) {
+            await requestAnimationFrameAsync();
+          }
         }
-        // 串行发送大块数据，避免瞬间并发压力过大
-        return chunks.reduce((promise, chunk) => {
-          return promise.then(() => invoke('send_terminal_data', { sessionId, data: chunk }) as Promise<unknown>);
-        }, Promise.resolve() as Promise<unknown>);
       } else {
-        return invoke('send_terminal_data', { sessionId, data: payload }) as Promise<unknown>;
+        await invoke('send_terminal_data', { sessionId, data: payload });
       }
-    })
-    .then(() => undefined)
-    .catch((error) => {
-      console.error('Failed to send terminal data:', error);
-    });
+
+      if (state.buffer.length > 0) {
+        await requestAnimationFrameAsync();
+      }
+    }
+  } catch (error) {
+    console.error('Failed to send terminal data:', error);
+  } finally {
+    state.sending = false;
+  }
 }
 
 function sendTerminalDataBuffered(sessionId: string, data: string, immediate: boolean) {
@@ -497,24 +508,24 @@ function sendTerminalDataBuffered(sessionId: string, data: string, immediate: bo
   }
 
   if (state.timer !== null) {
-    if (!immediate) return state.chain;
+    if (!immediate) return;
     cancelAnimationFrame(state.timer);
     state.timer = null;
   }
 
   if (immediate) {
-    flushTerminalInput(sessionId, state);
-    return state.chain;
+    void flushTerminalInput(sessionId, state);
+    return;
   }
 
   // 使用 requestAnimationFrame 替代 setTimeout，延迟从10ms降至3ms
   // 这能提供更平滑的时序，避免setTimeout的精度问题
   state.timer = requestAnimationFrame(() => {
     state.timer = null;
-    flushTerminalInput(sessionId, state);
+    void flushTerminalInput(sessionId, state);
   });
 
-  return state.chain;
+  return;
 }
 
 function handleTerminalInputSingle(sessionId: string, data: string) {
@@ -611,7 +622,7 @@ export async function closeTerminal(sessionId: string) {
     const inputState = inputSendStates.get(sessionId);
     if (inputState) {
       if (inputState.timer !== null) {
-        clearTimeout(inputState.timer);
+        cancelAnimationFrame(inputState.timer);
       }
       inputSendStates.delete(sessionId);
     }
