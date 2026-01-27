@@ -123,7 +123,7 @@ connectionGroups.subscribe(value => {
 
 // Global Settings Store
 export interface AppSettings {
-  theme: 'dark' | 'light';
+  theme: 'dark' | 'light' | 'system';
   ui: {
     sidebarCollapsed: boolean;
   };
@@ -436,3 +436,40 @@ export const selectedTerminal = derived(
     return $activeTerminals[$selectedTerminalIndex] || null;
   }
 );
+
+export type TerminalUiState = {
+  order: string[];
+  selectedSessionId: string | null;
+};
+
+function loadTerminalUiState(): TerminalUiState {
+  if (typeof localStorage === 'undefined') return { order: [], selectedSessionId: null };
+  try {
+    const rawOrder = localStorage.getItem('terminalUi.order');
+    const order = rawOrder ? (JSON.parse(rawOrder) as string[]) : [];
+    const selected = localStorage.getItem('terminalUi.selectedSessionId');
+    const selectedSessionId = selected ? selected : null;
+    return {
+      order: Array.isArray(order) ? order.map(String).filter(Boolean) : [],
+      selectedSessionId: selectedSessionId ? String(selectedSessionId) : null,
+    };
+  } catch {
+    return { order: [], selectedSessionId: null };
+  }
+}
+
+export function getStoredTerminalUiState(): TerminalUiState {
+  return loadTerminalUiState();
+}
+
+activeTerminals.subscribe(value => {
+  if (typeof localStorage !== 'undefined') {
+    localStorage.setItem('terminalUi.order', JSON.stringify(value.map(v => v.sessionId)));
+  }
+});
+
+selectedTerminal.subscribe(value => {
+  if (typeof localStorage !== 'undefined') {
+    localStorage.setItem('terminalUi.selectedSessionId', value?.sessionId ?? '');
+  }
+});

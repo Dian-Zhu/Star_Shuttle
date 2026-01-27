@@ -128,7 +128,8 @@ impl LogManager {
 
         let _ = fs::create_dir_all(&log_dir);
         let log_file = log_dir.join("app.log");
-
+        println!("Initializing logger at: {:?}", log_file);
+        
         let logs = read_last_lines(&log_file, 1000).unwrap_or_default();
         if let Ok(mut guard) = LOGGER.inner.lock() {
             *guard = Some(LogState {

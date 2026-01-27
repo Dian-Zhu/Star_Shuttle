@@ -469,32 +469,32 @@
                         type="text"
                         id="keyPath"
                         bind:value={formData.keyPath}
-                        class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all font-mono text-sm"
+                        class="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-200 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all font-mono text-sm"
                         placeholder="~/.ssh/id_rsa"
                       />
                     </div>
                     <div>
-                      <label class="block text-sm font-medium text-slate-400 mb-1.5" for="passphrase">密码短语 (可选)</label>
+                      <label class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1.5" for="passphrase">密码短语 (可选)</label>
                       <input
                         type="password"
                         id="passphrase"
                         bind:value={formData.passphrase}
-                        class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all"
+                        class="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-200 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all"
                       />
                       <label class="flex items-center mt-2 cursor-pointer">
-                        <input type="checkbox" bind:checked={formData.savePassphrase} class="rounded border-slate-700 bg-slate-900 text-blue-600 focus:ring-blue-600 ring-offset-slate-900">
-                        <span class="ml-2 text-xs text-slate-400">保存密码短语</span>
+                        <input type="checkbox" bind:checked={formData.savePassphrase} class="rounded border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-blue-600 focus:ring-blue-600 ring-offset-white dark:ring-offset-slate-900">
+                        <span class="ml-2 text-xs text-slate-500 dark:text-slate-400">保存密码短语</span>
                       </label>
                     </div>
                   </div>
                 {:else if formData.authMethod === 'agent'}
                   <div>
-                    <label class="block text-sm font-medium text-slate-400 mb-1.5" for="agentPath">Agent 路径 (可选)</label>
+                    <label class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1.5" for="agentPath">Agent 路径 (可选)</label>
                     <input
                       type="text"
                       id="agentPath"
                       bind:value={formData.agentPath}
-                      class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all font-mono text-sm"
+                      class="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-200 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all font-mono text-sm"
                       placeholder="默认使用系统 SSH_AUTH_SOCK"
                     />
                   </div>
@@ -643,7 +643,7 @@
                           type="text"
                           id="proxyHost"
                           bind:value={formData.proxyHost}
-                          class="w-full bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded px-3 py-2 text-sm text-slate-900 dark:text-slate-200 focus:border-blue-500 outline-none"
+                          class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded px-3 py-2 text-sm text-slate-900 dark:text-slate-200 focus:border-blue-500 outline-none"
                           placeholder="proxy.example.com"
                         />
                       </div>

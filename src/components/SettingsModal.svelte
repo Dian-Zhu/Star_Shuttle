@@ -1,4 +1,5 @@
 <script lang="ts">
+  // Force rebuild.
   import { showSettings, settings, type AppSettings } from '../lib/store';
   import XIcon from './icons/XIcon.svelte';
   import { slide } from 'svelte/transition';
@@ -302,15 +303,15 @@
 </script>
 
 <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" role="button" tabindex="0" on:click|self={handleClose} on:keydown={(e) => e.key === 'Escape' && handleClose()}>
-  <div class="bg-slate-900 border border-slate-800 rounded-xl shadow-2xl w-full max-w-3xl h-[600px] flex overflow-hidden">
+  <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl w-full max-w-3xl h-[600px] flex overflow-hidden text-slate-900 dark:text-slate-200">
     
     <!-- Sidebar -->
-    <div class="w-48 border-r border-slate-800 bg-slate-950/50 p-4 flex flex-col gap-1">
-      <h2 class="text-lg font-semibold text-slate-100 px-3 py-2 mb-2">设置</h2>
+    <div class="w-48 border-r border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/50 p-4 flex flex-col gap-1">
+      <h2 class="text-lg font-semibold text-slate-800 dark:text-slate-100 px-3 py-2 mb-2">设置</h2>
       
       {#each tabs as tab}
         <button
-          class="text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors {activeTab === tab.id ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'}"
+          class="text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors {activeTab === tab.id ? 'bg-blue-600 text-white' : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-800'}"
           on:click={() => activeTab = tab.id}
         >
           {tab.label}
@@ -321,12 +322,12 @@
     <!-- Content -->
     <div class="flex-1 flex flex-col min-w-0">
       <!-- Header -->
-      <div class="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-900">
-        <h3 class="text-base font-medium text-slate-200">
+      <div class="flex items-center justify-between px-6 py-4 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
+        <h3 class="text-base font-medium text-slate-800 dark:text-slate-200">
           {tabs.find(t => t.id === activeTab)?.label}
         </h3>
         <button 
-          class="text-slate-400 hover:text-white transition-colors p-1 rounded-md hover:bg-slate-800"
+          class="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors p-1 rounded-md hover:bg-slate-100 dark:hover:bg-slate-800"
           on:click={handleClose}
         >
           <XIcon class="w-5 h-5" />
@@ -337,14 +338,31 @@
       <div class="flex-1 overflow-y-auto p-6 custom-scrollbar">
         {#if activeTab === 'general'}
           <div class="space-y-6" in:slide={{ duration: 200 }}>
+            <!-- Theme -->
+            <div>
+              <label class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-2" for="theme">
+                主题
+              </label>
+              <select
+                id="theme"
+                value={$settings.theme}
+                on:change={(e) => updateTheme(e.currentTarget.value as any)}
+                class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-200 focus:border-blue-500 outline-none"
+              >
+                <option value="system">跟随系统</option>
+                <option value="dark">深色</option>
+                <option value="light">浅色</option>
+              </select>
+            </div>
+
             <!-- Language -->
             <div>
-              <label class="block text-sm font-medium text-slate-400 mb-2" for="language">
+              <label class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-2" for="language">
                 语言
               </label>
               <select
                 id="language"
-                class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 focus:border-blue-500 outline-none"
+                class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-200 focus:border-blue-500 outline-none"
                 disabled
               >
                 <option value="zh-CN">简体中文</option>
@@ -356,7 +374,7 @@
             <!-- UI -->
             <div class="flex items-center justify-between">
               <div>
-                <label class="block text-sm font-medium text-slate-400" for="sidebarCollapsed">
+                <label class="block text-sm font-medium text-slate-600 dark:text-slate-400" for="sidebarCollapsed">
                   折叠侧边栏
                 </label>
                 <p class="text-xs text-slate-500 mt-0.5">在窗口左侧显示紧凑模式</p>
@@ -369,15 +387,15 @@
                   on:change={(e) => updateUiSetting('sidebarCollapsed', (e.target as HTMLInputElement).checked)}
                   class="sr-only peer"
                 >
-                <div class="w-11 h-6 bg-slate-700 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                <div class="w-11 h-6 bg-slate-200 dark:bg-slate-700 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
               </label>
             </div>
 
             <!-- App Info -->
-            <div class="pt-6 border-t border-slate-800">
+            <div class="pt-6 border-t border-slate-200 dark:border-slate-800">
                <div class="flex justify-between items-center">
                  <div>
-                   <h4 class="text-sm font-medium text-slate-200">关于 Star Shuttle</h4>
+                   <h4 class="text-sm font-medium text-slate-900 dark:text-slate-200">关于 Star Shuttle</h4>
                    <p class="text-xs text-slate-500 mt-1">Version 0.1.0</p>
                  </div>
                  <button class="text-xs text-blue-500 hover:text-blue-400 transition-colors">
@@ -389,12 +407,12 @@
 
         {:else if activeTab === 'shortcuts'}
            <div class="space-y-6" in:slide={{ duration: 200 }}>
-             <h3 class="text-lg font-medium text-slate-200">快捷键设置</h3>
+             <h3 class="text-lg font-medium text-slate-800 dark:text-slate-200">快捷键设置</h3>
              
              <div class="space-y-4">
-                <div class="grid grid-cols-2 gap-4 items-center border-b border-slate-800 pb-4">
+                <div class="grid grid-cols-2 gap-4 items-center border-b border-slate-200 dark:border-slate-800 pb-4">
                   <div>
-                    <span class="block text-sm font-medium text-slate-300">命令面板</span>
+                    <span class="block text-sm font-medium text-slate-700 dark:text-slate-300">命令面板</span>
                     <span class="text-xs text-slate-500">快速访问所有命令</span>
                   </div>
                   <div class="space-y-1">
@@ -402,17 +420,17 @@
                       type="text"
                       value={shortcutDrafts.commandPalette}
                       on:input={(e) => handleShortcutInput('commandPalette', (e.target as HTMLInputElement).value)}
-                      class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 text-sm font-mono focus:border-blue-500 outline-none"
+                      class="bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-200 text-sm font-mono focus:border-blue-500 outline-none w-full"
                     />
                     {#if shortcutErrors.commandPalette}
-                      <div class="text-xs text-red-400">{shortcutErrors.commandPalette}</div>
+                      <div class="text-xs text-red-500 dark:text-red-400">{shortcutErrors.commandPalette}</div>
                     {/if}
                   </div>
                 </div>
 
-                <div class="grid grid-cols-2 gap-4 items-center border-b border-slate-800 pb-4">
+                <div class="grid grid-cols-2 gap-4 items-center border-b border-slate-200 dark:border-slate-800 pb-4">
                   <div>
-                    <span class="block text-sm font-medium text-slate-300">新建连接</span>
+                    <span class="block text-sm font-medium text-slate-700 dark:text-slate-300">新建连接</span>
                     <span class="text-xs text-slate-500">打开新建连接窗口</span>
                   </div>
                   <div class="space-y-1">
@@ -420,17 +438,17 @@
                       type="text"
                       value={shortcutDrafts.newConnection}
                       on:input={(e) => handleShortcutInput('newConnection', (e.target as HTMLInputElement).value)}
-                      class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 text-sm font-mono focus:border-blue-500 outline-none"
+                      class="bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-200 text-sm font-mono focus:border-blue-500 outline-none w-full"
                     />
                     {#if shortcutErrors.newConnection}
-                      <div class="text-xs text-red-400">{shortcutErrors.newConnection}</div>
+                      <div class="text-xs text-red-500 dark:text-red-400">{shortcutErrors.newConnection}</div>
                     {/if}
                   </div>
                 </div>
 
-                <div class="grid grid-cols-2 gap-4 items-center border-b border-slate-800 pb-4">
+                <div class="grid grid-cols-2 gap-4 items-center border-b border-slate-200 dark:border-slate-800 pb-4">
                   <div>
-                    <span class="block text-sm font-medium text-slate-300">设置</span>
+                    <span class="block text-sm font-medium text-slate-700 dark:text-slate-300">设置</span>
                     <span class="text-xs text-slate-500">打开设置窗口</span>
                   </div>
                   <div class="space-y-1">
@@ -438,17 +456,17 @@
                       type="text"
                       value={shortcutDrafts.settings}
                       on:input={(e) => handleShortcutInput('settings', (e.target as HTMLInputElement).value)}
-                      class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 text-sm font-mono focus:border-blue-500 outline-none"
+                      class="bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-200 text-sm font-mono focus:border-blue-500 outline-none w-full"
                     />
                     {#if shortcutErrors.settings}
-                      <div class="text-xs text-red-400">{shortcutErrors.settings}</div>
+                      <div class="text-xs text-red-500 dark:text-red-400">{shortcutErrors.settings}</div>
                     {/if}
                   </div>
                 </div>
 
-                <div class="grid grid-cols-2 gap-4 items-center border-b border-slate-800 pb-4">
+                <div class="grid grid-cols-2 gap-4 items-center border-b border-slate-200 dark:border-slate-800 pb-4">
                   <div>
-                    <span class="block text-sm font-medium text-slate-300">关闭终端</span>
+                    <span class="block text-sm font-medium text-slate-700 dark:text-slate-300">关闭终端</span>
                     <span class="text-xs text-slate-500">关闭当前活动的终端会话</span>
                   </div>
                   <div class="space-y-1">
@@ -456,17 +474,17 @@
                       type="text"
                       value={shortcutDrafts.closeTerminal}
                       on:input={(e) => handleShortcutInput('closeTerminal', (e.target as HTMLInputElement).value)}
-                      class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 text-sm font-mono focus:border-blue-500 outline-none"
+                      class="bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-200 text-sm font-mono focus:border-blue-500 outline-none w-full"
                     />
                     {#if shortcutErrors.closeTerminal}
-                      <div class="text-xs text-red-400">{shortcutErrors.closeTerminal}</div>
+                      <div class="text-xs text-red-500 dark:text-red-400">{shortcutErrors.closeTerminal}</div>
                     {/if}
                   </div>
                 </div>
 
-                <div class="grid grid-cols-2 gap-4 items-center border-b border-slate-800 pb-4">
+                <div class="grid grid-cols-2 gap-4 items-center border-b border-slate-200 dark:border-slate-800 pb-4">
                   <div>
-                    <span class="block text-sm font-medium text-slate-300">上一个标签页</span>
+                    <span class="block text-sm font-medium text-slate-700 dark:text-slate-300">上一个标签页</span>
                     <span class="text-xs text-slate-500">切换到左侧终端标签</span>
                   </div>
                   <div class="space-y-1">
@@ -474,17 +492,17 @@
                       type="text"
                       value={shortcutDrafts.prevTab}
                       on:input={(e) => handleShortcutInput('prevTab', (e.target as HTMLInputElement).value)}
-                      class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 text-sm font-mono focus:border-blue-500 outline-none"
+                      class="bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-200 text-sm font-mono focus:border-blue-500 outline-none w-full"
                     />
                     {#if shortcutErrors.prevTab}
-                      <div class="text-xs text-red-400">{shortcutErrors.prevTab}</div>
+                      <div class="text-xs text-red-500 dark:text-red-400">{shortcutErrors.prevTab}</div>
                     {/if}
                   </div>
                 </div>
 
-                <div class="grid grid-cols-2 gap-4 items-center border-b border-slate-800 pb-4">
+                <div class="grid grid-cols-2 gap-4 items-center border-b border-slate-200 dark:border-slate-800 pb-4">
                   <div>
-                    <span class="block text-sm font-medium text-slate-300">下一个标签页</span>
+                    <span class="block text-sm font-medium text-slate-700 dark:text-slate-300">下一个标签页</span>
                     <span class="text-xs text-slate-500">切换到右侧终端标签</span>
                   </div>
                   <div class="space-y-1">
@@ -492,16 +510,16 @@
                       type="text"
                       value={shortcutDrafts.nextTab}
                       on:input={(e) => handleShortcutInput('nextTab', (e.target as HTMLInputElement).value)}
-                      class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 text-sm font-mono focus:border-blue-500 outline-none"
+                      class="bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-200 text-sm font-mono focus:border-blue-500 outline-none w-full"
                     />
                     {#if shortcutErrors.nextTab}
-                      <div class="text-xs text-red-400">{shortcutErrors.nextTab}</div>
+                      <div class="text-xs text-red-500 dark:text-red-400">{shortcutErrors.nextTab}</div>
                     {/if}
                   </div>
                 </div>
              </div>
              
-             <div class="bg-blue-900/20 border border-blue-900/30 rounded-lg p-3 text-xs text-blue-200">
+             <div class="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-900/30 rounded-lg p-3 text-xs text-blue-800 dark:text-blue-200">
                <p>提示：快捷键格式为 "修饰键+按键"，例如 "Ctrl+Shift+P"。支持 Ctrl, Shift, Alt, Meta (Cmd)。</p>
              </div>
            </div>
@@ -510,7 +528,7 @@
           <div class="space-y-6" in:slide={{ duration: 200 }}>
             <!-- Font Size -->
             <div>
-              <label class="block text-sm font-medium text-slate-400 mb-2" for="fontSize">
+              <label class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-2" for="fontSize">
                 字体大小 ({$settings.terminal.fontSize}px)
               </label>
               <div class="flex items-center gap-4">
@@ -522,7 +540,7 @@
                   step="1"
                   value={$settings.terminal.fontSize}
                   on:input={(e) => updateTerminalSetting('fontSize', Number((e.target as HTMLInputElement).value))}
-                  class="flex-1 h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                  class="flex-1 h-2 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-600"
                 />
                 <input 
                   type="number" 
@@ -531,21 +549,21 @@
                   max="24"
                   step="1"
                   on:input={(e) => updateTerminalSetting('fontSize', Number((e.target as HTMLInputElement).value))}
-                  class="w-16 bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-center text-slate-200 focus:border-blue-500 outline-none"
+                  class="w-16 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-2 py-1 text-center text-slate-900 dark:text-slate-200 focus:border-blue-500 outline-none"
                 />
               </div>
             </div>
 
             <!-- Font Family -->
             <div>
-              <label class="block text-sm font-medium text-slate-400 mb-2" for="fontFamily">
+              <label class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-2" for="fontFamily">
                 字体
               </label>
               <select
                 id="fontFamily"
                 value={$settings.terminal.fontFamily}
                 on:change={(e) => updateTerminalSetting('fontFamily', (e.target as HTMLSelectElement).value)}
-                class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 focus:border-blue-500 outline-none"
+                class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-200 focus:border-blue-500 outline-none"
               >
                 {#each fontFamilies as font}
                   <option value={font.value}>{font.label}</option>
@@ -558,7 +576,7 @@
 
             <div class="flex items-center justify-between">
               <div>
-                <label class="block text-sm font-medium text-slate-400" for="scrollback">
+                <label class="block text-sm font-medium text-slate-600 dark:text-slate-400" for="scrollback">
                   滚动行数
                 </label>
                 <p class="text-xs text-slate-500 mt-0.5">保留的历史输出行数</p>
@@ -571,13 +589,13 @@
                 step="500"
                 value={$settings.terminal.scrollback}
                 on:input={(e) => updateTerminalScrollback((e.target as HTMLInputElement).value)}
-                class="w-24 bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-center text-slate-200 focus:border-blue-500 outline-none"
+                class="w-24 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-2 py-1 text-center text-slate-900 dark:text-slate-200 focus:border-blue-500 outline-none"
               />
             </div>
 
             <div class="flex items-center justify-between">
               <div>
-                <label class="block text-sm font-medium text-slate-400" for="cursorStyle">
+                <label class="block text-sm font-medium text-slate-600 dark:text-slate-400" for="cursorStyle">
                   光标样式
                 </label>
                 <p class="text-xs text-slate-500 mt-0.5">设置光标的形状</p>
@@ -586,7 +604,7 @@
                 id="cursorStyle"
                 value={$settings.terminal.cursorStyle}
                 on:change={(e) => updateTerminalSetting('cursorStyle', (e.target as HTMLSelectElement).value as 'block' | 'underline' | 'bar')}
-                class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 focus:border-blue-500 outline-none"
+                class="bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-200 focus:border-blue-500 outline-none"
               >
                 <option value="block">方块</option>
                 <option value="underline">下划线</option>
@@ -597,7 +615,7 @@
             <!-- Cursor Blink -->
             <div class="flex items-center justify-between">
               <div>
-                <label class="block text-sm font-medium text-slate-400" for="cursorBlink">
+                <label class="block text-sm font-medium text-slate-600 dark:text-slate-400" for="cursorBlink">
                   光标闪烁
                 </label>
                 <p class="text-xs text-slate-500 mt-0.5">启用后光标将闪烁</p>
@@ -610,7 +628,7 @@
                   on:change={(e) => updateTerminalSetting('cursorBlink', (e.target as HTMLInputElement).checked)}
                   class="sr-only peer"
                 >
-                <div class="w-11 h-6 bg-slate-700 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                <div class="w-11 h-6 bg-slate-200 dark:bg-slate-700 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
               </label>
             </div>
           </div>
@@ -620,7 +638,7 @@
             <!-- Auto Reconnect -->
             <div class="flex items-center justify-between">
               <div>
-                <label class="block text-sm font-medium text-slate-400" for="autoReconnect">
+                <label class="block text-sm font-medium text-slate-600 dark:text-slate-400" for="autoReconnect">
                   自动重连
                 </label>
                 <p class="text-xs text-slate-500 mt-0.5">意外断开连接时尝试自动重新连接</p>
@@ -633,7 +651,7 @@
                   on:change={(e) => updateConnectionSetting('autoReconnect', (e.target as HTMLInputElement).checked)}
                   class="sr-only peer"
                 >
-                <div class="w-11 h-6 bg-slate-700 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                <div class="w-11 h-6 bg-slate-200 dark:bg-slate-700 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
               </label>
             </div>
           </div>
@@ -642,31 +660,31 @@
           <div class="space-y-6" in:slide={{ duration: 200 }}>
             <!-- Theme -->
             <div>
-              <span class="block text-sm font-medium text-slate-400 mb-3">主题模式</span>
+              <span class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-3">主题模式</span>
               <div class="grid grid-cols-2 gap-4">
                 <button
-                  class="relative p-4 border rounded-xl flex flex-col items-center gap-2 transition-all {$settings.theme === 'dark' ? 'border-blue-500 bg-blue-500/10' : 'border-slate-700 hover:border-slate-600'}"
+                  class="relative p-4 border rounded-xl flex flex-col items-center gap-2 transition-all {$settings.theme === 'dark' ? 'border-blue-500 bg-blue-50 dark:bg-blue-500/10' : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'}"
                   on:click={() => updateTheme('dark')}
                 >
                   <div class="w-full h-20 bg-slate-900 rounded-lg border border-slate-800 shadow-sm overflow-hidden relative">
                     <div class="absolute left-0 top-0 bottom-0 w-8 bg-slate-800 border-r border-slate-700"></div>
                     <div class="absolute right-2 top-2 w-12 h-2 bg-slate-700 rounded"></div>
                   </div>
-                  <span class="text-sm font-medium text-slate-200">深色模式</span>
+                  <span class="text-sm font-medium text-slate-900 dark:text-slate-200">深色模式</span>
                   {#if $settings.theme === 'dark'}
                     <div class="absolute top-2 right-2 w-2 h-2 bg-blue-500 rounded-full"></div>
                   {/if}
                 </button>
 
                 <button
-                  class="relative p-4 border rounded-xl flex flex-col items-center gap-2 transition-all {$settings.theme === 'light' ? 'border-blue-500 bg-blue-500/10' : 'border-slate-700 hover:border-slate-600'}"
+                  class="relative p-4 border rounded-xl flex flex-col items-center gap-2 transition-all {$settings.theme === 'light' ? 'border-blue-500 bg-blue-50 dark:bg-blue-500/10' : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'}"
                   on:click={() => updateTheme('light')}
                 >
                   <div class="w-full h-20 bg-slate-100 rounded-lg border border-slate-200 shadow-sm overflow-hidden relative">
                     <div class="absolute left-0 top-0 bottom-0 w-8 bg-white border-r border-slate-200"></div>
                     <div class="absolute right-2 top-2 w-12 h-2 bg-slate-200 rounded"></div>
                   </div>
-                  <span class="text-sm font-medium text-slate-200">浅色模式</span>
+                  <span class="text-sm font-medium text-slate-900 dark:text-slate-200">浅色模式</span>
                   {#if $settings.theme === 'light'}
                     <div class="absolute top-2 right-2 w-2 h-2 bg-blue-500 rounded-full"></div>
                   {/if}
@@ -676,32 +694,32 @@
           </div>
         {:else if activeTab === 'security'}
            <div class="space-y-6" in:slide={{ duration: 200 }}>
-             <h3 class="text-lg font-medium text-slate-200">应用安全锁</h3>
-             <p class="text-sm text-slate-400">设置启动密码以保护您的连接信息。</p>
+             <h3 class="text-lg font-medium text-slate-800 dark:text-slate-200">应用安全锁</h3>
+             <p class="text-sm text-slate-600 dark:text-slate-400">设置启动密码以保护您的连接信息。</p>
              
              {#if securityMessage}
-               <div class="p-3 bg-green-500/10 border border-green-500/20 text-green-400 rounded-lg text-sm">
+               <div class="p-3 bg-green-50 dark:bg-green-500/10 border border-green-200 dark:border-green-500/20 text-green-600 dark:text-green-400 rounded-lg text-sm">
                  {securityMessage}
                </div>
              {/if}
              
              {#if securityError}
-               <div class="p-3 bg-red-500/10 border border-red-500/20 text-red-400 rounded-lg text-sm">
+               <div class="p-3 bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 text-red-600 dark:text-red-400 rounded-lg text-sm">
                  {securityError}
                </div>
              {/if}
 
              {#if !hasLock}
                <!-- Setup Lock -->
-               <div class="space-y-4 border border-slate-800 rounded-lg p-4 bg-slate-950/30">
-                 <h4 class="font-medium text-slate-300">设置新密码</h4>
+               <div class="space-y-4 border border-slate-200 dark:border-slate-800 rounded-lg p-4 bg-slate-50 dark:bg-slate-950/30">
+                 <h4 class="font-medium text-slate-700 dark:text-slate-300">设置新密码</h4>
                  <div>
-                   <label class="block text-sm font-medium text-slate-400 mb-1" for="new-pwd">新密码</label>
-                   <input type="password" id="new-pwd" bind:value={newPassword} class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-blue-500 outline-none" />
+                   <label class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1" for="new-pwd">新密码</label>
+                   <input type="password" id="new-pwd" bind:value={newPassword} class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-white focus:border-blue-500 outline-none" />
                  </div>
                  <div>
-                   <label class="block text-sm font-medium text-slate-400 mb-1" for="confirm-pwd">确认密码</label>
-                   <input type="password" id="confirm-pwd" bind:value={confirmPassword} class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-blue-500 outline-none" />
+                   <label class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1" for="confirm-pwd">确认密码</label>
+                   <input type="password" id="confirm-pwd" bind:value={confirmPassword} class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-white focus:border-blue-500 outline-none" />
                  </div>
                  <button class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-medium transition-colors" on:click={handleSetLock}>
                    启用应用锁
@@ -709,81 +727,81 @@
                </div>
              {:else}
                <!-- Auto Lock Settings -->
-               <div class="space-y-4 border border-slate-800 rounded-lg p-4 bg-slate-950/30">
-                 <h4 class="font-medium text-slate-300">自动锁定</h4>
+               <div class="space-y-4 border border-slate-200 dark:border-slate-800 rounded-lg p-4 bg-slate-50 dark:bg-slate-950/30">
+                 <h4 class="font-medium text-slate-700 dark:text-slate-300">自动锁定</h4>
                  
                  <div class="flex items-center justify-between">
                     <div>
-                      <label class="block text-sm font-medium text-slate-400" for="autoLockTime">
+                      <label class="block text-sm font-medium text-slate-600 dark:text-slate-400" for="autoLockTime">
                         自动锁定时间
                       </label>
                       <p class="text-xs text-slate-500 mt-0.5">无操作指定时间后自动锁定 (0 为禁用)</p>
                     </div>
                     <div class="flex items-center gap-2">
-                       <input 
-                         type="number" 
-                         id="autoLockTime"
-                         min="0"
-                         max="120"
-                         value={$settings.security.autoLockMinutes}
-                         on:input={(e) => updateSecuritySetting('autoLockMinutes', Number((e.target as HTMLInputElement).value))}
-                         class="w-16 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-center text-slate-200 focus:border-blue-500 outline-none"
-                       />
-                       <span class="text-sm text-slate-500">分钟</span>
-                    </div>
-                 </div>
+                      <input 
+                        type="number" 
+                        id="autoLockTime"
+                        min="0"
+                        max="120"
+                        value={$settings.security.autoLockMinutes}
+                        on:input={(e) => updateSecuritySetting('autoLockMinutes', Number((e.target as HTMLInputElement).value))}
+                        class="w-16 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-2 py-1 text-center text-slate-900 dark:text-slate-200 focus:border-blue-500 outline-none"
+                      />
+                      <span class="text-sm text-slate-500">分钟</span>
+                   </div>
+                </div>
 
-                 <div class="flex items-center justify-between border-t border-slate-800 pt-4">
-                    <div>
-                      <label class="block text-sm font-medium text-slate-400" for="lockOnBlur">
-                        失去焦点时锁定
-                      </label>
-                      <p class="text-xs text-slate-500 mt-0.5">当切换到其他应用窗口时自动锁定</p>
-                    </div>
-                    <label class="relative inline-flex items-center cursor-pointer">
-                      <input
-                        type="checkbox"
-                        id="lockOnBlur"
-                        checked={$settings.security.lockOnBlur}
-                        on:change={(e) => updateSecuritySetting('lockOnBlur', (e.target as HTMLInputElement).checked)}
-                        class="sr-only peer"
-                      >
-                      <div class="w-11 h-6 bg-slate-700 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
-                    </label>
-                 </div>
-               </div>
+                <div class="flex items-center justify-between border-t border-slate-200 dark:border-slate-800 pt-4">
+                   <div>
+                     <label class="block text-sm font-medium text-slate-600 dark:text-slate-400" for="lockOnBlur">
+                       失去焦点时锁定
+                     </label>
+                     <p class="text-xs text-slate-500 mt-0.5">当切换到其他应用窗口时自动锁定</p>
+                   </div>
+                   <label class="relative inline-flex items-center cursor-pointer">
+                     <input
+                       type="checkbox"
+                       id="lockOnBlur"
+                       checked={$settings.security.lockOnBlur}
+                       on:change={(e) => updateSecuritySetting('lockOnBlur', (e.target as HTMLInputElement).checked)}
+                       class="sr-only peer"
+                     >
+                     <div class="w-11 h-6 bg-slate-200 dark:bg-slate-700 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                   </label>
+                </div>
+              </div>
 
-               <!-- Change/Remove Lock -->
-               <div class="space-y-4 border border-slate-800 rounded-lg p-4 bg-slate-950/30">
-                 <h4 class="font-medium text-slate-300">管理密码</h4>
-                 <div>
-                   <label class="block text-sm font-medium text-slate-400 mb-1" for="curr-pwd">当前密码</label>
-                   <input type="password" id="curr-pwd" bind:value={oldPassword} class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-blue-500 outline-none" />
-                 </div>
-                 
-                 <div class="pt-4 border-t border-slate-800">
-                    <h5 class="text-sm font-medium text-slate-400 mb-3">修改密码（可选）</h5>
-                    <div class="space-y-3">
-                        <div>
-                        <label class="block text-sm font-medium text-slate-500 mb-1" for="new-pwd-change">新密码</label>
-                        <input type="password" id="new-pwd-change" bind:value={newPassword} class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-blue-500 outline-none" />
-                        </div>
-                        <div>
-                        <label class="block text-sm font-medium text-slate-500 mb-1" for="confirm-pwd-change">确认新密码</label>
-                        <input type="password" id="confirm-pwd-change" bind:value={confirmPassword} class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-blue-500 outline-none" />
-                        </div>
-                        <div class="flex gap-3 pt-2">
-                            <button class="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg text-sm font-medium transition-colors" on:click={handleChangeLock}>
-                            更新密码
-                            </button>
-                            <button class="px-4 py-2 bg-red-900/30 hover:bg-red-900/50 text-red-400 border border-red-900/50 rounded-lg text-sm font-medium transition-colors" on:click={handleRemoveLock}>
-                            清除应用锁
-                            </button>
-                        </div>
-                    </div>
-                 </div>
-               </div>
-             {/if}
+              <!-- Change/Remove Lock -->
+              <div class="space-y-4 border border-slate-200 dark:border-slate-800 rounded-lg p-4 bg-slate-50 dark:bg-slate-950/30">
+                <h4 class="font-medium text-slate-700 dark:text-slate-300">管理密码</h4>
+                <div>
+                  <label class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1" for="curr-pwd">当前密码</label>
+                  <input type="password" id="curr-pwd" bind:value={oldPassword} class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-white focus:border-blue-500 outline-none" />
+                </div>
+                
+                <div class="pt-4 border-t border-slate-200 dark:border-slate-800">
+                   <h5 class="text-sm font-medium text-slate-600 dark:text-slate-400 mb-3">修改密码（可选）</h5>
+                   <div class="space-y-3">
+                       <div>
+                       <label class="block text-sm font-medium text-slate-500 mb-1" for="new-pwd-change">新密码</label>
+                       <input type="password" id="new-pwd-change" bind:value={newPassword} class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-white focus:border-blue-500 outline-none" />
+                       </div>
+                       <div>
+                       <label class="block text-sm font-medium text-slate-500 mb-1" for="confirm-pwd-change">确认新密码</label>
+                       <input type="password" id="confirm-pwd-change" bind:value={confirmPassword} class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-white focus:border-blue-500 outline-none" />
+                       </div>
+                       <div class="flex gap-3 pt-2">
+                           <button class="px-4 py-2 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-900 dark:text-white rounded-lg text-sm font-medium transition-colors" on:click={handleChangeLock}>
+                           更新密码
+                           </button>
+                           <button class="px-4 py-2 bg-red-50 dark:bg-red-900/30 hover:bg-red-100 dark:hover:bg-red-900/50 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-900/50 rounded-lg text-sm font-medium transition-colors" on:click={handleRemoveLock}>
+                           清除应用锁
+                           </button>
+                       </div>
+                   </div>
+                </div>
+              </div>
+            {/if}
            </div>
         {/if}
       </div>

@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use thiserror::Error;
@@ -359,9 +359,11 @@ pub trait ConnectionManager {
         height: u16,
     ) -> Result<(), ConnectionError>;
     fn close_terminal(&mut self, session_id: &Uuid) -> Result<(), ConnectionError>;
+    fn get_terminal_sender(&self, session_id: &Uuid) -> Option<mpsc::Sender<TerminalCommand>>;
+    fn log_terminal_data(&self, session_id: &Uuid, data: &[u8], direction: &str);
 
     // Command execution
-    fn exec_command(&mut self, session_id: &Uuid, command: &str)
+    fn exec_command(&self, session_id: &Uuid, command: &str)
         -> Result<String, ConnectionError>;
 }
 
@@ -1114,6 +1116,8 @@ impl ConnectionManager for DefaultConnectionManager {
 
         // Use the persistent runtime to establish SSH connection
         // This ensures the connection task remains alive as long as the manager exists
+        info!("Starting blocking connection task for session {}", session_id);
+        let start_time = std::time::Instant::now();
         let connect_res: Result<(SshConnection, Option<SshConnection>), anyhow::Error> =
             self.runtime.block_on(async {
                 match proxy_type {
@@ -1239,6 +1243,8 @@ impl ConnectionManager for DefaultConnectionManager {
                     }
                 }
             });
+        
+        info!("Blocking connection task finished in {:?}", start_time.elapsed());
 
         match connect_res {
             Ok(ssh_connection) => {
@@ -1618,7 +1624,7 @@ impl ConnectionManager for DefaultConnectionManager {
             info!("Starting Telnet terminal for session: {}", session_id);
 
             let terminal_id = Uuid::new_v4();
-            let (tx, mut rx) = mpsc::channel::<TerminalCommand>(32);
+            let (tx, mut rx) = mpsc::channel::<TerminalCommand>(2048);
 
             let session_id_clone = *session_id;
             let app_clone = app.clone();
@@ -1637,6 +1643,9 @@ impl ConnectionManager for DefaultConnectionManager {
                 let mut buf = vec![0u8; 8192];
                 #[allow(unused_assignments)]
                 let mut exit_reason = "unknown";
+                let mut output_stats_last = tokio::time::Instant::now();
+                let mut output_stats_bytes: usize = 0;
+                let mut output_stats_messages: u64 = 0;
 
                 loop {
                     tokio::select! {
@@ -1664,7 +1673,30 @@ impl ConnectionManager for DefaultConnectionManager {
                                         }
                                         let data_str = String::from_utf8_lossy(&display).to_string();
                                         let event_name = format!("terminal-output-{}", session_id_clone);
+                                        output_stats_bytes += display.len();
+                                        output_stats_messages += 1;
+                                        let emit_start = tokio::time::Instant::now();
                                         let _ = app_clone.emit(&event_name, serde_json::json!({ "data": data_str }));
+                                        let emit_ms = emit_start.elapsed().as_millis();
+                                        if emit_ms > 10 {
+                                            warn!(
+                                                "Terminal output emit slow (telnet) session {}: {}ms",
+                                                session_id_clone, emit_ms
+                                            );
+                                        }
+                                        let elapsed = output_stats_last.elapsed();
+                                        if elapsed.as_millis() >= 1000 {
+                                            info!(
+                                                "Terminal output cadence (telnet) session {}: msgs={}, bytes={}, elapsed_ms={}",
+                                                session_id_clone,
+                                                output_stats_messages,
+                                                output_stats_bytes,
+                                                elapsed.as_millis()
+                                            );
+                                            output_stats_last = tokio::time::Instant::now();
+                                            output_stats_bytes = 0;
+                                            output_stats_messages = 0;
+                                        }
                                     }
                                 }
                                 Err(e) => {
@@ -1743,7 +1775,7 @@ impl ConnectionManager for DefaultConnectionManager {
         let terminal_id = Uuid::new_v4();
 
         // Create command channel
-        let (tx, mut rx) = mpsc::channel::<TerminalCommand>(32);
+        let (tx, mut rx) = mpsc::channel::<TerminalCommand>(2048);
 
         let session_id_clone = *session_id;
         let app_clone = app.clone();
@@ -1809,9 +1841,45 @@ impl ConnectionManager for DefaultConnectionManager {
                     let mut last_activity = tokio::time::Instant::now();
                     #[allow(unused_assignments)]
                     let mut exit_reason = "unknown";
+                    let mut output_stats_last = tokio::time::Instant::now();
+                    let mut output_stats_bytes: usize = 0;
+                    let mut output_stats_messages: u64 = 0;
+
+                    let mut output_buffer = Vec::new();
+                    let mut flush_deadline: Option<tokio::time::Instant> = None;
 
                     loop {
                         tokio::select! {
+                            // Flush buffer if deadline reached
+                            _ = async {
+                                if let Some(deadline) = flush_deadline {
+                                    tokio::time::sleep_until(deadline).await
+                                } else {
+                                    std::future::pending().await
+                                }
+                            }, if flush_deadline.is_some() => {
+                                if !output_buffer.is_empty() {
+                                    if let Ok(mut tracker) = tracker_clone.lock() {
+                                        tracker.log_data(session_id_clone, &output_buffer, "received");
+                                    }
+
+                                    let data_str = String::from_utf8_lossy(&output_buffer).to_string();
+                                    let event_name = format!("terminal-output-{}", session_id_clone);
+                                    output_stats_bytes += output_buffer.len();
+                                    output_stats_messages += 1;
+                                    
+                                    let emit_start = tokio::time::Instant::now();
+                                    let _ = app_clone.emit(&event_name, serde_json::json!({ "data": data_str }));
+                                    let emit_ms = emit_start.elapsed().as_millis();
+                                    if emit_ms > 10 {
+                                        warn!("Terminal output emit slow (ssh) session {}: {}ms", session_id_clone, emit_ms);
+                                    }
+                                    
+                                    output_buffer.clear();
+                                }
+                                flush_deadline = None;
+                            }
+
                             // Handle incoming SSH data
                             msg = channel.wait() => {
                                 match msg {
@@ -1819,12 +1887,46 @@ impl ConnectionManager for DefaultConnectionManager {
                                         // Update last activity time
                                         last_activity = tokio::time::Instant::now();
 
-                                        // Log received data
-                                        tracker_clone.lock().unwrap().log_data(session_id_clone, data, "received");
+                                        output_buffer.extend_from_slice(data);
 
-                                        let data_str = String::from_utf8_lossy(data).to_string();
-                                        let event_name = format!("terminal-output-{}", session_id_clone);
-                                        let _ = app_clone.emit(&event_name, serde_json::json!({ "data": data_str }));
+                                        // Increase buffer threshold to 64KB to reduce IPC frequency and CPU usage
+                                        if output_buffer.len() >= 65536 {
+                                            // Flush immediately
+                                            if let Ok(mut tracker) = tracker_clone.lock() {
+                                                tracker.log_data(session_id_clone, &output_buffer, "received");
+                                            }
+
+                                            let data_str = String::from_utf8_lossy(&output_buffer).to_string();
+                                            let event_name = format!("terminal-output-{}", session_id_clone);
+                                            output_stats_bytes += output_buffer.len();
+                                            output_stats_messages += 1;
+                                            
+                                            let emit_start = tokio::time::Instant::now();
+                                            let _ = app_clone.emit(&event_name, serde_json::json!({ "data": data_str }));
+                                            let emit_ms = emit_start.elapsed().as_millis();
+                                            if emit_ms > 10 {
+                                                warn!("Terminal output emit slow (ssh) session {}: {}ms", session_id_clone, emit_ms);
+                                            }
+                                            
+                                            output_buffer.clear();
+                                            flush_deadline = None;
+                                        } else if flush_deadline.is_none() {
+                                            flush_deadline = Some(tokio::time::Instant::now() + tokio::time::Duration::from_millis(15));
+                                        }
+
+                                        let elapsed = output_stats_last.elapsed();
+                                        if elapsed.as_millis() >= 1000 {
+                                            info!(
+                                                "Terminal output cadence (ssh) session {}: msgs={}, bytes={}, elapsed_ms={}",
+                                                session_id_clone,
+                                                output_stats_messages,
+                                                output_stats_bytes,
+                                                elapsed.as_millis()
+                                            );
+                                            output_stats_last = tokio::time::Instant::now();
+                                            output_stats_bytes = 0;
+                                            output_stats_messages = 0;
+                                        }
                                     },
                                     Some(russh::ChannelMsg::ExitStatus { exit_status }) => {
                                         info!("Terminal exited with status: {}", exit_status);
@@ -1939,8 +2041,18 @@ impl ConnectionManager for DefaultConnectionManager {
 
         // Send data command
         let sender = terminal.sender.clone();
+        let send_start = std::time::Instant::now();
         match sender.blocking_send(TerminalCommand::Data(data_bytes)) {
-            Ok(_) => Ok(()),
+            Ok(_) => {
+                let send_ms = send_start.elapsed().as_millis();
+                if send_ms > 10 {
+                    warn!(
+                        "Terminal input send slow session {}: {}ms",
+                        session_id, send_ms
+                    );
+                }
+                Ok(())
+            },
             Err(e) => {
                 error!("Failed to send terminal data: {}", e);
                 Err(ConnectionError::ConnectionFailed(format!(
@@ -1973,6 +2085,7 @@ impl ConnectionManager for DefaultConnectionManager {
     }
 
     fn close_terminal(&mut self, session_id: &Uuid) -> Result<(), ConnectionError> {
+        println!("[ConnectionManager] close_terminal called for session: {}", session_id);
         // Find and remove terminal for this session
         let terminal_id = self
             .terminals
@@ -1999,8 +2112,23 @@ impl ConnectionManager for DefaultConnectionManager {
         Ok(())
     }
 
+    fn get_terminal_sender(&self, session_id: &Uuid) -> Option<mpsc::Sender<TerminalCommand>> {
+        self.terminals
+            .values()
+            .find(|t| &t.session_id == session_id)
+            .map(|t| t.sender.clone())
+    }
+
+    fn log_terminal_data(&self, session_id: &Uuid, data: &[u8], direction: &str) {
+        if let Ok(mut tracker) = self.tracker.lock() {
+            tracker.log_data(*session_id, data, direction);
+        } else {
+            error!("Failed to lock channel tracker for logging data");
+        }
+    }
+
     fn exec_command(
-        &mut self,
+        &self,
         session_id: &Uuid,
         command: &str,
     ) -> Result<String, ConnectionError> {

@@ -5,13 +5,14 @@ import { FitAddon } from 'xterm-addon-fit';
 import { SearchAddon } from 'xterm-addon-search';
 import { WebglAddon } from 'xterm-addon-webgl';
 import { get } from 'svelte/store';
-import { activeTerminals, selectedTerminalIndex, type Connection, type ActiveTerminal, errorMessage, successMessage, settings, connectionHistory, broadcastInputEnabled, broadcastSessionIds } from './store';
+import { activeTerminals, connections, selectedTerminalIndex, type Connection, type ActiveTerminal, errorMessage, successMessage, settings, connectionHistory, broadcastInputEnabled, broadcastSessionIds, getStoredTerminalUiState } from './store';
 import 'xterm/css/xterm.css';
 
 const IS_DEV = import.meta.env.DEV;
 
 // Output listeners storage
 const outputListeners = new Map<string, () => void>();
+const inputListeners = new Map<string, { dispose: () => void }>();
 
 // Session status monitoring
 const sessionStatusListeners = new Map<string, () => void>();
@@ -382,9 +383,10 @@ export async function initTerminal(container: HTMLElement, sessionId: string, co
     }, 100);
 
     // Handle user input
-    term.onData((data) => {
+    const inputDisposable = term.onData((data) => {
       handleTerminalInput(sessionId, data, connection);
     });
+    inputListeners.set(sessionId, inputDisposable);
 
     // Listen for terminal output from backend
     await setupTerminalListeners(sessionId, term);
@@ -485,6 +487,9 @@ function sendTerminalDataBuffered(sessionId: string, data: string, immediate: bo
   // 设定一个固定的较大阈值，防止缓冲区过大
   // 1024 字符已经相当多了，足以覆盖大多数快速输入场景
   if (state.buffer.length >= 1024) {
+    if (!immediate && IS_DEV) {
+      console.log(`[TermInput] Force immediate due to buffer size: ${state.buffer.length}`);
+    }
     immediate = true;
   }
 
@@ -495,6 +500,9 @@ function sendTerminalDataBuffered(sessionId: string, data: string, immediate: bo
   }
 
   if (immediate) {
+    if (IS_DEV) {
+       console.log(`[TermInput] Immediate flush: len=${data.length}, buf=${state.buffer.length}, data=${JSON.stringify(data)}`);
+    }
     void flushTerminalInput(sessionId, state);
     return;
   }
@@ -514,10 +522,15 @@ function handleTerminalInputSingle(sessionId: string, data: string) {
     data.includes('\r') ||
     data.includes('\n') ||
     data.includes('\x03') ||
-    data.includes('\x1b') ||
-    data.includes('\x7f') ||
-    data.includes('\x08');
-  const shouldImmediate = hasControl || data.length <= 8;
+    data.includes('\x1b');
+
+  const shouldImmediate = hasControl;
+  
+  // Debug log for control character detection
+  if (shouldImmediate && IS_DEV) {
+     console.log(`[TermInput] Control char detected: ${JSON.stringify(data)}`);
+  }
+
   void sendTerminalDataBuffered(sessionId, data, shouldImmediate);
 }
 
@@ -592,7 +605,11 @@ export async function closeTerminal(sessionId: string) {
     const terminal = terminals[index];
     
     // Clean up xterm instance
-    terminal.terminal.dispose();
+    try {
+      (terminal as any).terminal?.dispose?.();
+    } catch (e) {
+      if (IS_DEV) console.warn('Failed to dispose terminal instance:', e);
+    }
 
     const outputState = outputWriteStates.get(sessionId);
     if (outputState) {
@@ -628,6 +645,13 @@ export async function closeTerminal(sessionId: string) {
       outputListeners.delete(sessionId);
     }
 
+    // Clean up input listener
+    const inputListener = inputListeners.get(sessionId);
+    if (inputListener) {
+      inputListener.dispose();
+      inputListeners.delete(sessionId);
+    }
+
     // Clean up status listener
     const statusUnlisten = sessionStatusListeners.get(sessionId);
     if (statusUnlisten) {
@@ -641,6 +665,97 @@ export async function closeTerminal(sessionId: string) {
     } catch (error) {
       console.error('Failed to close terminal:', error);
     }
+  }
+}
+
+export async function closeAllTerminals() {
+  const terminals = get(activeTerminals);
+  const sessionIds = terminals.map(t => t.sessionId);
+  for (const sessionId of sessionIds) {
+    await closeBackendTerminalsBestEffort(sessionId);
+  }
+}
+
+async function closeBackendTerminalsBestEffort(sessionId: string) {
+  for (let i = 0; i < 10; i++) {
+    try {
+      await invoke('close_terminal', { sessionId });
+    } catch {
+      return;
+    }
+  }
+}
+
+type BackendSessionInfo = {
+  id: string;
+  connection_id: string;
+  status: string;
+  terminal_id?: string | null;
+};
+
+export async function restoreActiveSessions() {
+  const current = get(activeTerminals);
+  if (current.length > 0) return;
+
+  let sessions: BackendSessionInfo[] = [];
+  try {
+    sessions = (await invoke('get_all_sessions')) as BackendSessionInfo[];
+  } catch (e) {
+    if (IS_DEV) console.warn('Failed to get_all_sessions:', e);
+    return;
+  }
+
+  const connectionList = get(connections);
+  const connectionById = new Map(connectionList.map(c => [c.id, c] as const));
+
+  const connectedSessions = sessions.filter(s => {
+    const status = String((s as any)?.status ?? '');
+    return status.toLowerCase() === 'connected';
+  });
+
+  const uiState = getStoredTerminalUiState();
+  const orderIndex = new Map(uiState.order.map((id, i) => [id, i] as const));
+
+  const entries = connectedSessions
+    .map(s => {
+      const sessionId = String((s as any)?.id ?? '');
+      const connectionId = String((s as any)?.connection_id ?? '');
+      if (!sessionId || !connectionId) return null;
+      const connection = connectionById.get(connectionId);
+      if (!connection) return null;
+      return {
+        sessionId,
+        connection,
+        terminal: null as any,
+        fitAddon: null as any,
+        searchAddon: null as any,
+      } satisfies ActiveTerminal;
+    })
+    .filter(Boolean) as ActiveTerminal[];
+
+  entries.sort((a, b) => {
+    const ai = orderIndex.get(a.sessionId);
+    const bi = orderIndex.get(b.sessionId);
+    if (ai === undefined && bi === undefined) return a.connection.name.localeCompare(b.connection.name, 'zh-Hans-CN');
+    if (ai === undefined) return 1;
+    if (bi === undefined) return -1;
+    return ai - bi;
+  });
+
+  if (entries.length === 0) return;
+
+  for (const entry of entries) {
+    await closeBackendTerminalsBestEffort(entry.sessionId);
+  }
+
+  activeTerminals.set(entries);
+
+  const selectedSessionId = uiState.selectedSessionId;
+  if (selectedSessionId) {
+    const idx = entries.findIndex(e => e.sessionId === selectedSessionId);
+    selectedTerminalIndex.set(idx >= 0 ? idx : 0);
+  } else {
+    selectedTerminalIndex.set(0);
   }
 }
 
@@ -658,8 +773,10 @@ async function setupTerminalListeners(sessionId: string, term: Terminal) {
       outputState.scheduled = null;
       if (outputState.writing) return;
       if (outputState.chunks.length === 0) return;
-
-      const CHUNK_LIMIT = 100000;
+      
+      // Increase chunk processing limit to 1MB per frame to prevent backlog accumulation
+      // during high-throughput scenarios (e.g. cat large files)
+      const CHUNK_LIMIT = 1024 * 1024; // 1MB
       let payload = '';
       let count = 0;
 
@@ -677,7 +794,14 @@ async function setupTerminalListeners(sessionId: string, term: Terminal) {
       if (payload.length === 0) return;
 
       outputState.writing = true;
+      const writeStart = performance.now();
       term.write(payload, () => {
+        const writeDuration = performance.now() - writeStart;
+        if (writeDuration > 32) {
+          console.warn(
+            `[TermOutput] slow write ${sessionId}: ${writeDuration.toFixed(1)}ms, payload=${payload.length}, pending=${outputState.chunks.length}`,
+          );
+        }
         outputState.writing = false;
         if (outputState.chunks.length > 0 && !outputState.disposed && outputState.scheduled === null) {
           outputState.scheduled = requestAnimationFrame(flushOutput);
@@ -827,6 +951,12 @@ export async function reconnectTerminal(oldSessionId: string) {
       outputListeners.delete(oldSessionId);
   }
 
+  const oldInputListener = inputListeners.get(oldSessionId);
+  if (oldInputListener) {
+      oldInputListener.dispose();
+      inputListeners.delete(oldSessionId);
+  }
+
   term.write('\r\n\x1b[33mReconnecting...\x1b[0m\r\n');
 
   try {
@@ -855,6 +985,12 @@ export async function reconnectTerminal(oldSessionId: string) {
       
       // Setup new listeners
       await setupTerminalListeners(newSessionId, term);
+
+      // Setup new input listener
+      const newInputListener = term.onData((data) => {
+        handleTerminalInput(newSessionId, data, terminalEntry.connection);
+      });
+      inputListeners.set(newSessionId, newInputListener);
       
       term.write('\r\n\x1b[32mReconnected!\x1b[0m\r\n');
       successMessage.set(`已重连: ${terminalEntry.connection.name}`);

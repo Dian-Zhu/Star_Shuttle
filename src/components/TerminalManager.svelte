@@ -80,26 +80,30 @@
 
     const sessionId = terminal.sessionId;
     try {
-      const [netOut, cpuOut, memOut] = await Promise.all([
-        invoke('exec_command', { sessionId, command: 'cat /proc/net/dev' }),
-        invoke('exec_command', { sessionId, command: 'top -bn1 | grep "Cpu(s)"' }),
-        invoke('exec_command', { sessionId, command: 'free -m' }),
-      ]);
-
-      const now = performance.now();
-      const { rx, tx } = parseNetBytes(netOut as string);
-      const last = lastNetSampleBySession.get(sessionId);
-      if (last) {
-        const dt = (now - last.time) / 1000;
-        if (dt > 0) {
-          const delta = Math.max(0, (rx - last.rx) + (tx - last.tx));
-          netSpeedBps = delta / dt;
+      // Combine commands to reduce overhead
+      // cat /proc/net/dev; echo "---"; top -bn1 | grep "Cpu(s)"; echo "---"; free -m
+      const combinedCommand = 'cat /proc/net/dev; echo "---STAR_SHUTTLE_SPLIT---"; top -bn1 | grep "Cpu(s)"; echo "---STAR_SHUTTLE_SPLIT---"; free -m';
+      const output = await invoke('exec_command', { sessionId, command: combinedCommand }) as string;
+      
+      const parts = output.split('---STAR_SHUTTLE_SPLIT---');
+      if (parts.length >= 3) {
+        const [netOut, cpuOut, memOut] = parts;
+        
+        const now = performance.now();
+        const { rx, tx } = parseNetBytes(netOut);
+        const last = lastNetSampleBySession.get(sessionId);
+        if (last) {
+          const dt = (now - last.time) / 1000;
+          if (dt > 0) {
+            const delta = Math.max(0, (rx - last.rx) + (tx - last.tx));
+            netSpeedBps = delta / dt;
+          }
         }
-      }
-      lastNetSampleBySession.set(sessionId, { rx, tx, time: now });
+        lastNetSampleBySession.set(sessionId, { rx, tx, time: now });
 
-      parseCpuUsage(cpuOut as string);
-      parseMemPercent(memOut as string);
+        parseCpuUsage(cpuOut);
+        parseMemPercent(memOut);
+      }
     } catch {
       netSpeedBps = 0;
       cpuUsage = 0;
@@ -230,25 +234,25 @@
   </div>
 
   <!-- Status Bar -->
-  <div class="flex items-center justify-between px-4 py-1.5 bg-slate-800/80 dark:bg-slate-900/90 border-t border-slate-700/50 dark:border-slate-800/50 text-xs text-slate-300 dark:text-slate-400">
+  <div class="flex items-center justify-between px-4 py-1.5 bg-white/90 dark:bg-slate-900/90 border-t border-slate-200 dark:border-slate-800/50 text-xs text-slate-600 dark:text-slate-400">
     <div class="flex items-center gap-4">
       <div class="flex items-center gap-1">
-        <svg class="w-3.5 h-3.5 text-blue-400" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">
+        <svg class="w-3.5 h-3.5 text-blue-500 dark:text-blue-400" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">
           <path fill-rule="evenodd" d="M12.293 5.293a1 1 0 011.414 0l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414-1.414L14.586 11H3a1 1 0 110-2h11.586l-2.293-2.293a1 1 0 010-1.414z" clip-rule="evenodd"></path>
         </svg>
         <span>实时流量:</span>
-        <span class="font-mono font-medium text-green-300">{formatSpeed(netSpeedBps)}</span>
+        <span class="font-mono font-medium text-green-600 dark:text-green-300">{formatSpeed(netSpeedBps)}</span>
         <span class="ml-2 text-slate-500">CPU</span>
-        <span class="font-mono font-medium text-slate-200">{cpuUsage}%</span>
+        <span class="font-mono font-medium text-slate-800 dark:text-slate-200">{cpuUsage}%</span>
         <span class="ml-2 text-slate-500">MEM</span>
-        <span class="font-mono font-medium text-slate-200">{memPercent}%</span>
+        <span class="font-mono font-medium text-slate-800 dark:text-slate-200">{memPercent}%</span>
       </div>
-      <div class="text-slate-500">|</div>
+      <div class="text-slate-300 dark:text-slate-700">|</div>
       <div class="text-slate-500">
-        活动传输: <span class="text-slate-300">{$activeTerminals.length}</span>
+        活动传输: <span class="text-slate-700 dark:text-slate-300">{$activeTerminals.length}</span>
       </div>
     </div>
-    <div class="text-slate-500 text-xs">
+    <div class="text-slate-400 dark:text-slate-500 text-xs">
       {currentTime}
     </div>
   </div>

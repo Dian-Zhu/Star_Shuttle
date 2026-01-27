@@ -112,13 +112,13 @@
   }
 </script>
 
-<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" role="button" tabindex="0" on:click|self={handleClose} on:keydown={(e) => e.key === 'Escape' && handleClose()}>
-  <div class="bg-slate-900 border border-slate-800 rounded-xl shadow-2xl w-full max-w-3xl h-[600px] flex flex-col overflow-hidden">
+<div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/20 dark:bg-black/50 backdrop-blur-sm p-4" role="button" tabindex="0" on:click|self={handleClose} on:keydown={(e) => e.key === 'Escape' && handleClose()}>
+  <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl w-full max-w-3xl h-[600px] flex flex-col overflow-hidden">
     <!-- Header -->
-    <div class="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-900">
-      <h2 class="text-lg font-semibold text-slate-100">高级功能</h2>
+    <div class="flex items-center justify-between px-6 py-4 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900">
+      <h2 class="text-lg font-semibold text-slate-800 dark:text-slate-100">高级功能</h2>
       <button 
-        class="text-slate-400 hover:text-white transition-colors p-1 rounded-md hover:bg-slate-800"
+        class="text-slate-400 hover:text-slate-600 dark:hover:text-white transition-colors p-1 rounded-md hover:bg-slate-200 dark:hover:bg-slate-800"
         on:click={handleClose}
       >
         <XIcon class="w-5 h-5" />
@@ -126,16 +126,16 @@
     </div>
 
     <!-- Content -->
-    <div class="flex-1 flex flex-col overflow-hidden bg-slate-950/50">
-      <div class="px-6 pt-4 flex items-center gap-2 border-b border-slate-800">
+    <div class="flex-1 flex flex-col overflow-hidden bg-slate-50 dark:bg-slate-950/50">
+      <div class="px-6 pt-4 flex items-center gap-2 border-b border-slate-200 dark:border-slate-800">
         <button
-          class="px-3 py-2 text-sm rounded-t-lg border border-b-0 transition-colors {activeTab === 'logs' ? 'bg-slate-900 border-slate-800 text-slate-100' : 'bg-transparent border-transparent text-slate-400 hover:text-slate-200'}"
+          class="px-3 py-2 text-sm rounded-t-lg border border-b-0 transition-colors {activeTab === 'logs' ? 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-blue-600 dark:text-slate-100 font-medium' : 'bg-transparent border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'}"
           on:click={() => (activeTab = 'logs')}
         >
           日志
         </button>
         <button
-          class="px-3 py-2 text-sm rounded-t-lg border border-b-0 transition-colors {activeTab === 'tunnels' ? 'bg-slate-900 border-slate-800 text-slate-100' : 'bg-transparent border-transparent text-slate-400 hover:text-slate-200'}"
+          class="px-3 py-2 text-sm rounded-t-lg border border-b-0 transition-colors {activeTab === 'tunnels' ? 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-blue-600 dark:text-slate-100 font-medium' : 'bg-transparent border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'}"
           on:click={() => (activeTab = 'tunnels')}
         >
           隧道
@@ -143,29 +143,29 @@
       </div>
 
       {#if activeTab === 'logs'}
-        <div class="px-6 py-4 border-b border-slate-800 flex items-center gap-3">
+        <div class="px-6 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center gap-3">
           <input
             type="text"
             bind:value={filter}
             placeholder="过滤（level/module/message）..."
-            class="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-blue-500/60 focus:ring-1 focus:ring-blue-500/30"
+            class="flex-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-800 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:border-blue-500/60 focus:ring-1 focus:ring-blue-500/30"
           />
           <button
-            class="px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm transition-colors"
+            class="px-3 py-2 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-sm transition-colors"
             on:click={refreshLogs}
             disabled={loading}
           >
             刷新
           </button>
           <button
-            class="px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm transition-colors"
+            class="px-3 py-2 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-sm transition-colors"
             on:click={exportLogs}
             disabled={loading || rawLogs.length === 0}
           >
             导出
           </button>
           <button
-            class="px-3 py-2 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-300 text-sm transition-colors border border-red-500/20"
+            class="px-3 py-2 rounded-lg bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/30 text-red-600 dark:text-red-300 text-sm transition-colors border border-red-200 dark:border-red-500/20"
             on:click={clearLogs}
             disabled={loading || rawLogs.length === 0}
           >
@@ -173,7 +173,7 @@
           </button>
         </div>
 
-        <div class="px-6 py-3 text-xs text-slate-500 flex items-center justify-between gap-4">
+        <div class="px-6 py-3 text-xs text-slate-500 dark:text-slate-400 flex items-center justify-between gap-4">
           <div class="truncate">
             {#if logFilePath}
               文件：{logFilePath}
@@ -214,20 +214,20 @@
           {:else}
             <div class="space-y-2">
               {#each filteredLogs as l (l.raw)}
-                <div class="bg-slate-900 border border-slate-800 rounded-lg p-3">
+                <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-3">
                   <div class="flex items-center justify-between gap-3">
-                    <div class="text-xs text-slate-400 font-mono truncate">
+                    <div class="text-xs text-slate-500 dark:text-slate-400 font-mono truncate">
                       {l.timestamp ?? 'unknown'}
                       {#if l.level} [{l.level}]{/if}
                       {#if l.module} [{l.module}]{/if}
                     </div>
                     {#if l.file}
-                      <div class="text-xs text-slate-600 font-mono truncate">
+                      <div class="text-xs text-slate-400 dark:text-slate-500 font-mono truncate">
                         {l.file}{#if typeof l.line === 'number'}:{l.line}{/if}
                       </div>
                     {/if}
                   </div>
-                  <div class="mt-2 text-sm text-slate-200 whitespace-pre-wrap break-words">
+                  <div class="mt-2 text-sm text-slate-700 dark:text-slate-200 whitespace-pre-wrap break-words">
                     {l.message ?? l.raw}
                   </div>
                 </div>
@@ -239,7 +239,7 @@
         <div class="flex-1 p-6 flex items-center justify-center text-slate-500">
           <div class="text-center">
             <svg class="w-16 h-16 mx-auto mb-4 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.384-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z"></path></svg>
-            <h3 class="text-lg font-medium text-slate-300 mb-2">隧道管理开发中</h3>
+            <h3 class="text-lg font-medium text-slate-600 dark:text-slate-300 mb-2">隧道管理开发中</h3>
             <p class="max-w-md mx-auto">端口转发、跳板机与代理能力将在此处提供。</p>
           </div>
         </div>

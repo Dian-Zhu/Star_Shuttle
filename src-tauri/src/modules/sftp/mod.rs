@@ -162,31 +162,46 @@ impl SftpManager {
         if let Some(session) = sessions.get(&session_id) {
             return Ok(session.clone());
         }
+        
+        println!("[SFTP] get_session: Creating new SFTP session for {}", session_id);
 
         // Create new
         let ssh_conn = {
             let cm = self.connection_manager.read().map_err(|e| e.to_string())?;
             cm.get_ssh_connection(&session_id)
-                .ok_or("SSH session not found")?
+                .ok_or_else(|| {
+                    println!("[SFTP] get_session failed: SSH session not found for {}", session_id);
+                    "SSH session not found".to_string()
+                })?
         };
 
         let handle = ssh_conn.handle.lock().await;
         let channel = handle
             .channel_open_session()
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| {
+                 println!("[SFTP] get_session failed: channel open error: {}", e);
+                 e.to_string()
+            })?;
         channel
             .request_subsystem(true, "sftp")
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| {
+                 println!("[SFTP] get_session failed: subsystem request error: {}", e);
+                 e.to_string()
+            })?;
 
         let sftp = SftpSession::new(channel.into_stream())
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| {
+                 println!("[SFTP] get_session failed: sftp init error: {}", e);
+                 e.to_string()
+            })?;
 
         let sftp_arc = Arc::new(Mutex::new(sftp));
         sessions.insert(session_id, sftp_arc.clone());
 
+        println!("[SFTP] get_session: Successfully created SFTP session for {}", session_id);
         Ok(sftp_arc)
     }
 
@@ -550,7 +565,17 @@ pub async fn sftp_ls(
     session_id: Uuid,
     path: String,
 ) -> Result<Vec<FileEntry>, String> {
-    state.list_directory(session_id, path).await
+    println!("[SFTP] sftp_ls called for session: {}, path: {}", session_id, path);
+    match state.list_directory(session_id, path).await {
+        Ok(entries) => {
+            println!("[SFTP] sftp_ls success, entries: {}", entries.len());
+            Ok(entries)
+        },
+        Err(e) => {
+            println!("[SFTP] sftp_ls failed: {}", e);
+            Err(e)
+        }
+    }
 }
 
 fn header_string(request: &Request, key: &str) -> Result<String, String> {

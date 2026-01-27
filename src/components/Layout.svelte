@@ -10,7 +10,8 @@
   import AppLockOverlay from './AppLockOverlay.svelte';
   import AdvancedModal from './AdvancedModal.svelte';
   import { showConnectionForm, editingConnection, showSettings, successMessage, errorMessage, settings, isSidebarCollapsed, activeTerminals, selectedTerminalIndex, showCommandPalette, isLocked, showAdvancedModal } from '../lib/store';
-  import { closeTerminal } from '../lib/terminalService';
+  import { closeAllTerminals, closeTerminal, restoreActiveSessions } from '../lib/terminalService';
+  import { loadConnections } from '../lib/connectionService';
   import { fade, fly } from 'svelte/transition';
 
   let isCheckingLock = true;
@@ -69,7 +70,28 @@
     }
   }
 
+  // Apply theme class to document element
+  function updateTheme() {
+    const theme = $settings.theme;
+    const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    
+    if (theme === 'dark' || (theme === 'system' && systemDark)) {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  }
+
   onMount(() => {
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const handleSystemThemeChange = () => {
+      if ($settings.theme === 'system') {
+        updateTheme();
+      }
+    };
+    
+    mediaQuery.addEventListener('change', handleSystemThemeChange);
+
     (async () => {
       try {
         const enabled = await invoke('is_app_lock_enabled');
@@ -96,24 +118,39 @@
       }
     })();
 
+    (async () => {
+      try {
+        await loadConnections();
+        await restoreActiveSessions();
+      } catch (e) {
+        console.error('Failed to restore sessions:', e);
+      }
+    })();
+
     // Event listeners for auto lock
     window.addEventListener('blur', handleWindowBlur);
     window.addEventListener('mousemove', resetIdleTimer);
     window.addEventListener('keydown', resetIdleTimer);
     window.addEventListener('click', resetIdleTimer);
+    window.addEventListener('beforeunload', handleBeforeUnload);
     
     resetIdleTimer();
+    updateTheme(); // Initial theme application
 
     return () => {
+        mediaQuery.removeEventListener('change', handleSystemThemeChange);
         window.removeEventListener('blur', handleWindowBlur);
         window.removeEventListener('mousemove', resetIdleTimer);
         window.removeEventListener('keydown', resetIdleTimer);
         window.removeEventListener('click', resetIdleTimer);
+        window.removeEventListener('beforeunload', handleBeforeUnload);
         if (idleTimer) clearTimeout(idleTimer);
         if (unlistenKeyboardInteractive) unlistenKeyboardInteractive();
     };
   });
 
+  // React to theme setting changes
+  $: $settings.theme, updateTheme();
 
   async function handleWindowBlur() {
     // Only lock if enabled and not already locked
@@ -153,13 +190,8 @@
   $: $settings.security.autoLockMinutes, resetIdleTimer();
   $: $isLocked, resetIdleTimer();
 
-  // Apply theme class to document element
-  $: {
-    if ($settings.theme === 'dark') {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-    }
+  function handleBeforeUnload() {
+    void closeAllTerminals();
   }
 
   function checkShortcut(event: KeyboardEvent, shortcut: string): boolean {
@@ -321,7 +353,7 @@
 {/if}
 
 {#if keyboardInteractiveActive}
-  <div class="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm">
+  <div class="fixed inset-0 z-[60] flex items-center justify-center bg-slate-500/50 dark:bg-slate-900/60 backdrop-blur-sm">
     <div class="w-full max-w-lg rounded-xl border border-slate-200/50 dark:border-slate-800/50 bg-white dark:bg-slate-950 shadow-2xl p-6">
       <div class="flex items-start justify-between gap-4">
         <div class="min-w-0">

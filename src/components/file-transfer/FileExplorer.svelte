@@ -25,12 +25,15 @@
   let editorError: string | null = null;
 
   async function loadFiles(path: string) {
+    console.log('[FileExplorer] loadFiles called', { sessionId, path });
     loading = true;
     error = null;
     selectedFile = null;
     contextMenu.show = false;
     try {
+      console.log('[FileExplorer] Calling sftpService.listDirectory...');
       files = await sftpService.listDirectory(sessionId, path);
+      console.log('[FileExplorer] listDirectory success', files.length);
       currentPath = path;
       
       // Sort: Directories first, then files
@@ -383,7 +386,7 @@
 </script>
 
 <div 
-  class="flex flex-col h-full bg-gray-900 text-white relative {isDragging ? 'border-2 border-blue-500 bg-gray-800' : ''}" 
+  class="flex flex-col h-full bg-white dark:bg-gray-900 text-slate-900 dark:text-white relative {isDragging ? 'border-2 border-blue-500 bg-slate-50 dark:bg-gray-800' : ''}" 
   on:contextmenu|preventDefault={(e) => handleContextMenu(e, null)} 
   role="presentation"
   on:dragover|preventDefault={handleDragOver}
@@ -394,12 +397,12 @@
 >
   {#if editorOpen}
     <div class="fixed inset-0 z-50 flex items-center justify-center" role="presentation">
-      <button type="button" class="absolute inset-0 bg-black/60" on:click={closeEditor} aria-label="关闭编辑器"></button>
-      <div class="relative w-[min(900px,95vw)] h-[min(700px,90vh)] bg-gray-900 border border-gray-700 rounded-lg shadow-xl flex flex-col" role="dialog" aria-modal="true">
-        <div class="flex items-center justify-between px-4 py-2 border-b border-gray-700 gap-3">
-          <div class="text-sm text-gray-200 truncate flex-1">{editorFile?.path}</div>
+      <button type="button" class="absolute inset-0 bg-slate-900/60 dark:bg-black/60" on:click={closeEditor} aria-label="关闭编辑器"></button>
+      <div class="relative w-[min(900px,95vw)] h-[min(700px,90vh)] bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-700 rounded-lg shadow-xl flex flex-col" role="dialog" aria-modal="true">
+        <div class="flex items-center justify-between px-4 py-2 border-b border-slate-200 dark:border-gray-700 gap-3">
+          <div class="text-sm text-slate-700 dark:text-gray-200 truncate flex-1">{editorFile?.path}</div>
           <div class="flex items-center gap-2 flex-none">
-            <button class="px-3 py-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-200 disabled:opacity-60" on:click={closeEditor} disabled={editorSaving}>
+            <button class="px-3 py-1 rounded bg-slate-100 dark:bg-gray-800 hover:bg-slate-200 dark:hover:bg-gray-700 text-slate-700 dark:text-gray-200 disabled:opacity-60" on:click={closeEditor} disabled={editorSaving}>
               关闭
             </button>
             <button class="px-3 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-60" on:click={saveEditor} disabled={editorSaving || editorLoading || !editorFile}>
@@ -408,30 +411,30 @@
           </div>
         </div>
         {#if editorLoading}
-          <div class="flex-1 flex items-center justify-center text-gray-300">加载中…</div>
+          <div class="flex-1 flex items-center justify-center text-slate-500 dark:text-gray-300">加载中…</div>
         {:else}
-          <textarea class="flex-1 w-full bg-gray-950 text-gray-100 font-mono text-sm p-3 outline-none resize-none" bind:value={editorContent} disabled={editorSaving}></textarea>
+          <textarea class="flex-1 w-full bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-gray-100 font-mono text-sm p-3 outline-none resize-none" bind:value={editorContent} disabled={editorSaving}></textarea>
         {/if}
         {#if editorError}
-          <div class="px-4 py-2 border-t border-gray-700 text-red-400 text-sm">{editorError}</div>
+          <div class="px-4 py-2 border-t border-slate-200 dark:border-gray-700 text-red-600 dark:text-red-400 text-sm">{editorError}</div>
         {/if}
       </div>
     </div>
   {/if}
   {#if isDragging}
     <div class="absolute inset-0 bg-blue-500/20 flex items-center justify-center z-50 pointer-events-none">
-      <div class="text-2xl font-bold text-blue-200">Drop files to upload</div>
+      <div class="text-2xl font-bold text-blue-600 dark:text-blue-200">Drop files to upload</div>
     </div>
   {/if}
   {#if isCrossDragging}
     <div class="absolute inset-0 bg-blue-500/10 flex items-center justify-center z-40 pointer-events-none">
-      <div class="text-lg font-semibold text-blue-200">拖拽到此处上传到远程</div>
+      <div class="text-lg font-semibold text-blue-600 dark:text-blue-200">拖拽到此处上传到远程</div>
     </div>
   {/if}
   <!-- Toolbar -->
-  <div class="flex items-center p-2 border-b border-gray-700 space-x-2">
+  <div class="flex items-center p-2 border-b border-slate-200 dark:border-gray-700 space-x-2">
     <button 
-        class="p-1 hover:bg-gray-700 rounded text-gray-300" 
+        class="p-1 hover:bg-slate-200 dark:hover:bg-gray-700 rounded text-slate-600 dark:text-gray-300" 
         on:click={handleUp} 
         title="Up"
     >
@@ -440,7 +443,7 @@
       </svg>
     </button>
     <button 
-        class="p-1 hover:bg-gray-700 rounded text-gray-300" 
+        class="p-1 hover:bg-slate-200 dark:hover:bg-gray-700 rounded text-slate-600 dark:text-gray-300" 
         on:click={() => loadFiles(currentPath)} 
         title="Refresh"
     >
@@ -449,7 +452,7 @@
       </svg>
     </button>
     <button 
-        class="p-1 hover:bg-gray-700 rounded text-gray-300" 
+        class="p-1 hover:bg-slate-200 dark:hover:bg-gray-700 rounded text-slate-600 dark:text-gray-300" 
         on:click={handleCreateFolder} 
         title="New Folder"
     >
@@ -459,7 +462,7 @@
       </svg>
     </button>
     <button 
-        class="p-1 hover:bg-gray-700 rounded text-gray-300" 
+        class="p-1 hover:bg-slate-200 dark:hover:bg-gray-700 rounded text-slate-600 dark:text-gray-300" 
         on:click={() => fileInput.click()} 
         title="Upload File"
     >
@@ -475,7 +478,7 @@
       style="display: none;" 
     />
     <input 
-      class="flex-1 bg-gray-800 border border-gray-600 rounded px-2 py-1 text-sm text-gray-200"
+      class="flex-1 bg-white dark:bg-gray-800 border border-slate-300 dark:border-gray-600 rounded px-2 py-1 text-sm text-slate-900 dark:text-gray-200"
       value={currentPath}
       on:change={(e) => loadFiles(e.currentTarget.value)}
     />
@@ -484,30 +487,30 @@
   <!-- File List -->
   <div class="flex-1 overflow-auto" role="grid">
     {#if loading}
-      <div class="absolute inset-0 top-10 bg-gray-900/50 flex items-center justify-center z-10">
-        <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-white"></div>
+      <div class="absolute inset-0 top-10 bg-white/50 dark:bg-gray-900/50 flex items-center justify-center z-10">
+        <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 dark:border-white"></div>
       </div>
     {/if}
 
     {#if error}
-      <div class="p-4 text-red-400 bg-red-900/20 m-2 rounded">
+      <div class="p-4 text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 m-2 rounded">
         Error: {error}
       </div>
     {/if}
 
     <table class="w-full text-sm text-left border-collapse">
-      <thead class="bg-gray-800 sticky top-0 text-gray-400 text-xs uppercase font-semibold">
+      <thead class="bg-slate-100 dark:bg-gray-800 sticky top-0 text-slate-500 dark:text-gray-400 text-xs uppercase font-semibold">
         <tr>
-          <th class="p-2 border-b border-gray-700">Name</th>
-          <th class="p-2 border-b border-gray-700 w-24">Size</th>
-          <th class="p-2 border-b border-gray-700 w-40">Modified</th>
-          <th class="p-2 border-b border-gray-700 w-20">Perms</th>
+          <th class="p-2 border-b border-slate-200 dark:border-gray-700">Name</th>
+          <th class="p-2 border-b border-slate-200 dark:border-gray-700 w-24">Size</th>
+          <th class="p-2 border-b border-slate-200 dark:border-gray-700 w-40">Modified</th>
+          <th class="p-2 border-b border-slate-200 dark:border-gray-700 w-20">Perms</th>
         </tr>
       </thead>
       <tbody>
         {#each files as file}
           <tr 
-            class="cursor-pointer border-b border-gray-800 transition-colors duration-75 {selectedFile === file ? 'bg-blue-900/30' : 'hover:bg-gray-800'}"
+            class="cursor-pointer border-b border-slate-100 dark:border-gray-800 transition-colors duration-75 {selectedFile === file ? 'bg-blue-100 dark:bg-blue-900/30' : 'hover:bg-slate-50 dark:hover:bg-gray-800'}"
             on:click|stopPropagation={() => selectedFile = file}
             on:dblclick={() => openEditor(file)}
             on:contextmenu|preventDefault|stopPropagation={(e) => handleContextMenu(e, file)}
@@ -516,11 +519,11 @@
           >
             <td class="p-2 flex items-center space-x-2">
               <span class="text-yellow-500">{file.isDirectory ? '📁' : '📄'}</span>
-              <span class={file.isDirectory ? 'font-medium text-white' : 'text-gray-300'}>{file.name}</span>
+              <span class={file.isDirectory ? 'font-medium text-slate-900 dark:text-white' : 'text-slate-700 dark:text-gray-300'}>{file.name}</span>
             </td>
-            <td class="p-2 text-gray-400 font-mono text-xs">{file.isDirectory ? '-' : formatSize(file.size)}</td>
-            <td class="p-2 text-gray-400 text-xs">{formatDate(file.modified)}</td>
-            <td class="p-2 text-gray-500 font-mono text-xs">{file.permissions}</td>
+            <td class="p-2 text-slate-500 dark:text-gray-400 font-mono text-xs">{file.isDirectory ? '-' : formatSize(file.size)}</td>
+            <td class="p-2 text-slate-500 dark:text-gray-400 text-xs">{formatDate(file.modified)}</td>
+            <td class="p-2 text-slate-400 dark:text-gray-500 font-mono text-xs">{file.permissions}</td>
           </tr>
         {/each}
       </tbody>
@@ -529,7 +532,7 @@
 
   {#if contextMenu.show}
     <div 
-      class="fixed bg-gray-800 border border-gray-700 rounded shadow-lg py-1 z-50 text-sm min-w-[150px]"
+      class="fixed bg-white dark:bg-gray-800 border border-slate-200 dark:border-gray-700 rounded shadow-lg py-1 z-50 text-sm min-w-[150px]"
       style="top: {contextMenu.y}px; left: {contextMenu.x}px"
       role="menu"
       tabindex="-1"
@@ -537,34 +540,34 @@
       {#if contextMenu.file}
         {#if !contextMenu.file.isDirectory}
           <button 
-            class="w-full text-left px-4 py-2 hover:bg-gray-700 text-gray-200"
+            class="w-full text-left px-4 py-2 hover:bg-slate-100 dark:hover:bg-gray-700 text-slate-700 dark:text-gray-200"
             on:click|stopPropagation={handleDownload}
           >
             Download
           </button>
         {/if}
         <button 
-          class="w-full text-left px-4 py-2 hover:bg-gray-700 text-gray-200"
+          class="w-full text-left px-4 py-2 hover:bg-slate-100 dark:hover:bg-gray-700 text-slate-700 dark:text-gray-200"
           on:click|stopPropagation={handleRename}
         >
           Rename
         </button>
         <button 
-          class="w-full text-left px-4 py-2 hover:bg-gray-700 text-red-400 hover:text-red-300"
+          class="w-full text-left px-4 py-2 hover:bg-slate-100 dark:hover:bg-gray-700 text-red-600 dark:text-red-400 hover:text-red-500 dark:hover:text-red-300"
           on:click|stopPropagation={handleDelete}
         >
           Delete
         </button>
-        <div class="border-t border-gray-700 my-1"></div>
+        <div class="border-t border-slate-200 dark:border-gray-700 my-1"></div>
       {/if}
       <button 
-        class="w-full text-left px-4 py-2 hover:bg-gray-700 text-gray-200"
+        class="w-full text-left px-4 py-2 hover:bg-slate-100 dark:hover:bg-gray-700 text-slate-700 dark:text-gray-200"
         on:click|stopPropagation={handleCreateFolder}
       >
         New Folder
       </button>
       <button 
-        class="w-full text-left px-4 py-2 hover:bg-gray-700 text-gray-200"
+        class="w-full text-left px-4 py-2 hover:bg-slate-100 dark:hover:bg-gray-700 text-slate-700 dark:text-gray-200"
         on:click|stopPropagation={() => loadFiles(currentPath)}
       >
         Refresh

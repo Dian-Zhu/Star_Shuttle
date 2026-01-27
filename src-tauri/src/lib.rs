@@ -272,17 +272,30 @@ mod commands {
     }
 
     #[command]
-    pub fn send_terminal_data(
-        manager: State<Arc<RwLock<DefaultConnectionManager>>>,
+    pub async fn send_terminal_data(
+        manager: State<'_, Arc<RwLock<DefaultConnectionManager>>>,
         session_id: Uuid,
         data: String,
     ) -> Result<(), String> {
-        let mut manager = manager
-            .write()
-            .map_err(|e| format!("Failed to acquire write lock: {}", e))?;
-        manager
-            .send_terminal_data(&session_id, &data)
-            .map_err(|e| e.to_string())
+        let (sender, data_bytes) = {
+            let manager = manager
+                .read()
+                .map_err(|e| format!("Failed to acquire read lock: {}", e))?;
+
+            let sender = manager
+                .get_terminal_sender(&session_id)
+                .ok_or_else(|| format!("Session not found: {}", session_id))?;
+
+            let data_bytes = data.as_bytes().to_vec();
+            manager.log_terminal_data(&session_id, &data_bytes, "sent");
+
+            (sender, data_bytes)
+        };
+
+        sender
+            .send(crate::modules::connection::TerminalCommand::Data(data_bytes))
+            .await
+            .map_err(|e| format!("Failed to send data: {}", e))
     }
 
     #[command]
@@ -319,9 +332,9 @@ mod commands {
         session_id: Uuid,
         command: String,
     ) -> Result<String, String> {
-        let mut manager = manager
-            .write()
-            .map_err(|e| format!("Failed to acquire write lock: {}", e))?;
+        let manager = manager
+            .read()
+            .map_err(|e| format!("Failed to acquire read lock: {}", e))?;
         manager
             .exec_command(&session_id, &command)
             .map_err(|e| e.to_string())

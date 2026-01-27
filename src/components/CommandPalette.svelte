@@ -245,7 +245,7 @@
 
 <div 
   bind:this={container}
-  class="fixed inset-0 z-50 flex items-start justify-center pt-[15vh] bg-black/50 backdrop-blur-sm transition-all"
+  class="fixed inset-0 z-50 flex items-start justify-center pt-[15vh] bg-slate-900/20 dark:bg-black/50 backdrop-blur-sm transition-all"
   on:click={handleBackdropClick}
   on:keydown={() => {}} 
   role="presentation"

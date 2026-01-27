@@ -1,7 +1,6 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
   import { connections, showConnectionForm, editingConnection, isSidebarCollapsed, showSettings, activeTerminals } from '../lib/store';
-  import { loadConnections, deleteConnection } from '../lib/connectionService';
+  import { deleteConnection } from '../lib/connectionService';
   import { connectAndOpen } from '../lib/terminalService';
   import PlusIcon from './icons/PlusIcon.svelte';
   import ServerIcon from './icons/ServerIcon.svelte';
@@ -170,10 +169,6 @@
     
     return "刚刚";
   }
-
-  onMount(() => {
-    loadConnections();
-  });
 
   function handleConnect(connection: any) {
     connectAndOpen(connection);
@@ -473,10 +468,10 @@
     background: transparent;
   }
   .custom-scrollbar::-webkit-scrollbar-thumb {
-    background: #334155;
+    background: var(--color-border);
     border-radius: 2px;
   }
   .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-    background: #475569;
+    background: var(--color-border-light);
   }
 </style>
