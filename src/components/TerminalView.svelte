@@ -14,6 +14,13 @@
   let searchTerm = '';
   let resizeObserver: ResizeObserver;
 
+  // 右键菜单状态
+  let contextMenu = {
+    show: false,
+    x: 0,
+    y: 0
+  };
+
   $: searchInputId = `search-input-${terminalData.sessionId}`;
 
   function isCopyShortcut(e: KeyboardEvent) {
@@ -86,6 +93,13 @@
 
       // Prevent default paste duplication by handling DOM paste ourselves
       container.addEventListener('paste', handleDomPaste, true);
+
+      // 点击其他地方关闭右键菜单
+      document.addEventListener('click', (e) => {
+        if (contextMenu.show) {
+          closeContextMenu();
+        }
+      });
   });
 
   onDestroy(() => {
@@ -141,6 +155,73 @@
       } else if (e.key === 'Escape') {
           closeSearch();
       }
+  }
+
+  // 右键菜单处理函数
+  function openContextMenu(e: MouseEvent) {
+    e.preventDefault();
+    contextMenu.x = e.clientX;
+    contextMenu.y = e.clientY;
+    contextMenu.show = true;
+  }
+
+  function closeContextMenu() {
+    contextMenu.show = false;
+  }
+
+  function handleCopy() {
+    if (!terminalData.terminal) return;
+    const selection = terminalData.terminal.getSelection();
+    if (selection && navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(selection);
+    }
+    closeContextMenu();
+  }
+
+  async function handlePaste() {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text) {
+        handleTerminalInput(terminalData.sessionId, text, terminalData.connection);
+      }
+    } catch (err) {
+      console.error('Failed to paste:', err);
+    }
+    closeContextMenu();
+  }
+
+  function handleClearScreen() {
+    if (terminalData.terminal) {
+      terminalData.terminal.clear();
+    }
+    closeContextMenu();
+  }
+
+  function handleSelectAll() {
+    if (terminalData.terminal) {
+      terminalData.terminal.selectAll();
+    }
+    closeContextMenu();
+  }
+
+  function handleFind() {
+    showSearch = true;
+    setTimeout(() => document.getElementById(searchInputId)?.focus(), 0);
+    closeContextMenu();
+  }
+
+  function handleClearScrollback() {
+    if (terminalData.terminal) {
+      terminalData.terminal.clear();
+    }
+    closeContextMenu();
+  }
+
+  function handleReset() {
+    if (terminalData.terminal) {
+      terminalData.terminal.reset();
+    }
+    closeContextMenu();
   }
 
   // Reactively update terminal options when settings change
@@ -215,10 +296,11 @@
 
   <div class="flex-1 relative overflow-hidden bg-white dark:bg-slate-950">
      <!-- Terminal Container -->
-     <div 
-       bind:this={container} 
+     <div
+       bind:this={container}
        class="w-full h-full overflow-hidden"
        style:display={mode === 'terminal' ? 'block' : 'none'}
+       on:contextmenu|preventDefault={openContextMenu}
      ></div>
 
      <!-- Search Bar -->
@@ -251,6 +333,63 @@
      {#if mode === 'sftp'}
        <div class="w-full h-full absolute inset-0 z-0">
          <DualPaneFileExplorer sessionId={terminalData.sessionId} />
+       </div>
+     {/if}
+
+     <!-- 右键菜单 -->
+     {#if contextMenu.show && mode === 'terminal'}
+       <div
+         class="fixed bg-white dark:bg-gray-800 border border-slate-200 dark:border-gray-700 rounded shadow-lg py-1 z-50 text-sm min-w-[180px]"
+         style="top: {contextMenu.y}px; left: {contextMenu.x}px"
+         role="menu"
+         tabindex="-1"
+         on:click|stopPropagation={() => {}}
+         on:keydown|stopPropagation={() => {}}
+       >
+         <button
+           class="w-full text-left px-4 py-2 hover:bg-slate-100 dark:hover:bg-gray-700 text-slate-700 dark:text-gray-200"
+           on:click|stopPropagation={handleCopy}
+         >
+           复制
+         </button>
+         <button
+           class="w-full text-left px-4 py-2 hover:bg-slate-100 dark:hover:bg-gray-700 text-slate-700 dark:text-gray-200"
+           on:click|stopPropagation={handlePaste}
+         >
+           粘贴
+         </button>
+         <div class="border-t border-slate-200 dark:border-gray-700 my-1"></div>
+         <button
+           class="w-full text-left px-4 py-2 hover:bg-slate-100 dark:hover:bg-gray-700 text-slate-700 dark:text-gray-200"
+           on:click|stopPropagation={handleClearScreen}
+         >
+           清屏
+         </button>
+         <button
+           class="w-full text-left px-4 py-2 hover:bg-slate-100 dark:hover:bg-gray-700 text-slate-700 dark:text-gray-200"
+           on:click|stopPropagation={handleSelectAll}
+         >
+           全选
+         </button>
+         <button
+           class="w-full text-left px-4 py-2 hover:bg-slate-100 dark:hover:bg-gray-700 text-slate-700 dark:text-gray-200"
+           on:click|stopPropagation={handleFind}
+         >
+           查找
+         </button>
+         <div class="border-t border-slate-200 dark:border-gray-700 my-1"></div>
+         <button
+           class="w-full text-left px-4 py-2 hover:bg-slate-100 dark:hover:bg-gray-700 text-slate-700 dark:text-gray-200"
+           on:click|stopPropagation={handleClearScrollback}
+         >
+           清除滚动缓冲区
+         </button>
+         <button
+           class="w-full text-left px-4 py-2 hover:bg-slate-100 dark:hover:bg-gray-700 text-red-600 dark:text-red-400 hover:text-red-500 dark:hover:text-red-300"
+           on:click|stopPropagation={handleReset}
+         >
+           重置终端
+         </button>
        </div>
      {/if}
   </div>
