@@ -5,7 +5,7 @@ import { FitAddon } from 'xterm-addon-fit';
 import { SearchAddon } from 'xterm-addon-search';
 import { WebglAddon } from 'xterm-addon-webgl';
 import { get } from 'svelte/store';
-import { activeTerminals, connections, selectedTerminalIndex, type Connection, type ActiveTerminal, errorMessage, successMessage, settings, connectionHistory, broadcastInputEnabled, broadcastSessionIds, getStoredTerminalUiState } from './store';
+import { activeTerminals, connections, selectedTerminalIndex, type Connection, type ActiveTerminal, errorMessage, successMessage, settings, connectionHistory, broadcastInputEnabled, broadcastSessionIds, getStoredTerminalUiState, getXtermTheme } from './store';
 import 'xterm/css/xterm.css';
 
 const IS_DEV = import.meta.env.DEV;
@@ -323,33 +323,7 @@ export async function initTerminal(container: HTMLElement, sessionId: string, co
       cursorWidth: 1,
       fontSize: appSettings.terminal.fontSize,
       fontFamily: appSettings.terminal.fontFamily,
-      theme: appSettings.theme === 'light' ? {
-        background: '#ffffff', // white
-        foreground: '#0f172a', // slate-950
-        cursor: '#2563eb',     // blue-600
-        selectionBackground: '#e2e8f0', // slate-200
-        black: '#000000',
-        red: '#ef4444',
-        green: '#22c55e',
-        yellow: '#eab308',
-        blue: '#3b82f6',
-        magenta: '#d946ef',
-        cyan: '#06b6d4',
-        white: '#64748b',
-        brightBlack: '#94a3b8',
-        brightRed: '#f87171',
-        brightGreen: '#4ade80',
-        brightYellow: '#facc15',
-        brightBlue: '#60a5fa',
-        brightMagenta: '#e879f9',
-        brightCyan: '#22d3ee',
-        brightWhite: '#f1f5f9',
-      } : {
-        background: '#0f172a', // slate-950
-        foreground: '#e2e8f0', // slate-200
-        cursor: '#3b82f6',     // blue-500
-        selectionBackground: '#334155', // slate-700
-      },
+      theme: getXtermTheme(appSettings),
       scrollback: appSettings.terminal.scrollback,
       allowProposedApi: true,
       convertEol: true, // Enable EOL conversion to fix line endings

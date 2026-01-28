@@ -138,7 +138,29 @@ export interface AppSettings {
     sidebarCollapsed: boolean;
   };
   appearance: {
-    terminalTheme: 'auto' | 'dracula' | 'nord' | 'solarized-dark' | 'solarized-light';
+    terminalTheme: 'auto' | 'dracula' | 'nord' | 'solarized-dark' | 'solarized-light' | 'monokai' | 'one-dark' | 'github-dark' | 'tokyo-night' | 'catppuccin' | 'custom';
+    customTheme?: {
+      background: string;
+      foreground: string;
+      cursor: string;
+      selectionBackground: string;
+      black: string;
+      red: string;
+      green: string;
+      yellow: string;
+      blue: string;
+      magenta: string;
+      cyan: string;
+      white: string;
+      brightBlack: string;
+      brightRed: string;
+      brightGreen: string;
+      brightYellow: string;
+      brightBlue: string;
+      brightMagenta: string;
+      brightCyan: string;
+      brightWhite: string;
+    };
   };
   terminal: {
     fontSize: number;
@@ -158,6 +180,8 @@ export interface AppSettings {
     closeTerminal: string;
     prevTab: string;
     nextTab: string;
+    copy: string;
+    paste: string;
   };
   security: {
     autoLockMinutes: number; // 0 = disabled
@@ -191,6 +215,8 @@ const defaultSettings: AppSettings = {
     closeTerminal: 'Ctrl+Shift+W',
     prevTab: 'Ctrl+Shift+[',
     nextTab: 'Ctrl+Shift+]',
+    copy: 'Ctrl+Shift+C',
+    paste: 'Ctrl+Shift+V',
   },
   security: {
     autoLockMinutes: 0,
@@ -244,7 +270,9 @@ const loadSettings = (): AppSettings => {
       'settings',
       'closeTerminal',
       'prevTab',
-      'nextTab'
+      'nextTab',
+      'copy',
+      'paste'
     ];
     const seen = new Map<string, keyof AppSettings['shortcuts']>();
     const sanitizedShortcuts = { ...merged.shortcuts };
@@ -274,6 +302,33 @@ const loadSettings = (): AppSettings => {
 
 export function getXtermTheme(appSettings: AppSettings): ITheme {
   const preset = appSettings.appearance?.terminalTheme ?? 'auto';
+
+  // Custom theme
+  if (preset === 'custom' && appSettings.appearance?.customTheme) {
+    const custom = appSettings.appearance.customTheme;
+    return {
+      background: custom.background,
+      foreground: custom.foreground,
+      cursor: custom.cursor,
+      selectionBackground: custom.selectionBackground,
+      black: custom.black,
+      red: custom.red,
+      green: custom.green,
+      yellow: custom.yellow,
+      blue: custom.blue,
+      magenta: custom.magenta,
+      cyan: custom.cyan,
+      white: custom.white,
+      brightBlack: custom.brightBlack,
+      brightRed: custom.brightRed,
+      brightGreen: custom.brightGreen,
+      brightYellow: custom.brightYellow,
+      brightBlue: custom.brightBlue,
+      brightMagenta: custom.brightMagenta,
+      brightCyan: custom.brightCyan,
+      brightWhite: custom.brightWhite,
+    };
+  }
 
   if (preset === 'dracula') {
     return {
@@ -372,6 +427,131 @@ export function getXtermTheme(appSettings: AppSettings): ITheme {
       brightMagenta: '#6c71c4',
       brightCyan: '#93a1a1',
       brightWhite: '#fdf6e3',
+    };
+  }
+
+  if (preset === 'monokai') {
+    return {
+      background: '#272822',
+      foreground: '#f8f8f2',
+      cursor: '#f92672',
+      selectionBackground: '#49483e',
+      black: '#1e1f1c',
+      red: '#f92672',
+      green: '#a6e22e',
+      yellow: '#f4bf75',
+      blue: '#66d9ef',
+      magenta: '#ae81ff',
+      cyan: '#a1efe4',
+      white: '#f8f8f2',
+      brightBlack: '#75715e',
+      brightRed: '#f92672',
+      brightGreen: '#a6e22e',
+      brightYellow: '#f4bf75',
+      brightBlue: '#66d9ef',
+      brightMagenta: '#ae81ff',
+      brightCyan: '#a1efe4',
+      brightWhite: '#f9f8f5',
+    };
+  }
+
+  if (preset === 'one-dark') {
+    return {
+      background: '#282c34',
+      foreground: '#abb2bf',
+      cursor: '#528bff',
+      selectionBackground: '#3e4451',
+      black: '#1e2127',
+      red: '#e06c75',
+      green: '#98c379',
+      yellow: '#d19a66',
+      blue: '#61afef',
+      magenta: '#c678dd',
+      cyan: '#56b6c2',
+      white: '#abb2bf',
+      brightBlack: '#5c6370',
+      brightRed: '#e06c75',
+      brightGreen: '#98c379',
+      brightYellow: '#d19a66',
+      brightBlue: '#61afef',
+      brightMagenta: '#c678dd',
+      brightCyan: '#56b6c2',
+      brightWhite: '#ffffff',
+    };
+  }
+
+  if (preset === 'github-dark') {
+    return {
+      background: '#0d1117',
+      foreground: '#c9d1d9',
+      cursor: '#58a6ff',
+      selectionBackground: '#388bfd',
+      black: '#484f58',
+      red: '#ff7b72',
+      green: '#3fb950',
+      yellow: '#d29922',
+      blue: '#58a6ff',
+      magenta: '#bc8cff',
+      cyan: '#39c5cf',
+      white: '#b1bac4',
+      brightBlack: '#6e7681',
+      brightRed: '#ffa198',
+      brightGreen: '#56d364',
+      brightYellow: '#e3b341',
+      brightBlue: '#79c0ff',
+      brightMagenta: '#d2a8ff',
+      brightCyan: '#56d4dd',
+      brightWhite: '#f0f6fc',
+    };
+  }
+
+  if (preset === 'tokyo-night') {
+    return {
+      background: '#1a1b26',
+      foreground: '#a9b1d6',
+      cursor: '#c0caf5',
+      selectionBackground: '#2f354b',
+      black: '#414868',
+      red: '#f7768e',
+      green: '#9ece6a',
+      yellow: '#e0af68',
+      blue: '#7aa2f7',
+      magenta: '#bb9af7',
+      cyan: '#7dcfff',
+      white: '#c0caf5',
+      brightBlack: '#565f89',
+      brightRed: '#ff9e64',
+      brightGreen: '#b9f27c',
+      brightYellow: '#ff9e64',
+      brightBlue: '#7aa2f7',
+      brightMagenta: '#bb9af7',
+      brightCyan: '#7dcfff',
+      brightWhite: '#c0caf5',
+    };
+  }
+
+  if (preset === 'catppuccin') {
+    return {
+      background: '#1e1e2e',
+      foreground: '#cdd6f4',
+      cursor: '#f5e0dc',
+      selectionBackground: '#45475a',
+      black: '#45475a',
+      red: '#f38ba8',
+      green: '#a6e3a1',
+      yellow: '#f9e2af',
+      blue: '#89b4fa',
+      magenta: '#cba6f7',
+      cyan: '#94e2d5',
+      white: '#bac2de',
+      brightBlack: '#585b70',
+      brightRed: '#eba0ac',
+      brightGreen: '#a6e3a1',
+      brightYellow: '#f9e2af',
+      brightBlue: '#89b4fa',
+      brightMagenta: '#cba6f7',
+      brightCyan: '#94e2d5',
+      brightWhite: '#a6adc8',
     };
   }
 

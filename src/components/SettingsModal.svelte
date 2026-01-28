@@ -37,7 +37,9 @@
     settings: '设置',
     closeTerminal: '关闭终端',
     prevTab: '上一个标签页',
-    nextTab: '下一个标签页'
+    nextTab: '下一个标签页',
+    copy: '复制',
+    paste: '粘贴'
   };
 
   onMount(() => {
@@ -46,6 +48,17 @@
 
   function updateTheme(theme: 'dark' | 'light') {
     settings.update(s => ({ ...s, theme }));
+  }
+
+  function updateTerminalTheme(theme: 'auto' | 'dracula' | 'nord' | 'solarized-dark' | 'solarized-light' | 'monokai' | 'one-dark' | 'github-dark' | 'tokyo-night' | 'catppuccin' | 'custom') {
+    settings.update(s => ({
+      ...s,
+      appearance: {
+        ...s.appearance,
+        terminalTheme: theme,
+        customTheme: theme === 'custom' ? s.appearance.customTheme || defaultCustomTheme : undefined
+      }
+    }));
   }
 
   function updateUiSetting<K extends keyof (typeof $settings)['ui']>(key: K, value: (typeof $settings)['ui'][K]) {
@@ -300,6 +313,154 @@
     { label: 'JetBrains Mono', value: '"JetBrains Mono", monospace' },
     { label: 'Source Code Pro', value: '"Source Code Pro", monospace' }
   ];
+
+  // Terminal theme presets
+  type TerminalThemePreset = AppSettings['appearance']['terminalTheme'];
+
+  const terminalThemes: Array<{ id: TerminalThemePreset; name: string; preview: { background: string; foreground: string } }> = [
+    {
+      id: 'auto',
+      name: '自动',
+      preview: { background: '#0f172a', foreground: '#e2e8f0' }
+    },
+    {
+      id: 'dracula',
+      name: 'Dracula',
+      preview: { background: '#282a36', foreground: '#f8f8f2' }
+    },
+    {
+      id: 'nord',
+      name: 'Nord',
+      preview: { background: '#2e3440', foreground: '#d8dee9' }
+    },
+    {
+      id: 'solarized-dark',
+      name: 'Solarized Dark',
+      preview: { background: '#002b36', foreground: '#93a1a1' }
+    },
+    {
+      id: 'solarized-light',
+      name: 'Solarized Light',
+      preview: { background: '#fdf6e3', foreground: '#657b83' }
+    },
+    {
+      id: 'monokai',
+      name: 'Monokai',
+      preview: { background: '#272822', foreground: '#f8f8f2' }
+    },
+    {
+      id: 'one-dark',
+      name: 'One Dark',
+      preview: { background: '#282c34', foreground: '#abb2bf' }
+    },
+    {
+      id: 'github-dark',
+      name: 'GitHub Dark',
+      preview: { background: '#0d1117', foreground: '#c9d1d9' }
+    },
+    {
+      id: 'tokyo-night',
+      name: 'Tokyo Night',
+      preview: { background: '#1a1b26', foreground: '#a9b1d6' }
+    },
+    {
+      id: 'catppuccin',
+      name: 'Catppuccin',
+      preview: { background: '#1e1e2e', foreground: '#cdd6f4' }
+    },
+    {
+      id: 'custom',
+      name: '自定义',
+      preview: { background: '#1e1e1e', foreground: '#ffffff' }
+    }
+  ];
+
+  // Default custom theme colors
+  const defaultCustomTheme = {
+    background: '#1e1e1e',
+    foreground: '#d4d4d4',
+    cursor: '#ffffff',
+    selectionBackground: '#264f78',
+    black: '#000000',
+    red: '#cd3131',
+    green: '#0dbc79',
+    yellow: '#e5e510',
+    blue: '#2472c8',
+    magenta: '#bc3fbc',
+    cyan: '#11a8cd',
+    white: '#e5e5e5',
+    brightBlack: '#666666',
+    brightRed: '#f14c4c',
+    brightGreen: '#23d18b',
+    brightYellow: '#f5f543',
+    brightBlue: '#3b8eea',
+    brightMagenta: '#d670d6',
+    brightCyan: '#29b8db',
+    brightWhite: '#ffffff'
+  };
+
+  // Color key labels
+  type CustomThemeKey = keyof NonNullable<AppSettings['appearance']['customTheme']>;
+
+  const colorLabels: Record<CustomThemeKey, string> = {
+    background: '背景',
+    foreground: '前景',
+    cursor: '光标',
+    selectionBackground: '选中背景',
+    black: '黑色',
+    red: '红色',
+    green: '绿色',
+    yellow: '黄色',
+    blue: '蓝色',
+    magenta: '品红',
+    cyan: '青色',
+    white: '白色',
+    brightBlack: '亮黑',
+    brightRed: '亮红',
+    brightGreen: '亮绿',
+    brightYellow: '亮黄',
+    brightBlue: '亮蓝',
+    brightMagenta: '亮品红',
+    brightCyan: '亮青色',
+    brightWhite: '亮白'
+  };
+
+  const basicColorKeys: CustomThemeKey[] = ['background', 'foreground', 'cursor', 'selectionBackground'];
+  const standardColorKeys: CustomThemeKey[] = ['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white'];
+  const brightColorKeys: CustomThemeKey[] = ['brightBlack', 'brightRed', 'brightGreen', 'brightYellow', 'brightBlue', 'brightMagenta', 'brightCyan', 'brightWhite'];
+
+  function updateCustomColor(key: CustomThemeKey, value: string) {
+    if (!$settings.appearance.customTheme) {
+      settings.update(s => ({
+        ...s,
+        appearance: {
+          ...s.appearance,
+          customTheme: { ...defaultCustomTheme }
+        }
+      }));
+      return;
+    }
+    settings.update(s => ({
+      ...s,
+      appearance: {
+        ...s.appearance,
+        customTheme: {
+          ...s.appearance.customTheme!,
+          [key]: value
+        }
+      }
+    }));
+  }
+
+  function resetCustomTheme() {
+    settings.update(s => ({
+      ...s,
+      appearance: {
+        ...s.appearance,
+        customTheme: { ...defaultCustomTheme }
+      }
+    }));
+  }
 </script>
 
 <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" role="button" tabindex="0" on:click|self={handleClose} on:keydown={(e) => e.key === 'Escape' && handleClose()}>
@@ -517,6 +678,42 @@
                     {/if}
                   </div>
                 </div>
+
+                <div class="grid grid-cols-2 gap-4 items-center border-b border-slate-200 dark:border-slate-800 pb-4">
+                  <div>
+                    <span class="block text-sm font-medium text-slate-700 dark:text-slate-300">复制</span>
+                    <span class="text-xs text-slate-500">复制选中文件到剪贴板</span>
+                  </div>
+                  <div class="space-y-1">
+                    <input
+                      type="text"
+                      value={shortcutDrafts.copy}
+                      on:input={(e) => handleShortcutInput('copy', (e.target as HTMLInputElement).value)}
+                      class="bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-200 text-sm font-mono focus:border-blue-500 outline-none w-full"
+                    />
+                    {#if shortcutErrors.copy}
+                      <div class="text-xs text-red-500 dark:text-red-400">{shortcutErrors.copy}</div>
+                    {/if}
+                  </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4 items-center border-b border-slate-200 dark:border-slate-800 pb-4">
+                  <div>
+                    <span class="block text-sm font-medium text-slate-700 dark:text-slate-300">粘贴</span>
+                    <span class="text-xs text-slate-500">从剪贴板粘贴文件</span>
+                  </div>
+                  <div class="space-y-1">
+                    <input
+                      type="text"
+                      value={shortcutDrafts.paste}
+                      on:input={(e) => handleShortcutInput('paste', (e.target as HTMLInputElement).value)}
+                      class="bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-200 text-sm font-mono focus:border-blue-500 outline-none w-full"
+                    />
+                    {#if shortcutErrors.paste}
+                      <div class="text-xs text-red-500 dark:text-red-400">{shortcutErrors.paste}</div>
+                    {/if}
+                  </div>
+                </div>
              </div>
              
              <div class="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-900/30 rounded-lg p-3 text-xs text-blue-800 dark:text-blue-200">
@@ -658,7 +855,7 @@
 
         {:else if activeTab === 'appearance'}
           <div class="space-y-6" in:slide={{ duration: 200 }}>
-            <!-- Theme -->
+            <!-- Theme Mode -->
             <div>
               <span class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-3">主题模式</span>
               <div class="grid grid-cols-2 gap-4">
@@ -691,6 +888,124 @@
                 </button>
               </div>
             </div>
+
+            <!-- Terminal Theme -->
+            <div>
+              <span class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-3">终端主题</span>
+              <div class="grid grid-cols-5 gap-2">
+                {#each terminalThemes as theme}
+                  <button
+                    class="relative p-2 border rounded-lg flex flex-col items-center gap-2 transition-all {$settings.appearance.terminalTheme === theme.id ? 'border-blue-500 bg-blue-50 dark:bg-blue-500/10' : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'}"
+                    on:click={() => updateTerminalTheme(theme.id)}
+                    title={theme.name}
+                  >
+                    <div
+                      class="w-full h-12 rounded shadow-sm"
+                      style="background-color: {theme.preview.background}"
+                    >
+                      <div class="p-1 text-xs font-mono" style="color: {theme.preview.foreground}">
+                        Aa
+                      </div>
+                    </div>
+                    <span class="text-xs text-slate-700 dark:text-slate-300 truncate w-full text-center">{theme.name}</span>
+                    {#if $settings.appearance.terminalTheme === theme.id}
+                      <div class="absolute top-1 right-1 w-2 h-2 bg-blue-500 rounded-full"></div>
+                    {/if}
+                  </button>
+                {/each}
+              </div>
+            </div>
+
+            <!-- Custom Theme Editor -->
+            {#if $settings.appearance.terminalTheme === 'custom'}
+              <div class="border border-slate-200 dark:border-slate-700 rounded-lg p-4 bg-slate-50 dark:bg-slate-900/50">
+                <div class="flex items-center justify-between mb-4">
+                  <span class="text-sm font-medium text-slate-700 dark:text-slate-300">自定义主题</span>
+                  <button
+                    class="text-xs px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded transition-colors"
+                    on:click={resetCustomTheme}
+                  >
+                    重置
+                  </button>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4">
+                  <!-- Basic Colors -->
+                  <div class="space-y-2">
+                    <h4 class="text-xs font-medium text-slate-600 dark:text-slate-400 uppercase">基础颜色</h4>
+                    {#each basicColorKeys as key}
+                      {@const label = colorLabels[key]}
+                      {@const value = $settings.appearance.customTheme?.[key] || '#000000'}
+                      {@const inputId = `custom-color-${key}`}
+                      <div class="flex items-center gap-2">
+                        <label for={inputId} class="text-xs text-slate-600 dark:text-slate-400 w-20 shrink-0">{label}</label>
+                        <input
+                          id={inputId}
+                          type="color"
+                          value={value}
+                          on:input={(e) => updateCustomColor(key, (e.target as HTMLInputElement).value)}
+                          class="w-8 h-8 rounded cursor-pointer border border-slate-300 dark:border-slate-600"
+                        />
+                        <input
+                          type="text"
+                          value={value}
+                          on:input={(e) => updateCustomColor(key, (e.target as HTMLInputElement).value)}
+                          class="flex-1 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded px-2 py-1 text-xs font-mono text-slate-900 dark:text-slate-200 focus:border-blue-500 outline-none"
+                        />
+                      </div>
+                    {/each}
+                  </div>
+
+                  <!-- Standard Colors -->
+                  <div class="space-y-2">
+                    <h4 class="text-xs font-medium text-slate-600 dark:text-slate-400 uppercase">标准颜色</h4>
+                    {#each standardColorKeys as key}
+                      {@const label = colorLabels[key]}
+                      {@const value = $settings.appearance.customTheme?.[key] || '#000000'}
+                      {@const inputId = `custom-color-${key}`}
+                      <div class="flex items-center gap-2">
+                        <label for={inputId} class="text-xs text-slate-600 dark:text-slate-400 w-20 shrink-0">{label}</label>
+                        <input
+                          id={inputId}
+                          type="color"
+                          value={value}
+                          on:input={(e) => updateCustomColor(key, (e.target as HTMLInputElement).value)}
+                          class="w-8 h-8 rounded cursor-pointer border border-slate-300 dark:border-slate-600"
+                        />
+                        <input
+                          type="text"
+                          value={value}
+                          on:input={(e) => updateCustomColor(key, (e.target as HTMLInputElement).value)}
+                          class="flex-1 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded px-2 py-1 text-xs font-mono text-slate-900 dark:text-slate-200 focus:border-blue-500 outline-none"
+                        />
+                      </div>
+                    {/each}
+                  </div>
+
+                  <!-- Bright Colors -->
+                  <div class="col-span-2 space-y-2">
+                    <h4 class="text-xs font-medium text-slate-600 dark:text-slate-400 uppercase">亮色变体</h4>
+                    <div class="grid grid-cols-4 gap-2">
+                      {#each brightColorKeys as key}
+                        {@const label = colorLabels[key]}
+                        {@const value = $settings.appearance.customTheme?.[key] || '#000000'}
+                        {@const inputId = `custom-color-${key}`}
+                        <div class="flex items-center gap-1">
+                          <input
+                            id={inputId}
+                            type="color"
+                            value={value}
+                            on:input={(e) => updateCustomColor(key, (e.target as HTMLInputElement).value)}
+                            class="w-6 h-6 rounded cursor-pointer border border-slate-300 dark:border-slate-600"
+                          />
+                          <label for={inputId} class="text-xs text-slate-600 dark:text-slate-400 truncate">{label}</label>
+                        </div>
+                      {/each}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            {/if}
           </div>
         {:else if activeTab === 'security'}
            <div class="space-y-6" in:slide={{ duration: 200 }}>

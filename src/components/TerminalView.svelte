@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { handleTerminalInput, initTerminal, sendTerminalResize } from '../lib/terminalService';
-  import { settings, type ActiveTerminal } from '../lib/store';
+  import { getXtermTheme, settings, type ActiveTerminal } from '../lib/store';
   import DualPaneFileExplorer from './file-transfer/DualPaneFileExplorer.svelte';
   
   // Props using Svelte 4 syntax for compatibility
@@ -95,7 +95,7 @@
       container.addEventListener('paste', handleDomPaste, true);
 
       // 点击其他地方关闭右键菜单
-      document.addEventListener('click', (e) => {
+      document.addEventListener('click', () => {
         if (contextMenu.show) {
           closeContextMenu();
         }
@@ -234,33 +234,7 @@
       terminalData.terminal.options.scrollback = $settings.terminal.scrollback;
       
       // Update theme
-      terminalData.terminal.options.theme = $settings.theme === 'light' ? {
-        background: '#ffffff', // white
-        foreground: '#0f172a', // slate-950
-        cursor: '#2563eb',     // blue-600
-        selectionBackground: '#e2e8f0', // slate-200
-        black: '#000000',
-        red: '#ef4444',
-        green: '#22c55e',
-        yellow: '#eab308',
-        blue: '#3b82f6',
-        magenta: '#d946ef',
-        cyan: '#06b6d4',
-        white: '#64748b',
-        brightBlack: '#94a3b8',
-        brightRed: '#f87171',
-        brightGreen: '#4ade80',
-        brightYellow: '#facc15',
-        brightBlue: '#60a5fa',
-        brightMagenta: '#e879f9',
-        brightCyan: '#22d3ee',
-        brightWhite: '#f1f5f9',
-      } : {
-        background: '#0f172a', // slate-950
-        foreground: '#e2e8f0', // slate-200
-        cursor: '#3b82f6',     // blue-500
-        selectionBackground: '#334155', // slate-700
-      };
+      terminalData.terminal.options.theme = getXtermTheme($settings);
 
       // Re-fit when font size changes
       if (isVisible && mode === 'terminal' && terminalData.fitAddon) {
@@ -301,6 +275,7 @@
        class="w-full h-full overflow-hidden"
        style:display={mode === 'terminal' ? 'block' : 'none'}
        on:contextmenu|preventDefault={openContextMenu}
+       role="presentation"
      ></div>
 
      <!-- Search Bar -->
