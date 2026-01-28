@@ -62,6 +62,15 @@ export interface ActiveTerminal {
   searchAddon: SearchAddon;
 }
 
+export type FileClipboardItem = {
+  source: 'local' | 'remote';
+  sessionId?: string;
+  path: string;
+  name: string;
+  isDirectory: boolean;
+  operation: 'copy';
+};
+
 // Stores
 export const connections = writable<Connection[]>([]);
 export const activeTerminals = writable<ActiveTerminal[]>([]);
@@ -78,6 +87,7 @@ export const hasAppLock = writable<boolean>(false);
 export const loading = writable<boolean>(false);
 export const errorMessage = writable<string | null>(null);
 export const successMessage = writable<string | null>(null);
+export const fileClipboard = writable<FileClipboardItem | null>(null);
 
 // History Store
 const loadHistory = (): HistoryItem[] => {

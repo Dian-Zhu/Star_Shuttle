@@ -58,6 +58,13 @@ body {
   height: 100vh;
 }
 
+.xterm,
+.xterm textarea,
+.xterm .xterm-screen {
+  cursor: text !important;
+  transition: none !important;
+}
+
 /* Modern scrollbars */
 ::-webkit-scrollbar {
   width: 6px;
@@ -74,6 +81,23 @@ body {
 }
 
 ::-webkit-scrollbar-thumb:hover {
+  background: var(--color-border-light);
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 2px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
   background: var(--color-border-light);
 }
 

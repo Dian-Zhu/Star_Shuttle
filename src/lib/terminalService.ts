@@ -320,6 +320,7 @@ export async function initTerminal(container: HTMLElement, sessionId: string, co
     const term = new Terminal({
       cursorBlink: appSettings.terminal.cursorBlink,
       cursorStyle: appSettings.terminal.cursorStyle,
+      cursorWidth: 1,
       fontSize: appSettings.terminal.fontSize,
       fontFamily: appSettings.terminal.fontFamily,
       theme: appSettings.theme === 'light' ? {
@@ -665,6 +666,34 @@ export async function closeTerminal(sessionId: string) {
     } catch (error) {
       console.error('Failed to close terminal:', error);
     }
+  }
+}
+
+export async function disconnectTerminal(sessionId: string) {
+  const terminals = get(activeTerminals);
+  const terminal = terminals.find(t => t.sessionId === sessionId);
+  const name = terminal?.connection?.name ?? sessionId;
+
+  clearReconnectTimer(sessionId);
+  clearReconnectKeyListener(sessionId);
+  reconnectAttempts.delete(sessionId);
+
+  await closeTerminal(sessionId);
+
+  try {
+    await invoke('close_terminal', { sessionId });
+  } catch (error) {
+    if (IS_DEV) console.warn('Failed to close_terminal during disconnect:', error);
+  }
+
+  try {
+    await invoke('disconnect', { sessionId });
+    successMessage.set(`已断开连接: ${name}`);
+    setTimeout(() => successMessage.set(null), 3000);
+  } catch (error) {
+    errorMessage.set(`断开连接失败: ${name}`);
+    setTimeout(() => errorMessage.set(null), 5000);
+    if (IS_DEV) console.warn('Failed to disconnect:', error);
   }
 }
 

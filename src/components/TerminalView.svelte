@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { initTerminal, sendTerminalResize } from '../lib/terminalService';
+  import { handleTerminalInput, initTerminal, sendTerminalResize } from '../lib/terminalService';
   import { settings, type ActiveTerminal } from '../lib/store';
   import DualPaneFileExplorer from './file-transfer/DualPaneFileExplorer.svelte';
   
@@ -16,9 +16,31 @@
 
   $: searchInputId = `search-input-${terminalData.sessionId}`;
 
-  function attachSearchKeybinding() {
+  function isCopyShortcut(e: KeyboardEvent) {
+    const key = e.key.toLowerCase();
+    if (e.metaKey && key === 'c') return true;
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && key === 'c') return true;
+    return false;
+  }
+
+  function handleDomPaste(e: ClipboardEvent) {
+    const text = e.clipboardData?.getData('text/plain') ?? '';
+    if (!text) return;
+    e.preventDefault();
+    e.stopPropagation();
+    handleTerminalInput(terminalData.sessionId, text, terminalData.connection);
+  }
+
+  function attachTerminalKeybindings() {
     if (!terminalData?.terminal) return;
     terminalData.terminal.attachCustomKeyEventHandler((e) => {
+      if (e.type === 'keydown' && isCopyShortcut(e)) {
+        const selection = terminalData.terminal?.getSelection() ?? '';
+        if (!selection) return true;
+        if (!navigator.clipboard?.writeText) return true;
+        void navigator.clipboard.writeText(selection);
+        return false;
+      }
       if ((e.ctrlKey || e.metaKey) && e.key === 'f' && e.type === 'keydown') {
         showSearch = !showSearch;
         if (showSearch) {
@@ -42,13 +64,13 @@
               terminalData.terminal = result.terminal;
               terminalData.fitAddon = result.fitAddon;
               terminalData.searchAddon = result.searchAddon;
-              attachSearchKeybinding();
+              attachTerminalKeybindings();
           }
       } else {
           // If terminal already exists, open it in this container
           terminalData.terminal.open(container);
           terminalData.fitAddon.fit();
-          attachSearchKeybinding();
+          attachTerminalKeybindings();
       }
 
       // Setup ResizeObserver
@@ -61,12 +83,16 @@
           }
       });
       resizeObserver.observe(container);
+
+      // Prevent default paste duplication by handling DOM paste ourselves
+      container.addEventListener('paste', handleDomPaste, true);
   });
 
   onDestroy(() => {
       if (resizeObserver) {
           resizeObserver.disconnect();
       }
+      container?.removeEventListener('paste', handleDomPaste, true);
   });
 
   function handleSearch() {
@@ -123,6 +149,7 @@
       terminalData.terminal.options.fontFamily = $settings.terminal.fontFamily;
       terminalData.terminal.options.cursorBlink = $settings.terminal.cursorBlink;
       terminalData.terminal.options.cursorStyle = $settings.terminal.cursorStyle;
+      (terminalData.terminal.options as any).cursorWidth = 1;
       terminalData.terminal.options.scrollback = $settings.terminal.scrollback;
       
       // Update theme

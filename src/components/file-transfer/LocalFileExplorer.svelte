@@ -1,7 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { get } from 'svelte/store';
   import { localFsService } from '../../lib/localFsService';
   import { sftpService } from '../../lib/sftpService';
+  import { fileClipboard } from '../../lib/store';
   import type { FileEntry } from '../../types';
 
   export let initialPath: string = '.'; // Default to current directory
@@ -96,18 +98,37 @@
     };
   }
 
+  function getMenuTargetDirectory() {
+    if (contextMenu.file?.isDirectory) return contextMenu.file.path;
+    return currentPath;
+  }
+
   function closeContextMenu() {
     contextMenu.show = false;
   }
 
   async function handleCreateFolder() {
     closeContextMenu();
-    const name = prompt('Enter folder name:');
+    const name = prompt('请输入文件夹名称:');
     if (!name) return;
     
-    const path = joinPath(currentPath, name);
+    const path = joinPath(getMenuTargetDirectory(), name);
     try {
       await localFsService.createDirectory(path);
+      loadFiles(currentPath);
+    } catch (e: any) {
+      error = e.toString();
+    }
+  }
+
+  async function handleCreateFile() {
+    closeContextMenu();
+    const name = prompt('请输入文件名:');
+    if (!name) return;
+
+    const path = joinPath(getMenuTargetDirectory(), name);
+    try {
+      await localFsService.writeFile(path, new Uint8Array(0), false);
       loadFiles(currentPath);
     } catch (e: any) {
       error = e.toString();
@@ -118,7 +139,7 @@
     closeContextMenu();
     if (!selectedFile) return;
     
-    if (!confirm(`Are you sure you want to delete ${selectedFile.name}?`)) return;
+    if (!confirm(`确定要删除 ${selectedFile.name} 吗？`)) return;
 
     try {
       if (selectedFile.isDirectory) {
@@ -136,7 +157,7 @@
     closeContextMenu();
     if (!selectedFile) return;
 
-    const newName = prompt('Enter new name:', selectedFile.name);
+    const newName = prompt('请输入新名称:', selectedFile.name);
     if (!newName || newName === selectedFile.name) return;
 
     // Construct new path. 
@@ -260,10 +281,89 @@
     return date.toLocaleString();
   }
 
+  function handleCopy() {
+    closeContextMenu();
+    if (!selectedFile) return;
+    fileClipboard.set({
+      source: 'local',
+      path: selectedFile.path,
+      name: selectedFile.name,
+      isDirectory: selectedFile.isDirectory,
+      operation: 'copy',
+    });
+  }
+
+  async function handlePaste() {
+    closeContextMenu();
+    const item = get(fileClipboard);
+    if (!item) return;
+    if (item.isDirectory) return;
+
+    const destDir = selectedFile?.isDirectory ? selectedFile.path : currentPath;
+    const destPath = joinPath(destDir, item.name);
+
+    loading = true;
+    error = null;
+    try {
+      if (item.source === 'local') {
+        const content = await localFsService.readFile(item.path);
+        await localFsService.writeFile(destPath, content, false);
+      } else {
+        if (!item.sessionId) return;
+        let content: Uint8Array;
+        try {
+          content = await sftpService.readFile(item.sessionId, item.path);
+        } catch (e) {
+          content = await sftpService.scpDownload(item.sessionId, item.path);
+        }
+        await localFsService.writeFile(destPath, content, false);
+      }
+      await loadFiles(currentPath);
+    } catch (e: any) {
+      error = e?.message ?? String(e);
+    } finally {
+      loading = false;
+    }
+  }
+
+  function handleKeydown(e: KeyboardEvent) {
+    const target = e.target as HTMLElement | null;
+    if (
+      target &&
+      (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || (target as any).isContentEditable)
+    ) {
+      return;
+    }
+    const isModifier = e.ctrlKey || e.metaKey;
+    if (!isModifier) return;
+    const key = String(e.key).toLowerCase();
+    if (key === 'c') {
+      e.preventDefault();
+      if (selectedFile) {
+        fileClipboard.set({
+          source: 'local',
+          path: selectedFile.path,
+          name: selectedFile.name,
+          isDirectory: selectedFile.isDirectory,
+          operation: 'copy',
+        });
+      }
+      return;
+    }
+    if (key === 'v') {
+      e.preventDefault();
+      void handlePaste();
+    }
+  }
+
   onMount(() => {
     loadFiles(currentPath);
     window.addEventListener('click', closeContextMenu);
-    return () => window.removeEventListener('click', closeContextMenu);
+    window.addEventListener('keydown', handleKeydown);
+    return () => {
+      window.removeEventListener('click', closeContextMenu);
+      window.removeEventListener('keydown', handleKeydown);
+    };
   });
 
   function handleDragStart(e: DragEvent, file: FileEntry) {
@@ -429,20 +529,26 @@
             class="w-full text-left px-4 py-2 hover:bg-slate-100 dark:hover:bg-gray-700 text-slate-700 dark:text-gray-200"
             on:click|stopPropagation={handleDownload}
           >
-            Download
+            下载
+          </button>
+          <button 
+            class="w-full text-left px-4 py-2 hover:bg-slate-100 dark:hover:bg-gray-700 text-slate-700 dark:text-gray-200"
+            on:click|stopPropagation={handleCopy}
+          >
+            复制
           </button>
         {/if}
         <button 
           class="w-full text-left px-4 py-2 hover:bg-slate-100 dark:hover:bg-gray-700 text-slate-700 dark:text-gray-200"
           on:click|stopPropagation={handleRename}
         >
-          Rename
+          重命名
         </button>
         <button 
           class="w-full text-left px-4 py-2 hover:bg-slate-100 dark:hover:bg-gray-700 text-red-600 dark:text-red-400 hover:text-red-500 dark:hover:text-red-300"
           on:click|stopPropagation={handleDelete}
         >
-          Delete
+          删除
         </button>
         <div class="border-t border-slate-200 dark:border-gray-700 my-1"></div>
       {/if}
@@ -450,13 +556,26 @@
         class="w-full text-left px-4 py-2 hover:bg-slate-100 dark:hover:bg-gray-700 text-slate-700 dark:text-gray-200"
         on:click|stopPropagation={handleCreateFolder}
       >
-        New Folder
+        新建文件夹
+      </button>
+      <button 
+        class="w-full text-left px-4 py-2 hover:bg-slate-100 dark:hover:bg-gray-700 text-slate-700 dark:text-gray-200"
+        on:click|stopPropagation={handleCreateFile}
+      >
+        新建文件
+      </button>
+      <button 
+        class="w-full text-left px-4 py-2 hover:bg-slate-100 dark:hover:bg-gray-700 text-slate-700 dark:text-gray-200 disabled:opacity-60"
+        on:click|stopPropagation={handlePaste}
+        disabled={!$fileClipboard}
+      >
+        粘贴
       </button>
       <button 
         class="w-full text-left px-4 py-2 hover:bg-slate-100 dark:hover:bg-gray-700 text-slate-700 dark:text-gray-200"
         on:click|stopPropagation={() => loadFiles(currentPath)}
       >
-        Refresh
+        刷新
       </button>
     </div>
   {/if}
