@@ -1,7 +1,7 @@
 [package]
 name = "ssh_remote_manager"
 version = "0.1.0"
-description = "SSH Remote Manager - A Tauri App for SSH connection management, terminal access, and file transfer"
+description = "Star Shuttle - A Tauri App for SSH connection management, terminal access, and file transfer"
 authors = ["development team"]
 license = "MIT"
 repository = ""

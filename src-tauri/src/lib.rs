@@ -272,6 +272,16 @@ mod commands {
     }
 
     #[command]
+    pub fn save_file_to_local(path: String, content: Vec<u8>) -> Result<(), String> {
+        use std::io::Write;
+        use std::fs::File;
+
+        let mut file = File::create(&path).map_err(|e| format!("Failed to create file: {}", e))?;
+        file.write_all(&content).map_err(|e| format!("Failed to write file: {}", e))?;
+        Ok(())
+    }
+
+    #[command]
     pub async fn send_terminal_data(
         manager: State<'_, Arc<RwLock<DefaultConnectionManager>>>,
         session_id: Uuid,
@@ -492,6 +502,8 @@ pub fn run() {
             commands::verify_app_lock,
             commands::is_app_lock_enabled,
             commands::remove_app_lock,
+            // File system commands
+            commands::save_file_to_local,
             // SFTP commands
             crate::modules::sftp::sftp_ls,
             crate::modules::sftp::sftp_read,

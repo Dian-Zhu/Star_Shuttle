@@ -257,25 +257,28 @@
   <!-- Sidebar Header -->
   <div class="p-4 border-b border-slate-200 dark:border-slate-800 flex flex-col gap-4">
     <div class="flex items-center {$isSidebarCollapsed ? 'justify-center' : 'gap-3'}">
-      <div class="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center shadow-lg shadow-blue-900/20 shrink-0">
-        <span class="font-bold text-xs text-white">SSH</span>
+      <div class="w-8 h-8 flex items-center justify-center shrink-0 text-slate-900 dark:text-white">
+        <svg class="w-8 h-8" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+          <path d="M981.5 215.2c-0.1-55.3-30.9-85.3-86.4-85.4-255.6-0.1-511.3-0.1-766.9 0-55.1 0-85.6 30.4-85.7 86.1-0.3 197.2-0.2 394.3 0 591.5 0.1 57 30.5 86.6 87.8 86.7 126.5 0.1 253 0 379.5 0 128.3 0 256.5 0.1 384.8 0 55.9 0 86.9-29.7 87-84.8 0.2-198 0.2-396-0.1-594.1z m-65.4 586.9c0.1 21.3-6.6 26.6-26.9 26.5-125.7-0.8-251.5-0.4-377.2-0.4-124.9 0-249.7-0.5-374.6 0.5-22.7 0.2-29.7-5.7-29.6-29.2 0.9-192.1 0.9-384.2 0-576.2-0.1-22.3 6.9-27.8 28.2-27.8 250.6 0.6 501.2 0.6 751.7 0 21.3-0.1 28.3 5.5 28.2 27.8-0.7 192.9-0.6 385.8 0.2 578.8z" fill="currentColor"></path>
+          <path d="M249.5 349.1c11.3-0.3 20 5.5 28 12.4 46.9 40.2 94.1 80.2 140.5 121 23.3 20.4 23.3 38.8 0.2 59.1-47.2 41.3-94.8 82-142.7 122.5-18.5 15.6-37.9 15-50.2-1.3-13.8-18.2-7.9-34.4 7.8-48 34.9-30.2 69.6-60.6 105.2-89.9 11.7-9.6 12.7-15 0.4-25.1-36.3-29.9-71.5-61-107.2-91.6-12.7-10.9-17.2-24.3-10.6-39.7 5.1-12.2 15.1-18.9 28.6-19.4zM635.1 653.7c43.6 0 87.3-0.2 130.9 0.1 26.5 0.2 41.3 12.7 40 33.9-1.5 24.4-17.8 32-39.5 32-89 0-178 0.2-267-0.1-27-0.1-41.4-12-41.5-32.8-0.1-21 14.3-32.9 41.1-33 45.3-0.3 90.6-0.1 136-0.1z" fill="currentColor"></path>
+        </svg>
       </div>
       {#if !$isSidebarCollapsed}
         <h1 class="text-base font-bold text-slate-800 dark:text-slate-100 tracking-wide whitespace-nowrap overflow-hidden">
-          Remote Manager
+          Star Shuttle
         </h1>
       {/if}
     </div>
     
     <div class="flex gap-2">
       <button
-        class="flex-1 flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-500 text-white py-2 px-3 rounded-lg font-medium transition-all shadow-md hover:shadow-blue-900/30 active:scale-95"
+        class="{$isSidebarCollapsed ? 'w-8 h-8 p-0' : 'flex-1 py-2 px-3'} flex items-center justify-center {$isSidebarCollapsed ? '' : 'gap-2'} bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-medium transition-all shadow-md hover:shadow-blue-900/30 active:scale-95"
         on:click={() => { editingConnection.set(null); showConnectionForm.set(true); }}
         title="新建连接"
       >
         <PlusIcon class="w-4 h-4" />
         {#if !$isSidebarCollapsed}
-          <span class="whitespace-nowrap">新建</span>
+          <span class="whitespace-nowrap">新建连接</span>
         {/if}
       </button>
     </div>

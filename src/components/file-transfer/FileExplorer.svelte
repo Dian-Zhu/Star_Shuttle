@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { get } from 'svelte/store';
+  import { save } from '@tauri-apps/plugin-dialog';
+  import { invoke } from '@tauri-apps/api/core';
   import { sftpService } from '../../lib/sftpService';
   import { localFsService } from '../../lib/localFsService';
   import { fileClipboard, settings } from '../../lib/store';
@@ -255,20 +257,20 @@
 
   async function handleRename() {
     closeContextMenu();
-    if (!selectedFile) return;
+    if (!contextMenu.file) return;
 
-    const newName = prompt('请输入新名称:', selectedFile.name);
-    if (!newName || newName === selectedFile.name) return;
+    const newName = prompt('请输入新名称:', contextMenu.file.name);
+    if (!newName || newName === contextMenu.file.name) return;
 
-    // Construct new path. 
-    // Assumption: selectedFile.path is the full path. We need to replace the filename.
-    const parts = selectedFile.path.split('/');
+    // Construct new path.
+    // Assumption: contextMenu.file.path is the full path. We need to replace the filename.
+    const parts = contextMenu.file.path.split('/');
     parts.pop(); // Remove old filename
     const parentPath = parts.join('/');
     const newPath = parentPath === '' ? `/${newName}` : `${parentPath}/${newName}`;
 
     try {
-      await sftpService.rename(sessionId, selectedFile.path, newPath);
+      await sftpService.rename(sessionId, contextMenu.file.path, newPath);
       loadFiles(currentPath);
     } catch (e: any) {
       error = e.toString();
@@ -385,27 +387,40 @@
 
   async function handleDownload() {
     closeContextMenu();
-    if (!selectedFile || selectedFile.isDirectory) return;
-    
+    if (!contextMenu.file || contextMenu.file.isDirectory) return;
+
     loading = true;
     try {
       let content: Uint8Array;
       try {
-        content = await sftpService.readFile(sessionId, selectedFile.path);
+        content = await sftpService.readFile(sessionId, contextMenu.file.path);
       } catch (e) {
-        content = await sftpService.scpDownload(sessionId, selectedFile.path);
+        content = await sftpService.scpDownload(sessionId, contextMenu.file.path);
       }
-      const blob = new Blob([content as any]);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = selectedFile.name;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+
+      // 使用保存对话框让用户选择保存位置
+      const filePath = await save({
+        filters: [{
+          name: contextMenu.file.name.split('.').pop() || 'All Files',
+          extensions: contextMenu.file.name.includes('.') ? [contextMenu.file.name.split('.').pop()!] : ['*']
+        }],
+        defaultPath: contextMenu.file.name
+      });
+
+      if (!filePath) {
+        loading = false;
+        return; // 用户取消了保存
+      }
+
+      // 使用 Rust 端的命令保存二进制文件到本地
+      await invoke('save_file_to_local', {
+        path: filePath,
+        content: Array.from(content) // 将 Uint8Array 转换为普通数组，以便通过 IPC 传输
+      });
+
     } catch (e: any) {
       error = e.toString();
+      console.error('Download error:', e);
     } finally {
       loading = false;
     }
@@ -425,13 +440,13 @@
 
   function handleCopy() {
     closeContextMenu();
-    if (!selectedFile) return;
+    if (!contextMenu.file) return;
     fileClipboard.set({
       source: 'remote',
       sessionId,
-      path: selectedFile.path,
-      name: selectedFile.name,
-      isDirectory: selectedFile.isDirectory,
+      path: contextMenu.file.path,
+      name: contextMenu.file.name,
+      isDirectory: contextMenu.file.isDirectory,
       operation: 'copy',
     });
   }

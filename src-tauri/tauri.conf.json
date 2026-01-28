@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "SSH Remote Manager",
-  "version": "0.1.0",
+  "productName": "Star Shuttle",
+  "version": "1.0.0",
   "identifier": "com.sshremotemanager.app",
   "build": {
     "frontendDist": "../dist",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "SSH Remote Manager",
+        "title": "Star Shuttle",
         "width": 1200,
         "height": 800,
         "resizable": true,
