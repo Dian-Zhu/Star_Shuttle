@@ -25,19 +25,39 @@ const MAX_AUTO_RECONNECT_DELAY_MS = 30000;
 
 type OutputWriteState = {
   chunks: string[];
-  scheduled: number | null;
+  chunkIndex: number;
+  scheduled: { id: number; kind: 'raf' | 'timeout' } | null;
   writing: boolean;
   disposed: boolean;
 };
 
 type InputSendState = {
   buffer: string;
-  timer: number | null;
+  timer: { id: number; kind: 'raf' | 'timeout' } | null;
   sending: boolean;
 };
 
 const outputWriteStates = new Map<string, OutputWriteState>();
 const inputSendStates = new Map<string, InputSendState>();
+
+function scheduleNext(callback: () => void): { id: number; kind: 'raf' | 'timeout' } {
+  const hidden = typeof document !== 'undefined' && document.hidden === true;
+  if (!hidden && typeof requestAnimationFrame === 'function') {
+    return { id: requestAnimationFrame(callback), kind: 'raf' };
+  }
+  const timeout = (typeof window !== 'undefined' ? window.setTimeout : setTimeout) as typeof setTimeout;
+  return { id: timeout(callback, 0) as unknown as number, kind: 'timeout' };
+}
+
+function cancelScheduled(job: { id: number; kind: 'raf' | 'timeout' } | null) {
+  if (!job) return;
+  if (job.kind === 'raf') {
+    cancelAnimationFrame(job.id);
+    return;
+  }
+  const clear = (typeof window !== 'undefined' ? window.clearTimeout : clearTimeout) as typeof clearTimeout;
+  clear(job.id as unknown as ReturnType<typeof setTimeout>);
+}
 
 export async function connectAndOpen(connection: Connection, connectConfig?: any) {
   try {
@@ -447,7 +467,7 @@ async function flushTerminalInput(sessionId: string, state: InputSendState) {
   } finally {
     state.sending = false;
     if (state.buffer.length > 0 && state.timer === null) {
-      state.timer = requestAnimationFrame(() => {
+      state.timer = scheduleNext(() => {
         state.timer = null;
         void flushTerminalInput(sessionId, state);
       });
@@ -470,7 +490,7 @@ function sendTerminalDataBuffered(sessionId: string, data: string, immediate: bo
 
   if (state.timer !== null) {
     if (!immediate) return;
-    cancelAnimationFrame(state.timer);
+    cancelScheduled(state.timer);
     state.timer = null;
   }
 
@@ -484,7 +504,7 @@ function sendTerminalDataBuffered(sessionId: string, data: string, immediate: bo
 
   // 使用 requestAnimationFrame 替代 setTimeout，延迟从10ms降至3ms
   // 这能提供更平滑的时序，避免setTimeout的精度问题
-  state.timer = requestAnimationFrame(() => {
+  state.timer = scheduleNext(() => {
     state.timer = null;
     void flushTerminalInput(sessionId, state);
   });
@@ -590,7 +610,7 @@ export async function closeTerminal(sessionId: string) {
     if (outputState) {
       outputState.disposed = true;
       if (outputState.scheduled !== null) {
-        cancelAnimationFrame(outputState.scheduled);
+        cancelScheduled(outputState.scheduled);
       }
       outputWriteStates.delete(sessionId);
     }
@@ -598,7 +618,7 @@ export async function closeTerminal(sessionId: string) {
     const inputState = inputSendStates.get(sessionId);
     if (inputState) {
       if (inputState.timer !== null) {
-        cancelAnimationFrame(inputState.timer);
+        cancelScheduled(inputState.timer);
       }
       inputSendStates.delete(sessionId);
     }
@@ -762,38 +782,43 @@ export async function restoreActiveSessions() {
   }
 }
 
-async function setupTerminalListeners(sessionId: string, term: Terminal) {
+export async function setupTerminalListeners(sessionId: string, term: Terminal) {
     const outputState: OutputWriteState = {
       chunks: [],
+      chunkIndex: 0,
       scheduled: null,
       writing: false,
       disposed: false,
     };
     outputWriteStates.set(sessionId, outputState);
 
-    const flushOutput = () => {
+    function flushOutput() {
       if (outputState.disposed) return;
       outputState.scheduled = null;
       if (outputState.writing) return;
-      if (outputState.chunks.length === 0) return;
+      if (outputState.chunkIndex >= outputState.chunks.length) return;
       
-      // Increase chunk processing limit to 1MB per frame to prevent backlog accumulation
-      // during high-throughput scenarios (e.g. cat large files)
       const CHUNK_LIMIT = 1024 * 1024; // 1MB
-      let payload = '';
       let count = 0;
+      const parts: string[] = [];
 
-      while (outputState.chunks.length > 0) {
-        const nextChunk = outputState.chunks[0];
+      while (outputState.chunkIndex < outputState.chunks.length) {
+        const nextChunk = outputState.chunks[outputState.chunkIndex];
         if (count + nextChunk.length > CHUNK_LIMIT && count > 0) break;
         
-        const chunk = outputState.chunks.shift()!;
-        payload += chunk;
-        count += chunk.length;
+        parts.push(nextChunk);
+        count += nextChunk.length;
+        outputState.chunkIndex += 1;
         
         if (count >= CHUNK_LIMIT) break;
       }
 
+      if (outputState.chunkIndex > 2048 || outputState.chunkIndex > Math.floor(outputState.chunks.length / 2)) {
+        outputState.chunks.splice(0, outputState.chunkIndex);
+        outputState.chunkIndex = 0;
+      }
+
+      const payload = parts.join('');
       if (payload.length === 0) return;
 
       outputState.writing = true;
@@ -806,19 +831,23 @@ async function setupTerminalListeners(sessionId: string, term: Terminal) {
           );
         }
         outputState.writing = false;
-        if (outputState.chunks.length > 0 && !outputState.disposed && outputState.scheduled === null) {
-          outputState.scheduled = requestAnimationFrame(flushOutput);
+        if (outputState.chunkIndex < outputState.chunks.length && !outputState.disposed) {
+          scheduleFlush();
         }
       });
+    }
+
+    const scheduleFlush = () => {
+      if (outputState.disposed) return;
+      if (outputState.scheduled !== null) return;
+      outputState.scheduled = scheduleNext(flushOutput);
     };
 
     // Output listener
     const outputUnlisten = await listen(`terminal-output-${sessionId}`, (event: any) => {
       if (event.payload && event.payload.data) {
         outputState.chunks.push(event.payload.data);
-        if (outputState.scheduled === null && !outputState.writing) {
-          outputState.scheduled = requestAnimationFrame(flushOutput);
-        }
+        if (!outputState.writing) scheduleFlush();
       }
     });
 
@@ -862,7 +891,7 @@ async function setupTerminalListeners(sessionId: string, term: Terminal) {
     outputListeners.set(sessionId, () => {
         outputState.disposed = true;
         if (outputState.scheduled !== null) {
-          cancelAnimationFrame(outputState.scheduled);
+          cancelScheduled(outputState.scheduled);
         }
         outputWriteStates.delete(sessionId);
 

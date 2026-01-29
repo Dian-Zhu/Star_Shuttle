@@ -62,6 +62,12 @@ export interface ActiveTerminal {
   searchAddon: SearchAddon;
 }
 
+export interface SplitConfig {
+  sessionId: string;
+  mode: 'none' | 'horizontal' | 'vertical';
+  splitRatio: number; // 0-1, 主面板占比
+}
+
 export type FileClipboardItem = {
   source: 'local' | 'remote';
   sessionId?: string;
@@ -88,6 +94,7 @@ export const loading = writable<boolean>(false);
 export const errorMessage = writable<string | null>(null);
 export const successMessage = writable<string | null>(null);
 export const fileClipboard = writable<FileClipboardItem | null>(null);
+export const terminalSplitConfigs = writable<Map<string, SplitConfig>>(new Map());
 
 // History Store
 const loadHistory = (): HistoryItem[] => {
