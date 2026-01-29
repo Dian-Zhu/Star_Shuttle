@@ -96,6 +96,12 @@
     });
   }
   
+  function handleDocumentClick() {
+    if (contextMenu.show) {
+      closeContextMenu();
+    }
+  }
+
   onMount(async () => {
       resizeObserver = new ResizeObserver(() => {
           if (isVisible && mode === 'terminal' && terminalData.fitAddon) {
@@ -129,18 +135,14 @@
       resizeObserver.observe(container);
       container.addEventListener('paste', handlePrimaryPaste, true);
 
-      // 点击其他地方关闭右键菜单
-      document.addEventListener('click', () => {
-        if (contextMenu.show) {
-          closeContextMenu();
-        }
-      });
+      document.addEventListener('click', handleDocumentClick);
   });
 
   onDestroy(() => {
       if (resizeObserver) {
           resizeObserver.disconnect();
       }
+      document.removeEventListener('click', handleDocumentClick);
       primaryContainerRef?.removeEventListener('paste', handlePrimaryPaste, true);
 
       // 清理副终端

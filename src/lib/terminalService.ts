@@ -29,6 +29,9 @@ type OutputWriteState = {
   scheduled: { id: number; kind: 'raf' | 'timeout' } | null;
   writing: boolean;
   disposed: boolean;
+  paused: boolean;
+  pausedBuffer: string;
+  chunkBudget: number;
 };
 
 type InputSendState = {
@@ -789,27 +792,34 @@ export async function setupTerminalListeners(sessionId: string, term: Terminal) 
       scheduled: null,
       writing: false,
       disposed: false,
+      paused: false,
+      pausedBuffer: '',
+      chunkBudget: 256 * 1024,
     };
     outputWriteStates.set(sessionId, outputState);
+
+    const MAX_PAUSED_BUFFER = 2 * 1024 * 1024;
+    const TARGET_WRITE_MS = 12;
 
     function flushOutput() {
       if (outputState.disposed) return;
       outputState.scheduled = null;
+      if (outputState.paused) return;
       if (outputState.writing) return;
       if (outputState.chunkIndex >= outputState.chunks.length) return;
-      
-      const CHUNK_LIMIT = 1024 * 1024; // 1MB
+
+      const CHUNK_LIMIT = outputState.chunkBudget;
       let count = 0;
       const parts: string[] = [];
 
       while (outputState.chunkIndex < outputState.chunks.length) {
         const nextChunk = outputState.chunks[outputState.chunkIndex];
         if (count + nextChunk.length > CHUNK_LIMIT && count > 0) break;
-        
+
         parts.push(nextChunk);
         count += nextChunk.length;
         outputState.chunkIndex += 1;
-        
+
         if (count >= CHUNK_LIMIT) break;
       }
 
@@ -825,13 +835,19 @@ export async function setupTerminalListeners(sessionId: string, term: Terminal) 
       const writeStart = performance.now();
       term.write(payload, () => {
         const writeDuration = performance.now() - writeStart;
-        if (writeDuration > 32) {
+        if (writeDuration > TARGET_WRITE_MS) {
+          outputState.chunkBudget = Math.max(64 * 1024, Math.floor(outputState.chunkBudget * 0.7));
+        } else if (writeDuration < TARGET_WRITE_MS / 2) {
+          outputState.chunkBudget = Math.min(1024 * 1024, Math.floor(outputState.chunkBudget * 1.15));
+        }
+
+        if (IS_DEV && writeDuration > 32) {
           console.warn(
-            `[TermOutput] slow write ${sessionId}: ${writeDuration.toFixed(1)}ms, payload=${payload.length}, pending=${outputState.chunks.length}`,
+            `[TermOutput] slow write ${sessionId}: ${writeDuration.toFixed(1)}ms, payload=${payload.length}, pending=${outputState.chunks.length}, budget=${outputState.chunkBudget}`,
           );
         }
         outputState.writing = false;
-        if (outputState.chunkIndex < outputState.chunks.length && !outputState.disposed) {
+        if (!outputState.paused && outputState.chunkIndex < outputState.chunks.length && !outputState.disposed) {
           scheduleFlush();
         }
       });
@@ -839,14 +855,74 @@ export async function setupTerminalListeners(sessionId: string, term: Terminal) 
 
     const scheduleFlush = () => {
       if (outputState.disposed) return;
+      if (outputState.paused) return;
       if (outputState.scheduled !== null) return;
       outputState.scheduled = scheduleNext(flushOutput);
     };
 
+    const computePaused = () => {
+      const hidden = typeof document !== 'undefined' && document.hidden === true;
+      const terminals = get(activeTerminals);
+      const index = get(selectedTerminalIndex);
+      const selectedSessionId = terminals[index]?.sessionId;
+      return hidden || selectedSessionId !== sessionId;
+    };
+
+    const applyPausedState = () => {
+      const nextPaused = computePaused();
+      if (nextPaused === outputState.paused) return;
+      outputState.paused = nextPaused;
+
+      if (outputState.paused) {
+        if (outputState.scheduled !== null) {
+          cancelScheduled(outputState.scheduled);
+          outputState.scheduled = null;
+        }
+        return;
+      }
+
+      if (outputState.pausedBuffer) {
+        outputState.chunks.push(outputState.pausedBuffer);
+        outputState.pausedBuffer = '';
+      }
+      if (!outputState.writing) scheduleFlush();
+    };
+
+    applyPausedState();
+
+    const onVisibilityChange = () => {
+      if (outputState.disposed) return;
+      applyPausedState();
+    };
+
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisibilityChange);
+    }
+
+    const unsubscribeSelected = selectedTerminalIndex.subscribe(() => {
+      if (outputState.disposed) return;
+      applyPausedState();
+    });
+
+    const unsubscribeTerminals = activeTerminals.subscribe(() => {
+      if (outputState.disposed) return;
+      applyPausedState();
+    });
+
     // Output listener
     const outputUnlisten = await listen(`terminal-output-${sessionId}`, (event: any) => {
       if (event.payload && event.payload.data) {
-        outputState.chunks.push(event.payload.data);
+        const data = String(event.payload.data);
+
+        if (outputState.paused) {
+          outputState.pausedBuffer += data;
+          if (outputState.pausedBuffer.length > MAX_PAUSED_BUFFER) {
+            outputState.pausedBuffer = outputState.pausedBuffer.slice(-MAX_PAUSED_BUFFER);
+          }
+          return;
+        }
+
+        outputState.chunks.push(data);
         if (!outputState.writing) scheduleFlush();
       }
     });
@@ -894,6 +970,12 @@ export async function setupTerminalListeners(sessionId: string, term: Terminal) 
           cancelScheduled(outputState.scheduled);
         }
         outputWriteStates.delete(sessionId);
+
+        if (typeof document !== 'undefined') {
+          document.removeEventListener('visibilitychange', onVisibilityChange);
+        }
+        unsubscribeSelected();
+        unsubscribeTerminals();
 
         outputUnlisten();
         errorUnlisten();

@@ -144,29 +144,107 @@
     return currentPath;
   }
 
-  async function loadFiles(path: string) {
-    console.log('[FileExplorer] loadFiles called', { sessionId, path });
+  type DirectoryCacheEntry = {
+    ts: number;
+    files: FileEntry[];
+  };
+
+  const directoryCache = new Map<string, DirectoryCacheEntry>();
+  const CACHE_TTL_MS = 30000;
+  const CACHE_MAX_ENTRIES = 50;
+
+  let loadSequence = 0;
+  let lastRequestedPath: string | null = null;
+  let lastSessionId = sessionId;
+  let activeLoadAbortController: AbortController | null = null;
+
+  $: if (sessionId !== lastSessionId) {
+    lastSessionId = sessionId;
+    directoryCache.clear();
+    loadSequence += 1;
+    lastRequestedPath = null;
+    activeLoadAbortController?.abort();
+    activeLoadAbortController = null;
+  }
+
+  function sortFiles(list: FileEntry[]) {
+    list.sort((a, b) => {
+      if (a.isDirectory === b.isDirectory) return a.name.localeCompare(b.name);
+      return a.isDirectory ? -1 : 1;
+    });
+  }
+
+  function getCacheKey(path: string) {
+    return `${sessionId}::${path}`;
+  }
+
+  function setCache(path: string, list: FileEntry[]) {
+    const key = getCacheKey(path);
+    directoryCache.set(key, { ts: Date.now(), files: list });
+    while (directoryCache.size > CACHE_MAX_ENTRIES) {
+      const firstKey = directoryCache.keys().next().value as string | undefined;
+      if (!firstKey) break;
+      directoryCache.delete(firstKey);
+    }
+  }
+
+  function invalidateCache(path: string) {
+    directoryCache.delete(getCacheKey(path));
+  }
+
+  async function loadFiles(path: string, options?: { force?: boolean }) {
+    if (!options?.force && loading && lastRequestedPath === path) return;
+
+    lastRequestedPath = path;
+    const requestId = (loadSequence += 1);
+    let controller: AbortController | null = null;
+
     loading = true;
     error = null;
     selectedFile = null;
     contextMenu.show = false;
+
+    activeLoadAbortController?.abort();
+    activeLoadAbortController = null;
+
+    if (!options?.force) {
+      const cached = directoryCache.get(getCacheKey(path));
+      if (cached && Date.now() - cached.ts <= CACHE_TTL_MS) {
+        files = cached.files;
+        currentPath = path;
+        loading = false;
+        return;
+      }
+    }
+
     try {
-      console.log('[FileExplorer] Calling sftpService.listDirectory...');
-      files = await sftpService.listDirectory(sessionId, path);
-      console.log('[FileExplorer] listDirectory success', files.length);
-      currentPath = path;
-      
-      // Sort: Directories first, then files
-      files.sort((a, b) => {
-        if (a.isDirectory === b.isDirectory) {
-          return a.name.localeCompare(b.name);
+      controller = new AbortController();
+      const localController = controller;
+      activeLoadAbortController = localController;
+      const abortPromise = new Promise<never>((_, reject) => {
+        if (localController.signal.aborted) {
+          reject(new DOMException('Aborted', 'AbortError'));
+          return;
         }
-        return a.isDirectory ? -1 : 1;
+        localController.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
       });
+
+      const nextFiles = await Promise.race([sftpService.listDirectory(sessionId, path), abortPromise]);
+      if (requestId !== loadSequence) return;
+      sortFiles(nextFiles);
+      files = nextFiles;
+      currentPath = path;
+      setCache(path, nextFiles);
     } catch (e: any) {
+      if (requestId !== loadSequence) return;
+      if (e?.name === 'AbortError') return;
       error = e.toString();
     } finally {
-      loading = false;
+      if (controller && activeLoadAbortController === controller) {
+        activeLoadAbortController = null;
+      }
+      const shouldStopLoading = requestId === loadSequence;
+      if (shouldStopLoading) loading = false;
     }
   }
 
@@ -213,7 +291,8 @@
     const path = joinPath(getMenuTargetDirectory(), name);
     try {
       await sftpService.createDirectory(sessionId, path);
-      loadFiles(currentPath);
+      invalidateCache(currentPath);
+      loadFiles(currentPath, { force: true });
     } catch (e: any) {
       error = e.toString();
     }
@@ -231,7 +310,8 @@
       } catch (e) {
         await sftpService.scpUpload(sessionId, path, new Uint8Array(0));
       }
-      loadFiles(currentPath);
+      invalidateCache(currentPath);
+      loadFiles(currentPath, { force: true });
     } catch (e: any) {
       error = e.toString();
     }
@@ -249,7 +329,8 @@
       } else {
         await sftpService.removeFile(sessionId, selectedFile.path);
       }
-      loadFiles(currentPath);
+      invalidateCache(currentPath);
+      loadFiles(currentPath, { force: true });
     } catch (e: any) {
       error = e.toString();
     }
@@ -271,7 +352,8 @@
 
     try {
       await sftpService.rename(sessionId, contextMenu.file.path, newPath);
-      loadFiles(currentPath);
+      invalidateCache(currentPath);
+      loadFiles(currentPath, { force: true });
     } catch (e: any) {
       error = e.toString();
     }
@@ -301,7 +383,8 @@
             } catch (err) {
               await sftpService.scpUpload(sessionId, remotePath, content);
             }
-            await loadFiles(currentPath);
+            invalidateCache(currentPath);
+            await loadFiles(currentPath, { force: true });
           } finally {
             loading = false;
           }
@@ -332,7 +415,8 @@
       for (const file of filesToUpload) {
         await uploadSingleFile(file);
       }
-      loadFiles(currentPath);
+      invalidateCache(currentPath);
+      await loadFiles(currentPath, { force: true });
     } catch (e: any) {
       error = e.toString();
     } finally {
@@ -420,7 +504,6 @@
 
     } catch (e: any) {
       error = e.toString();
-      console.error('Download error:', e);
     } finally {
       loading = false;
     }
@@ -485,7 +568,8 @@
         }
       }
 
-      await loadFiles(currentPath);
+      invalidateCache(currentPath);
+      await loadFiles(currentPath, { force: true });
     } catch (e: any) {
       error = e?.message ?? String(e);
     } finally {
@@ -621,7 +705,8 @@
       } catch (e) {
         await sftpService.scpUpload(sessionId, editorFile.path, content);
       }
-      await loadFiles(currentPath);
+      invalidateCache(currentPath);
+      await loadFiles(currentPath, { force: true });
       closeEditor();
     } catch (e: any) {
       editorError = e?.message ?? String(e);
@@ -690,7 +775,7 @@
     </button>
     <button 
         class="p-1 hover:bg-slate-200 dark:hover:bg-gray-700 rounded text-slate-600 dark:text-gray-300" 
-        on:click={() => loadFiles(currentPath)} 
+        on:click={() => loadFiles(currentPath, { force: true })} 
         title="Refresh"
     >
       <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
@@ -860,7 +945,7 @@
       </button>
       <button
         class="w-full text-left px-4 py-2 hover:bg-slate-100 dark:hover:bg-gray-700 text-slate-700 dark:text-gray-200 flex items-center space-x-2"
-        on:click|stopPropagation={() => loadFiles(currentPath)}
+        on:click|stopPropagation={() => loadFiles(currentPath, { force: true })}
       >
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>

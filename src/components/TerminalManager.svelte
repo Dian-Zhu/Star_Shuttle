@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { activeTerminals, selectedTerminalIndex, broadcastInputEnabled, broadcastSessionIds } from '../lib/store';
   import { closeTerminal } from '../lib/terminalService';
@@ -15,10 +15,44 @@
   let memPercent = 0;
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   let clockTimer: ReturnType<typeof setInterval> | null = null;
+  let pollInFlight = false;
+  let pollingEnabled = false;
   const lastNetSampleBySession = new Map<string, { rx: number; tx: number; time: number }>();
+  const POLL_INTERVAL_MS = 5000;
 
   function updateClock() {
     currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+
+  function stopPolling() {
+    pollingEnabled = false;
+    if (pollTimer) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+  }
+
+  function startPolling(): boolean {
+    if (pollingEnabled) return false;
+    pollingEnabled = true;
+    if (!pollTimer) {
+      pollTimer = setInterval(() => void pollSelectedSession(), POLL_INTERVAL_MS);
+    }
+    return true;
+  }
+
+  function updatePollingState(): boolean {
+    const hasTerminal = $activeTerminals.length > 0 && Boolean($activeTerminals[$selectedTerminalIndex]);
+    const visible = typeof document === 'undefined' ? true : document.hidden !== true;
+    const focused = typeof document === 'undefined' ? true : (document.hasFocus?.() ?? true);
+    const shouldEnable = hasTerminal && visible && focused;
+
+    if (!shouldEnable) {
+      stopPolling();
+      return false;
+    }
+
+    return startPolling();
   }
 
   function parseCpuUsage(output: string) {
@@ -70,6 +104,8 @@
   }
 
   async function pollSelectedSession() {
+    if (!pollingEnabled) return;
+    if (pollInFlight) return;
     const terminal = $activeTerminals[$selectedTerminalIndex];
     if (!terminal) {
       netSpeedBps = 0;
@@ -79,6 +115,7 @@
     }
 
     const sessionId = terminal.sessionId;
+    pollInFlight = true;
     try {
       // Combine commands to reduce overhead
       // cat /proc/net/dev; echo "---"; top -bn1 | grep "Cpu(s)"; echo "---"; free -m
@@ -109,19 +146,54 @@
       cpuUsage = 0;
       memPercent = 0;
       lastNetSampleBySession.delete(sessionId);
+    } finally {
+      pollInFlight = false;
+    }
+  }
+
+  $: {
+    $activeTerminals;
+    $selectedTerminalIndex;
+    updatePollingState();
+    if (pollingEnabled) {
+      void pollSelectedSession();
     }
   }
 
   onMount(() => {
     updateClock();
     clockTimer = setInterval(updateClock, 1000);
-    pollSelectedSession();
-    pollTimer = setInterval(pollSelectedSession, 2000);
-  });
+    updatePollingState();
 
-  onDestroy(() => {
-    if (clockTimer) clearInterval(clockTimer);
-    if (pollTimer) clearInterval(pollTimer);
+    const onVisibilityChange = () => {
+      if (updatePollingState()) void pollSelectedSession();
+    };
+    const onFocus = () => {
+      if (updatePollingState()) void pollSelectedSession();
+    };
+    const onBlur = () => {
+      updatePollingState();
+    };
+
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisibilityChange);
+    }
+    if (typeof window !== 'undefined') {
+      window.addEventListener('focus', onFocus);
+      window.addEventListener('blur', onBlur);
+    }
+
+    return () => {
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisibilityChange);
+      }
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('focus', onFocus);
+        window.removeEventListener('blur', onBlur);
+      }
+      if (clockTimer) clearInterval(clockTimer);
+      stopPolling();
+    };
   });
 
   function handleTabClick(index: number, event: MouseEvent) {
