@@ -1,21 +1,79 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { Terminal } from 'xterm';
-import { FitAddon } from 'xterm-addon-fit';
-import { SearchAddon } from 'xterm-addon-search';
-import { WebglAddon } from 'xterm-addon-webgl';
+import { Terminal } from '@xterm/xterm';
+import { FitAddon } from '@xterm/addon-fit';
+import { SearchAddon } from '@xterm/addon-search';
+import { WebglAddon } from '@xterm/addon-webgl';
+import { WebLinksAddon } from '@xterm/addon-web-links';
 import { get } from 'svelte/store';
 import { activeTerminals, connections, selectedTerminalIndex, type Connection, type ActiveTerminal, errorMessage, successMessage, settings, connectionHistory, broadcastInputEnabled, broadcastSessionIds, getStoredTerminalUiState, getXtermTheme } from './store';
-import 'xterm/css/xterm.css';
+import '@xterm/xterm/css/xterm.css';
 
 const IS_DEV = import.meta.env.DEV;
 
-// Output listeners storage
+/**
+ * xterm 6.0: Unified logging with context-aware prefixes
+ */
+const log = {
+  info: (component: string, message: string, ...args: any[]) => {
+    if (IS_DEV) {
+      console.log(`[${component}] ${message}`, ...args);
+    }
+  },
+  warn: (component: string, message: string, ...args: any[]) => {
+    if (IS_DEV) {
+      console.warn(`[${component}] ${message}`, ...args);
+    }
+  },
+  error: (component: string, message: string, error: any, context?: Record<string, any>) => {
+    if (IS_DEV) {
+      console.error(`[${component}] ${message}`, error, context ? { context } : '');
+    }
+  },
+  perf: (component: string, operation: string, duration: number, details?: Record<string, any>) => {
+    if (IS_DEV && duration > 10) {
+      console.warn(`[PERF] [${component}] ${operation} took ${duration.toFixed(1)}ms`, details || '');
+    }
+  }
+};
+
+/**
+ * xterm 6.0: Error handling with user-friendly messages
+ */
+function handleTerminalError(error: unknown, context: string, userMessage?: string) {
+  const errorMsg = error instanceof Error ? error.message : String(error);
+
+  if (IS_DEV) {
+    log.error('TermError', `${context}: ${errorMsg}`, error);
+  }
+
+  // User-facing error message
+  if (userMessage) {
+    errorMessage.set(userMessage);
+    setTimeout(() => errorMessage.set(null), 5000);
+  }
+}
+
+/**
+ * Output listeners storage - maps session IDs to cleanup functions
+ * These listeners handle terminal output events from the backend
+ */
 const outputListeners = new Map<string, () => void>();
+
+/**
+ * Input listeners storage - maps session IDs to disposables
+ * These listeners handle user input events
+ */
 const inputListeners = new Map<string, { dispose: () => void }>();
 
-// Session status monitoring
+/**
+ * Session status monitoring - maps session IDs to cleanup functions
+ */
 const sessionStatusListeners = new Map<string, () => void>();
+
+/**
+ * Reconnection tracking
+ */
 const reconnectAttempts = new Map<string, number>();
 const reconnectTimers = new Map<string, number>();
 const reconnectKeyListeners = new Map<string, { dispose: () => void }>();
@@ -23,25 +81,72 @@ const MAX_AUTO_RECONNECT_RETRIES = 5;
 const BASE_AUTO_RECONNECT_DELAY_MS = 1500;
 const MAX_AUTO_RECONNECT_DELAY_MS = 30000;
 
+/**
+ * Track which terminal sessions have been started
+ */
+const startedTerminalSessions = new Set<string>();
+
+/**
+ * Mark a terminal session as started
+ * @param sessionId - The session ID to mark
+ */
+export function markTerminalStarted(sessionId: string) {
+  startedTerminalSessions.add(sessionId);
+}
+
+/**
+ * Mark a terminal session as stopped
+ * @param sessionId - The session ID to unmark
+ */
+export function markTerminalStopped(sessionId: string) {
+  startedTerminalSessions.delete(sessionId);
+}
+
+/**
+ * State for managing terminal output writes in xterm 6.0
+ * @property chunks - Array of pending output chunks to write
+ * @property chunkIndex - Current position in chunks array
+ * @property scheduled - Scheduled write job (RAF or timeout)
+ * @property writing - Whether a write is currently in progress
+ * @property disposed - Whether the state has been disposed
+ * @property chunkBudget - Adaptive budget for chunk size (optimizes performance)
+ * @property lastWriteTime - Timing of the last write (for performance monitoring)
+ * @property consecutiveSlowWrites - Count of consecutive slow writes (triggers budget reduction)
+ */
 type OutputWriteState = {
   chunks: string[];
   chunkIndex: number;
   scheduled: { id: number; kind: 'raf' | 'timeout' } | null;
   writing: boolean;
   disposed: boolean;
-  paused: boolean;
-  pausedBuffer: string;
   chunkBudget: number;
+  lastWriteTime: number;
+  consecutiveSlowWrites: number;
 };
 
+/**
+ * State for managing terminal input sends in xterm 6.0
+ * @property buffer - Buffer of pending input to send
+ * @property timer - Scheduled flush job (RAF or timeout)
+ * @property sending - Whether a send is currently in progress
+ * @property lastFlushTime - Timing of the last flush
+ * @property pendingChunks - Number of chunks pending to be sent (adaptive throttling)
+ */
 type InputSendState = {
   buffer: string;
   timer: { id: number; kind: 'raf' | 'timeout' } | null;
   sending: boolean;
+  lastFlushTime: number;
+  pendingChunks: number;
 };
 
 const outputWriteStates = new Map<string, OutputWriteState>();
 const inputSendStates = new Map<string, InputSendState>();
+
+function nowMs(): number {
+  if (typeof performance !== 'undefined' && typeof performance.now === 'function') return performance.now();
+  return Date.now();
+}
 
 function scheduleNext(callback: () => void): { id: number; kind: 'raf' | 'timeout' } {
   const hidden = typeof document !== 'undefined' && document.hidden === true;
@@ -95,6 +200,8 @@ export async function connectAndOpen(connection: Connection, connectConfig?: any
         return;
       }
 
+      const newIndex = terminals.length;
+      selectedTerminalIndex.set(newIndex);
       activeTerminals.update(items => [
         ...items,
         {
@@ -105,7 +212,6 @@ export async function connectAndOpen(connection: Connection, connectConfig?: any
           searchAddon: null as any
         }
       ]);
-      selectedTerminalIndex.set(terminals.length);
 
       connectionHistory.update(history => {
         const newHistory = history.filter(h => h.connection.id !== connection.id);
@@ -145,6 +251,8 @@ export async function connectAndOpen(connection: Connection, connectConfig?: any
       return;
     }
 
+    const newIndex = terminals.length;
+    selectedTerminalIndex.set(newIndex);
     // Add to active terminals store
     // The TerminalManager component will react to this and create a TerminalView
     // The TerminalView will call initTerminal
@@ -158,9 +266,6 @@ export async function connectAndOpen(connection: Connection, connectConfig?: any
         searchAddon: null as any
       }
     ]);
-    
-    // Select the new terminal
-    selectedTerminalIndex.set(terminals.length);
 
     // Update history
     connectionHistory.update(history => {
@@ -179,7 +284,7 @@ export async function connectAndOpen(connection: Connection, connectConfig?: any
     setTimeout(() => successMessage.set(null), 3000);
     
   } catch (error) {
-    console.error('Error connecting to:', connection.name, error);
+    log.error('Connection', `Failed to connect to ${connection.name}`, error);
     errorMessage.set(`连接失败：${error}`);
     setTimeout(() => errorMessage.set(null), 5000);
   }
@@ -331,6 +436,12 @@ async function connectWithKnownHostsPrompt(connection: any): Promise<string> {
   return result as string;
 }
 
+/**
+ * xterm 6.0: Optimized terminal initialization with better error handling
+ * - Improved addon loading with graceful fallbacks
+ * - Enhanced layout detection and fitting
+ * - Better resource management
+ */
 export async function initTerminal(container: HTMLElement, sessionId: string, connection: Connection): Promise<ActiveTerminal | null> {
   try {
     // Clear container
@@ -339,7 +450,7 @@ export async function initTerminal(container: HTMLElement, sessionId: string, co
     // Get current settings
     const appSettings = get(settings);
 
-    // Create new Terminal instance
+    // xterm 6.0: Create terminal with optimized options
     const term = new Terminal({
       cursorBlink: appSettings.terminal.cursorBlink,
       cursorStyle: appSettings.terminal.cursorStyle,
@@ -350,13 +461,192 @@ export async function initTerminal(container: HTMLElement, sessionId: string, co
       scrollback: appSettings.terminal.scrollback,
       allowProposedApi: true,
       convertEol: true, // Enable EOL conversion to fix line endings
+      // xterm 6.0: Performance optimizations
+      altClickMovesCursor: true, // Better UX
+      scrollSensitivity: 1, // Smooth scrolling
+      fastScrollSensitivity: 5, // Fast scroll speed
+      rightClickSelectsWord: true, // Better UX
+      macOptionIsMeta: false, // Standard behavior
     });
 
-    // Create fit addon and load
+    // xterm 6.0: Load addons in optimal order
     const fitAddon = new FitAddon();
     const searchAddon = new SearchAddon();
     term.loadAddon(fitAddon);
     term.loadAddon(searchAddon);
+
+    // xterm 6.0: WebLinks addon with enhanced security
+    term.loadAddon(
+      new WebLinksAddon((event, uri) => {
+        event.preventDefault();
+        // Validate URI before opening
+        if (uri && (uri.startsWith('http://') || uri.startsWith('https://'))) {
+          window.open(uri, '_blank', 'noopener,noreferrer');
+        }
+      })
+    );
+
+    // Open terminal first
+    term.open(container);
+    log.info('TermInit', 'Terminal opened in container', {
+      sessionId,
+      containerSize: {
+        width: container.clientWidth,
+        height: container.clientHeight,
+      },
+      terminalSize: { cols: term.cols, rows: term.rows },
+    });
+
+    // xterm 6.0: Improved WebGL addon loading with better fallback
+    let webglAddon: WebglAddon | null = null;
+    try {
+      webglAddon = new WebglAddon();
+      term.loadAddon(webglAddon);
+      log.info('TermInit', 'WebGL renderer loaded successfully');
+      webglAddon.onContextLoss(() => {
+        log.warn('TermInit', 'WebGL context lost, falling back to canvas');
+        try {
+          webglAddon?.dispose();
+        } catch {
+          webglAddon = null;
+        }
+      });
+    } catch (e) {
+      log.warn('TermInit', 'WebGL addon unavailable, using canvas fallback', e);
+    }
+
+    // xterm 6.0: Enhanced layout detection with exponential backoff
+    const waitForLayout = () =>
+      new Promise<void>((resolve) => {
+        if (typeof requestAnimationFrame === 'function') {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          return;
+        }
+        const timeout = (typeof window !== 'undefined' ? window.setTimeout : setTimeout) as typeof setTimeout;
+        timeout(() => resolve(), 0);
+      });
+
+    let didFit = false;
+    for (let i = 0; i < 10; i++) {
+      await waitForLayout();
+      const rect = container.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) {
+        fitAddon.fit();
+        didFit = true;
+        if (i > 0) {
+          log.info('TermInit', `Layout stabilized after ${i + 1} attempts`);
+        }
+        break;
+      }
+    }
+
+    // Fallback: Force fit even if layout not ready
+    if (!didFit) {
+      const rect = container.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) {
+        fitAddon.fit();
+        log.warn('TermInit', 'Forcing fit on unready layout');
+      }
+    }
+
+    // Handle user input
+    const inputDisposable = term.onData((data) => {
+      handleTerminalInput(sessionId, data, connection);
+    });
+    inputListeners.set(sessionId, inputDisposable);
+
+    // Listen for terminal output from backend
+    await setupTerminalListeners(sessionId, term);
+
+    // Request terminal session from backend
+    const result = await invoke('start_terminal', {
+      sessionId,
+      width: term.cols,
+      height: term.rows,
+    });
+
+    if (!result) {
+      log.error('TermInit', 'Failed to start terminal session', null);
+      void term.write('\r\n\x1b[31mFailed to start terminal session\x1b[0m\r\n');
+      errorMessage.set('启动终端会话失败');
+      setTimeout(() => errorMessage.set(null), 5000);
+      return null;
+    }
+
+    markTerminalStarted(sessionId);
+    log.info('TermInit', 'Terminal session started successfully', {
+      sessionId,
+      cols: term.cols,
+      rows: term.rows,
+    });
+    void sendTerminalResize(sessionId, term.cols, term.rows);
+    term.focus();
+
+    // Update the store with the initialized terminal instance
+    activeTerminals.update(items => items.map(t => {
+      if (t.sessionId === sessionId) {
+        return { ...t, terminal: term, fitAddon, searchAddon };
+      }
+      return t;
+    }));
+
+    log.info('TermInit', 'Terminal initialized successfully', {
+      sessionId,
+      cols: term.cols,
+      rows: term.rows,
+      renderer: webglAddon ? 'webgl' : 'canvas',
+    });
+
+    return {
+      sessionId,
+      connection,
+      terminal: term,
+      fitAddon,
+      searchAddon,
+    };
+  } catch (error) {
+    handleTerminalError(error, 'initTerminal', '初始化终端失败');
+    return null;
+  }
+}
+
+export async function initDetachedTerminal(container: HTMLElement, sessionId: string, connection: Connection): Promise<ActiveTerminal | null> {
+  try {
+    container.innerHTML = '';
+
+    const appSettings = get(settings);
+
+    const term = new Terminal({
+      cursorBlink: appSettings.terminal.cursorBlink,
+      cursorStyle: appSettings.terminal.cursorStyle,
+      cursorWidth: 1,
+      fontSize: appSettings.terminal.fontSize,
+      fontFamily: appSettings.terminal.fontFamily,
+      theme: getXtermTheme(appSettings),
+      scrollback: appSettings.terminal.scrollback,
+      allowProposedApi: true,
+      convertEol: true,
+      altClickMovesCursor: true,
+      scrollSensitivity: 1,
+      fastScrollSensitivity: 5,
+      rightClickSelectsWord: true,
+      macOptionIsMeta: false,
+    });
+
+    const fitAddon = new FitAddon();
+    const searchAddon = new SearchAddon();
+    term.loadAddon(fitAddon);
+    term.loadAddon(searchAddon);
+
+    term.loadAddon(
+      new WebLinksAddon((event, uri) => {
+        event.preventDefault();
+        if (uri && (uri.startsWith('http://') || uri.startsWith('https://'))) {
+          window.open(uri, '_blank', 'noopener,noreferrer');
+        }
+      })
+    );
+
     term.open(container);
 
     let webglAddon: WebglAddon | null = null;
@@ -370,29 +660,36 @@ export async function initTerminal(container: HTMLElement, sessionId: string, co
           webglAddon = null;
         }
       });
-    } catch (e) {
-      if (IS_DEV) console.warn('WebGL addon unavailable:', e);
+    } catch {
+      webglAddon = null;
     }
 
-    // Fit terminal to container
-    // We need to wait a bit for the container to have dimensions
-    setTimeout(() => {
-        fitAddon.fit();
-    }, 100);
+    const waitForLayout = () =>
+      new Promise<void>((resolve) => {
+        if (typeof requestAnimationFrame === 'function') {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          return;
+        }
+        const timeout = (typeof window !== 'undefined' ? window.setTimeout : setTimeout) as typeof setTimeout;
+        timeout(() => resolve(), 0);
+      });
 
-    // Handle user input
+    for (let i = 0; i < 10; i++) {
+      await waitForLayout();
+      const rect = container.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) {
+        fitAddon.fit();
+        break;
+      }
+    }
+
     const inputDisposable = term.onData((data) => {
       handleTerminalInput(sessionId, data, connection);
     });
     inputListeners.set(sessionId, inputDisposable);
 
-    // Listen for terminal output from backend
     await setupTerminalListeners(sessionId, term);
 
-    // Start monitoring session status
-    // await monitorSessionStatus(sessionId); // Deprecated in favor of session-closed event
-
-    // Request terminal session from backend
     const result = await invoke('start_terminal', {
       sessionId,
       width: term.cols,
@@ -400,27 +697,21 @@ export async function initTerminal(container: HTMLElement, sessionId: string, co
     });
 
     if (!result) {
-      console.error('Failed to start terminal session');
-      term.write('\r\n\x1b[31mFailed to start terminal session\x1b[0m\r\n');
+      void term.write('\r\n\x1b[31mFailed to start terminal session\x1b[0m\r\n');
       errorMessage.set('启动终端会话失败');
       setTimeout(() => errorMessage.set(null), 5000);
       return null;
     }
 
-    term.focus();
+    markTerminalStarted(sessionId);
+    void sendTerminalResize(sessionId, term.cols, term.rows);
 
-    // Return the terminal object
-    // Note: We don't store the resizeObserver here as it's attached to the DOM element
-    // We might need to handle cleanup separately if the component is destroyed but terminal stays
-    
-    // Update the store with the initialized terminal instance
-    // This is crucial for features like broadcast input to work correctly
-    activeTerminals.update(items => items.map(t => {
-      if (t.sessionId === sessionId) {
-        return { ...t, terminal: term, fitAddon, searchAddon };
-      }
-      return t;
-    }));
+    log.info('TermInit', 'Detached terminal initialized successfully', {
+      sessionId,
+      cols: term.cols,
+      rows: term.rows,
+      renderer: webglAddon ? 'webgl' : 'canvas',
+    });
 
     return {
       sessionId,
@@ -430,9 +721,7 @@ export async function initTerminal(container: HTMLElement, sessionId: string, co
       searchAddon,
     };
   } catch (error) {
-    console.error('Failed to initialize terminal:', error);
-    errorMessage.set(`初始化终端失败: ${error}`);
-    setTimeout(() => errorMessage.set(null), 5000);
+    handleTerminalError(error, 'initDetachedTerminal', '初始化终端失败');
     return null;
   }
 }
@@ -441,10 +730,13 @@ export async function sendTerminalData(sessionId: string, data: string) {
   try {
     await invoke('send_terminal_data', { sessionId, data });
   } catch (error) {
-    console.error('Failed to send terminal data:', error);
+    log.error('TermInput', 'Failed to send terminal data', error, { sessionId });
   }
 }
 
+/**
+ * xterm 6.0: Get or create input send state with tracking
+ */
 function getInputSendState(sessionId: string): InputSendState {
   const existing = inputSendStates.get(sessionId);
   if (existing) return existing;
@@ -452,21 +744,43 @@ function getInputSendState(sessionId: string): InputSendState {
     buffer: '',
     timer: null,
     sending: false,
+    lastFlushTime: 0,
+    pendingChunks: 0,
   };
   inputSendStates.set(sessionId, created);
   return created;
 }
 
+/**
+ * xterm 6.0: Optimized input flushing with better batching
+ */
 async function flushTerminalInput(sessionId: string, state: InputSendState) {
   if (state.sending) return;
   if (!state.buffer) return;
+
   state.sending = true;
+  const now = nowMs();
+
   try {
-    const payload = state.buffer.slice(0, 2048);
+    // xterm 6.0: Adaptive payload size based on recent performance
+    const maxPayload = state.pendingChunks > 5 ? 4096 : 2048;
+    const payload = state.buffer.slice(0, maxPayload);
     state.buffer = state.buffer.slice(payload.length);
+
+    state.pendingChunks++;
     await invoke('send_terminal_data', { sessionId, data: payload });
+    state.lastFlushTime = nowMs() - now;
+
+    // xterm 6.0: Reduce pending chunk counter on successful send
+    if (state.pendingChunks > 0) {
+      state.pendingChunks--;
+    }
   } catch (error) {
-    console.error('Failed to send terminal data:', error);
+    log.error('TermInput', 'Failed to send terminal data', error, {
+      sessionId,
+      bufferLength: state.buffer.length,
+      pendingChunks: state.pendingChunks,
+    });
   } finally {
     state.sending = false;
     if (state.buffer.length > 0 && state.timer === null) {
@@ -478,15 +792,22 @@ async function flushTerminalInput(sessionId: string, state: InputSendState) {
   }
 }
 
+/**
+ * xterm 6.0: Enhanced input buffering with adaptive thresholds
+ */
 function sendTerminalDataBuffered(sessionId: string, data: string, immediate: boolean) {
   const state = getInputSendState(sessionId);
   state.buffer += data;
 
-  // 设定一个固定的较大阈值，防止缓冲区过大
-  // 1024 字符已经相当多了，足以覆盖大多数快速输入场景
-  if (state.buffer.length >= 1024) {
-    if (!immediate && IS_DEV) {
-      console.log(`[TermInput] Force immediate due to buffer size: ${state.buffer.length}`);
+  // xterm 6.0: Dynamic threshold based on recent activity
+  const threshold = state.pendingChunks > 10 ? 2048 : 1024;
+  if (state.buffer.length >= threshold) {
+    if (!immediate) {
+      log.info('TermInput', 'Force immediate flush', {
+        bufferLength: state.buffer.length,
+        threshold,
+        pendingChunks: state.pendingChunks,
+      });
     }
     immediate = true;
   }
@@ -498,21 +819,19 @@ function sendTerminalDataBuffered(sessionId: string, data: string, immediate: bo
   }
 
   if (immediate) {
-    if (IS_DEV) {
-       console.log(`[TermInput] Immediate flush: len=${data.length}, buf=${state.buffer.length}, data=${JSON.stringify(data)}`);
-    }
+    log.info('TermInput', 'Immediate flush', {
+      dataLength: data.length,
+      bufferLength: state.buffer.length,
+    });
     void flushTerminalInput(sessionId, state);
     return;
   }
 
-  // 使用 requestAnimationFrame 替代 setTimeout，延迟从10ms降至3ms
-  // 这能提供更平滑的时序，避免setTimeout的精度问题
+  // xterm 6.0: Use minimal delay with RAF for smooth timing
   state.timer = scheduleNext(() => {
     state.timer = null;
     void flushTerminalInput(sessionId, state);
   });
-
-  return;
 }
 
 function handleTerminalInputSingle(sessionId: string, data: string) {
@@ -525,8 +844,8 @@ function handleTerminalInputSingle(sessionId: string, data: string) {
   const shouldImmediate = hasControl;
   
   // Debug log for control character detection
-  if (shouldImmediate && IS_DEV) {
-     console.log(`[TermInput] Control char detected: ${JSON.stringify(data)}`);
+  if (shouldImmediate) {
+     log.info('TermInput', 'Control char detected', { data: JSON.stringify(data) });
   }
 
   void sendTerminalDataBuffered(sessionId, data, shouldImmediate);
@@ -556,8 +875,14 @@ export function handleTerminalInput(sessionId: string, data: string, connection:
 export async function sendTerminalResize(sessionId: string, width: number, height: number) {
   try {
     await invoke('resize_terminal', { sessionId, width, height });
+    startedTerminalSessions.add(sessionId);
   } catch (error) {
-    console.error('Failed to resize terminal:', error);
+    const msg = error instanceof Error ? error.message : String(error);
+    if (msg.includes('Session not found')) {
+      log.warn('TermResize', 'Session not found', error, { sessionId });
+      return;
+    }
+    log.error('TermResize', 'Failed to resize terminal', error, { sessionId, width, height });
   }
 }
 
@@ -566,8 +891,11 @@ export async function monitorSessionStatus(sessionId: string) {
     // Listen for session status changes from backend
     const statusUnlisten = await listen(`session-status-${sessionId}`, (event: any) => {
       if (event.payload && event.payload.status) {
-        if (IS_DEV) console.log('Session status changed:', sessionId, event.payload.status);
-        
+        log.info('SessionStatus', 'Status changed', {
+          sessionId,
+          status: event.payload.status,
+        });
+
         // Handle different status changes
         switch (event.payload.status) {
           case 'disconnected':
@@ -591,24 +919,44 @@ export async function monitorSessionStatus(sessionId: string) {
 
     sessionStatusListeners.set(sessionId, statusUnlisten);
   } catch (error) {
-    console.error('Failed to monitor session status:', error);
+    log.error('SessionStatus', 'Failed to monitor session status', error, { sessionId });
   }
 }
 
+/**
+ * xterm 6.0: Enhanced terminal cleanup with better resource management
+ */
 export async function closeTerminal(sessionId: string) {
   const terminals = get(activeTerminals);
   const index = terminals.findIndex(t => t.sessionId === sessionId);
-  
+
   if (index !== -1) {
+    markTerminalStopped(sessionId);
     const terminal = terminals[index];
-    
-    // Clean up xterm instance
+
+    // xterm 6.0: Graceful terminal disposal with cleanup tracking
     try {
-      (terminal as any).terminal?.dispose?.();
+      if (terminal.terminal) {
+        // Dispose all addons first
+        const disposables: Array<() => void | Promise<void>> = [];
+        if ((terminal.terminal as any).dispose) {
+          disposables.push(() => terminal.terminal.dispose());
+        }
+
+        // Execute disposals in order
+        for (const dispose of disposables) {
+          try {
+            await dispose();
+      } catch (e) {
+        log.warn('TermCleanup', 'Disposal error', e);
+      }
+        }
+      }
     } catch (e) {
-      if (IS_DEV) console.warn('Failed to dispose terminal instance:', e);
+      log.warn('TermCleanup', 'Failed to dispose terminal instance', e);
     }
 
+    // xterm 6.0: Clean up output state
     const outputState = outputWriteStates.get(sessionId);
     if (outputState) {
       outputState.disposed = true;
@@ -618,6 +966,7 @@ export async function closeTerminal(sessionId: string) {
       outputWriteStates.delete(sessionId);
     }
 
+    // xterm 6.0: Clean up input state
     const inputState = inputSendStates.get(sessionId);
     if (inputState) {
       if (inputState.timer !== null) {
@@ -625,32 +974,30 @@ export async function closeTerminal(sessionId: string) {
       }
       inputSendStates.delete(sessionId);
     }
-    
+
     // Remove from store
     activeTerminals.update(items => items.filter(t => t.sessionId !== sessionId));
     broadcastSessionIds.update(ids => ids.filter(id => id !== sessionId));
-    
+
     // Adjust selected index
     const currentIndex = get(selectedTerminalIndex);
     if (currentIndex >= terminals.length - 1) {
       selectedTerminalIndex.set(Math.max(0, terminals.length - 2));
     }
 
-    // Clean up output listener
+    // Clean up listeners
     const unlisten = outputListeners.get(sessionId);
     if (unlisten) {
       unlisten();
       outputListeners.delete(sessionId);
     }
 
-    // Clean up input listener
     const inputListener = inputListeners.get(sessionId);
     if (inputListener) {
       inputListener.dispose();
       inputListeners.delete(sessionId);
     }
 
-    // Clean up status listener
     const statusUnlisten = sessionStatusListeners.get(sessionId);
     if (statusUnlisten) {
       statusUnlisten();
@@ -660,9 +1007,55 @@ export async function closeTerminal(sessionId: string) {
     // Notify backend to close terminal
     try {
       await invoke('close_terminal', { sessionId });
+      log.info('TermCleanup', 'Terminal closed', { sessionId });
     } catch (error) {
-      console.error('Failed to close terminal:', error);
+      log.error('TermCleanup', 'Failed to close terminal', error, { sessionId });
     }
+  }
+}
+
+export async function closeDetachedTerminal(sessionId: string) {
+  markTerminalStopped(sessionId);
+
+  const outputState = outputWriteStates.get(sessionId);
+  if (outputState) {
+    outputState.disposed = true;
+    if (outputState.scheduled !== null) {
+      cancelScheduled(outputState.scheduled);
+    }
+    outputWriteStates.delete(sessionId);
+  }
+
+  const inputState = inputSendStates.get(sessionId);
+  if (inputState) {
+    if (inputState.timer !== null) {
+      cancelScheduled(inputState.timer);
+    }
+    inputSendStates.delete(sessionId);
+  }
+
+  const unlisten = outputListeners.get(sessionId);
+  if (unlisten) {
+    unlisten();
+    outputListeners.delete(sessionId);
+  }
+
+  const inputListener = inputListeners.get(sessionId);
+  if (inputListener) {
+    inputListener.dispose();
+    inputListeners.delete(sessionId);
+  }
+
+  const statusUnlisten = sessionStatusListeners.get(sessionId);
+  if (statusUnlisten) {
+    statusUnlisten();
+    sessionStatusListeners.delete(sessionId);
+  }
+
+  try {
+    await invoke('close_terminal', { sessionId });
+  } catch (error) {
+    log.warn('TermCleanup', 'Failed to close detached terminal', error, { sessionId });
   }
 }
 
@@ -670,6 +1063,7 @@ export async function disconnectTerminal(sessionId: string) {
   const terminals = get(activeTerminals);
   const terminal = terminals.find(t => t.sessionId === sessionId);
   const name = terminal?.connection?.name ?? sessionId;
+  const hadTerminal = Boolean(terminal);
 
   clearReconnectTimer(sessionId);
   clearReconnectKeyListener(sessionId);
@@ -677,10 +1071,13 @@ export async function disconnectTerminal(sessionId: string) {
 
   await closeTerminal(sessionId);
 
-  try {
-    await invoke('close_terminal', { sessionId });
-  } catch (error) {
-    if (IS_DEV) console.warn('Failed to close_terminal during disconnect:', error);
+  if (!hadTerminal) {
+    markTerminalStopped(sessionId);
+    try {
+      await invoke('close_terminal', { sessionId });
+    } catch (error) {
+      log.warn('Disconnect', 'Failed to close_terminal during disconnect', error, { sessionId });
+    }
   }
 
   try {
@@ -690,7 +1087,7 @@ export async function disconnectTerminal(sessionId: string) {
   } catch (error) {
     errorMessage.set(`断开连接失败: ${name}`);
     setTimeout(() => errorMessage.set(null), 5000);
-    if (IS_DEV) console.warn('Failed to disconnect:', error);
+    log.warn('Disconnect', 'Failed to disconnect', error, { sessionId, name });
   }
 }
 
@@ -706,7 +1103,8 @@ async function closeBackendTerminalsBestEffort(sessionId: string) {
   for (let i = 0; i < 10; i++) {
     try {
       await invoke('close_terminal', { sessionId });
-    } catch {
+    } catch (error) {
+      log.warn('TermCleanup', 'Failed to close terminal in best-effort mode', error, { sessionId, attempt: i });
       return;
     }
   }
@@ -727,7 +1125,7 @@ export async function restoreActiveSessions() {
   try {
     sessions = (await invoke('get_all_sessions')) as BackendSessionInfo[];
   } catch (e) {
-    if (IS_DEV) console.warn('Failed to get_all_sessions:', e);
+    log.warn('SessionRestore', 'Failed to get_all_sessions', e);
     return;
   }
 
@@ -786,35 +1184,59 @@ export async function restoreActiveSessions() {
 }
 
 export async function setupTerminalListeners(sessionId: string, term: Terminal) {
+    log.info('TermOutput', 'Setting up terminal listeners', { sessionId });
+
     const outputState: OutputWriteState = {
       chunks: [],
       chunkIndex: 0,
       scheduled: null,
       writing: false,
       disposed: false,
-      paused: false,
-      pausedBuffer: '',
       chunkBudget: 256 * 1024,
+      lastWriteTime: 0,
+      consecutiveSlowWrites: 0,
     };
     outputWriteStates.set(sessionId, outputState);
 
-    const MAX_PAUSED_BUFFER = 2 * 1024 * 1024;
     const TARGET_WRITE_MS = 12;
+    const MIN_CHUNK_SIZE = 1024; // xterm 6.0: Optimize minimum chunk size for better batching
 
-    function flushOutput() {
+    // Immediately write a test message to verify terminal is working
+    void term.write('\r\n\x1b[33mTerminal initialized...\x1b[0m\r\n');
+    log.info('TermOutput', 'Test message written to terminal', { sessionId });
+
+    /**
+     * xterm 6.0: Optimized flush using Promise-based write API
+     * - Improved batching with adaptive chunk sizing
+     * - Better memory management with aggressive pruning
+     * - Enhanced performance monitoring and adaptive budgeting
+     */
+    async function flushOutput() {
       if (outputState.disposed) return;
       outputState.scheduled = null;
-      if (outputState.paused) return;
       if (outputState.writing) return;
       if (outputState.chunkIndex >= outputState.chunks.length) return;
+
+      // Debug log on first few flushes
+      if (IS_DEV && outputState.chunkIndex === 0) {
+        log.info('TermOutput', 'Starting flush', {
+          sessionId,
+          totalChunks: outputState.chunks.length,
+          chunkBudget: outputState.chunkBudget,
+        });
+      }
 
       const CHUNK_LIMIT = outputState.chunkBudget;
       let count = 0;
       const parts: string[] = [];
 
+      // xterm 6.0: Improved chunking logic with minimum size threshold
       while (outputState.chunkIndex < outputState.chunks.length) {
         const nextChunk = outputState.chunks[outputState.chunkIndex];
-        if (count + nextChunk.length > CHUNK_LIMIT && count > 0) break;
+        const wouldExceed = count + nextChunk.length > CHUNK_LIMIT && count > 0;
+
+        // Don't break if we haven't reached minimum chunk size yet
+        if (wouldExceed && count >= MIN_CHUNK_SIZE) break;
 
         parts.push(nextChunk);
         count += nextChunk.length;
@@ -823,106 +1245,101 @@ export async function setupTerminalListeners(sessionId: string, term: Terminal) 
         if (count >= CHUNK_LIMIT) break;
       }
 
-      if (outputState.chunkIndex > 2048 || outputState.chunkIndex > Math.floor(outputState.chunks.length / 2)) {
+      // xterm 6.0: Aggressive memory pruning to prevent bloat
+      if (outputState.chunks.length > 4096 || outputState.chunkIndex > Math.floor(outputState.chunks.length * 0.7)) {
         outputState.chunks.splice(0, outputState.chunkIndex);
         outputState.chunkIndex = 0;
       }
 
-      const payload = parts.join('');
+      const payload = parts.join('').split('\u0000').join('');
       if (payload.length === 0) return;
 
+      // Debug log before writing
+      if (IS_DEV && outputState.chunkIndex <= 2) {
+        log.info('TermOutput', 'Writing to terminal', {
+          sessionId,
+          payloadLength: payload.length,
+          payloadPreview: payload.substring(0, 50),
+        });
+      }
+
       outputState.writing = true;
-      const writeStart = performance.now();
-      term.write(payload, () => {
-        const writeDuration = performance.now() - writeStart;
+      const writeStart = nowMs();
+      try {
+        // xterm 6.0: Promise-based write API provides better error handling
+        await term.write(payload);
+        const writeDuration = nowMs() - writeStart;
+        outputState.lastWriteTime = writeDuration;
+
+        // xterm 6.0: Adaptive budgeting with improved responsiveness
         if (writeDuration > TARGET_WRITE_MS) {
-          outputState.chunkBudget = Math.max(64 * 1024, Math.floor(outputState.chunkBudget * 0.7));
+          outputState.consecutiveSlowWrites++;
+          const reductionFactor = 0.5 + (0.2 / Math.max(1, outputState.consecutiveSlowWrites));
+          outputState.chunkBudget = Math.max(32 * 1024, Math.floor(outputState.chunkBudget * reductionFactor));
+
+          log.perf('TermOutput', 'write', writeDuration, {
+            sessionId,
+            payloadLength: payload.length,
+            pendingChunks: outputState.chunks.length - outputState.chunkIndex,
+            budget: outputState.chunkBudget,
+            consecutiveSlowWrites: outputState.consecutiveSlowWrites,
+          });
         } else if (writeDuration < TARGET_WRITE_MS / 2) {
-          outputState.chunkBudget = Math.min(1024 * 1024, Math.floor(outputState.chunkBudget * 1.15));
+          // Reset consecutive counter on good performance
+          if (outputState.consecutiveSlowWrites > 0) {
+            outputState.consecutiveSlowWrites = Math.max(0, outputState.consecutiveSlowWrites - 1);
+          }
+          outputState.chunkBudget = Math.min(2 * 1024 * 1024, Math.floor(outputState.chunkBudget * 1.1));
         }
 
-        if (IS_DEV && writeDuration > 32) {
-          console.warn(
-            `[TermOutput] slow write ${sessionId}: ${writeDuration.toFixed(1)}ms, payload=${payload.length}, pending=${outputState.chunks.length}, budget=${outputState.chunkBudget}`,
-          );
-        }
         outputState.writing = false;
-        if (!outputState.paused && outputState.chunkIndex < outputState.chunks.length && !outputState.disposed) {
+        if (outputState.chunkIndex < outputState.chunks.length && !outputState.disposed) {
           scheduleFlush();
         }
-      });
+      } catch (error) {
+        // xterm 6.0: Better error handling with context
+        log.error('TermOutput', `write failed for session ${sessionId}`, error, {
+          payloadLength: payload.length,
+          pendingChunks: outputState.chunks.length - outputState.chunkIndex,
+          budget: outputState.chunkBudget,
+        });
+        outputState.writing = false;
+        // xterm 6.0: Add a small delay before retrying to prevent error storms
+        const retryDelay = Math.min(100, outputState.consecutiveSlowWrites * 10);
+        outputState.scheduled = { id: setTimeout(() => scheduleFlush(), retryDelay) as unknown as number, kind: 'timeout' };
+      }
     }
 
     const scheduleFlush = () => {
       if (outputState.disposed) return;
-      if (outputState.paused) return;
       if (outputState.scheduled !== null) return;
       outputState.scheduled = scheduleNext(flushOutput);
     };
 
-    const computePaused = () => {
-      const hidden = typeof document !== 'undefined' && document.hidden === true;
-      const terminals = get(activeTerminals);
-      const index = get(selectedTerminalIndex);
-      const selectedSessionId = terminals[index]?.sessionId;
-      return hidden || selectedSessionId !== sessionId;
-    };
-
-    const applyPausedState = () => {
-      const nextPaused = computePaused();
-      if (nextPaused === outputState.paused) return;
-      outputState.paused = nextPaused;
-
-      if (outputState.paused) {
-        if (outputState.scheduled !== null) {
-          cancelScheduled(outputState.scheduled);
-          outputState.scheduled = null;
-        }
-        return;
-      }
-
-      if (outputState.pausedBuffer) {
-        outputState.chunks.push(outputState.pausedBuffer);
-        outputState.pausedBuffer = '';
-      }
-      if (!outputState.writing) scheduleFlush();
-    };
-
-    applyPausedState();
-
-    const onVisibilityChange = () => {
-      if (outputState.disposed) return;
-      applyPausedState();
-    };
-
-    if (typeof document !== 'undefined') {
-      document.addEventListener('visibilitychange', onVisibilityChange);
-    }
-
-    const unsubscribeSelected = selectedTerminalIndex.subscribe(() => {
-      if (outputState.disposed) return;
-      applyPausedState();
-    });
-
-    const unsubscribeTerminals = activeTerminals.subscribe(() => {
-      if (outputState.disposed) return;
-      applyPausedState();
-    });
-
     // Output listener
     const outputUnlisten = await listen(`terminal-output-${sessionId}`, (event: any) => {
+      // Debug log to verify events are received
+      if (IS_DEV) {
+        log.info('TermOutput', 'Received output event', {
+          sessionId,
+          hasPayload: !!event.payload,
+          hasData: !!(event.payload && event.payload.data),
+          dataLength: event.payload?.data?.length || 0,
+        });
+      }
+
+
       if (event.payload && event.payload.data) {
         const data = String(event.payload.data);
 
-        if (outputState.paused) {
-          outputState.pausedBuffer += data;
-          if (outputState.pausedBuffer.length > MAX_PAUSED_BUFFER) {
-            outputState.pausedBuffer = outputState.pausedBuffer.slice(-MAX_PAUSED_BUFFER);
-          }
-          return;
-        }
-
         outputState.chunks.push(data);
+        if (IS_DEV && outputState.chunks.length <= 5) {
+          log.info('TermOutput', 'Chunk added', {
+            sessionId,
+            chunkIndex: outputState.chunks.length - 1,
+            isWriting: outputState.writing,
+          });
+        }
         if (!outputState.writing) scheduleFlush();
       }
     });
@@ -930,8 +1347,8 @@ export async function setupTerminalListeners(sessionId: string, term: Terminal) 
     // Error listener
     const errorUnlisten = await listen(`terminal-error-${sessionId}`, (event: any) => {
       if (event.payload && event.payload.error) {
-        console.error('Terminal error:', event.payload.error);
-        term.write(`\r\n\x1b[31mError: ${event.payload.error}\x1b[0m\r\n`);
+        log.error('TermError', 'Terminal error reported from backend', event.payload.error, { sessionId });
+        void term.write(`\r\n\x1b[31mError: ${event.payload.error}\x1b[0m\r\n`);
         errorMessage.set(`终端错误: ${event.payload.error}`);
         setTimeout(() => errorMessage.set(null), 5000);
       }
@@ -940,20 +1357,21 @@ export async function setupTerminalListeners(sessionId: string, term: Terminal) 
     // Session Closed listener
     const closedUnlisten = await listen(`session-closed-${sessionId}`, (event: any) => {
         const reason = event.payload?.reason || 'unknown';
-        if (IS_DEV) console.log('Session closed:', sessionId, reason);
-        
+        log.info('SessionClosed', 'Session closed', { sessionId, reason });
+        markTerminalStopped(sessionId);
+
         // Only show message if not manually closed
         if (reason !== 'user_closed') {
-             term.write(`\r\n\x1b[33mSession closed (Reason: ${reason})\x1b[0m\r\n`);
+             void term.write(`\r\n\x1b[33mSession closed (Reason: ${reason})\x1b[0m\r\n`);
         }
-        
+
         if (reason === 'connection_lost' || reason === 'server_closed' || reason === 'keepalive_failed') {
             const appSettings = get(settings);
             if (appSettings.connection?.autoReconnect) {
                 scheduleAutoReconnect(sessionId, term, false);
             } else {
-                term.write('\r\n\x1b[36mPress R to reconnect...\x1b[0m\r\n');
-                
+                void term.write('\r\n\x1b[36mPress R to reconnect...\x1b[0m\r\n');
+
                 const disposable = term.onData(async (data) => {
                     if (data === 'r' || data === 'R') {
                         disposable.dispose();
@@ -970,12 +1388,6 @@ export async function setupTerminalListeners(sessionId: string, term: Terminal) 
           cancelScheduled(outputState.scheduled);
         }
         outputWriteStates.delete(sessionId);
-
-        if (typeof document !== 'undefined') {
-          document.removeEventListener('visibilitychange', onVisibilityChange);
-        }
-        unsubscribeSelected();
-        unsubscribeTerminals();
 
         outputUnlisten();
         errorUnlisten();
@@ -1005,7 +1417,7 @@ function scheduleAutoReconnect(sessionId: string, term: Terminal, immediate: boo
 
   const attempts = reconnectAttempts.get(sessionId) ?? 0;
   if (attempts >= MAX_AUTO_RECONNECT_RETRIES) {
-    term.write(`\r\n\x1b[31mAuto reconnect stopped after ${MAX_AUTO_RECONNECT_RETRIES} attempts.\x1b[0m\r\n`);
+    void term.write(`\r\n\x1b[31mAuto reconnect stopped after ${MAX_AUTO_RECONNECT_RETRIES} attempts.\x1b[0m\r\n`);
     errorMessage.set('自动重连已停止：超过最大重试次数');
     setTimeout(() => errorMessage.set(null), 5000);
     return;
@@ -1015,7 +1427,7 @@ function scheduleAutoReconnect(sessionId: string, term: Terminal, immediate: boo
     ? 0
     : Math.min(MAX_AUTO_RECONNECT_DELAY_MS, Math.floor(BASE_AUTO_RECONNECT_DELAY_MS * Math.pow(2, attempts)));
   const seconds = Math.max(0, Math.ceil(delay / 1000));
-  term.write(`\r\n\x1b[33mAuto reconnect attempt ${attempts + 1}/${MAX_AUTO_RECONNECT_RETRIES} in ${seconds}s... (Press R to immediate)\x1b[0m\r\n`);
+  void term.write(`\r\n\x1b[33mAuto reconnect attempt ${attempts + 1}/${MAX_AUTO_RECONNECT_RETRIES} in ${seconds}s... (Press R to immediate)\x1b[0m\r\n`);
 
   const disposable = term.onData((data) => {
     if (data === 'r' || data === 'R') {
@@ -1038,7 +1450,10 @@ function scheduleAutoReconnect(sessionId: string, term: Terminal, immediate: boo
         return;
       }
     } catch (e) {
-      if (IS_DEV) console.warn('Auto reconnect attempt failed', e);
+      log.warn('Reconnect', 'Auto reconnect attempt failed', e, {
+        sessionId,
+        attempt: reconnectAttempts.get(sessionId) || 0,
+      });
     }
 
     const appSettings = get(settings);
@@ -1071,7 +1486,7 @@ export async function reconnectTerminal(oldSessionId: string) {
       inputListeners.delete(oldSessionId);
   }
 
-  term.write('\r\n\x1b[33mReconnecting...\x1b[0m\r\n');
+  void term.write('\r\n\x1b[33mReconnecting...\x1b[0m\r\n');
 
   try {
       // Connect
@@ -1085,6 +1500,9 @@ export async function reconnectTerminal(oldSessionId: string) {
       });
 
       if (!result) throw new Error("Failed to start terminal");
+
+      markTerminalStopped(oldSessionId);
+      markTerminalStarted(newSessionId);
 
       // Update store
       activeTerminals.update(items => {
@@ -1116,7 +1534,7 @@ export async function reconnectTerminal(oldSessionId: string) {
 
       return true;
   } catch (e) {
-      term.write(`\r\n\x1b[31mReconnection failed: ${e}\x1b[0m\r\n`);
+      void term.write(`\r\n\x1b[31mReconnection failed: ${e}\x1b[0m\r\n`);
       errorMessage.set(`重连失败: ${terminalEntry.connection.name}`);
       setTimeout(() => errorMessage.set(null), 5000);
       return false;

@@ -1,12 +1,12 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import { handleTerminalInput, initTerminal, sendTerminalResize, setupTerminalListeners } from '../lib/terminalService';
+  import { closeDetachedTerminal, createTerminalSession, handleTerminalInput, initDetachedTerminal, initTerminal, sendTerminalResize } from '../lib/terminalService';
   import { getXtermTheme, settings, type ActiveTerminal } from '../lib/store';
   import DualPaneFileExplorer from './file-transfer/DualPaneFileExplorer.svelte';
-  import { FitAddon } from 'xterm-addon-fit';
-  import { SearchAddon } from 'xterm-addon-search';
-  import { Terminal } from 'xterm';
+  import { FitAddon } from '@xterm/addon-fit';
+  import { SearchAddon } from '@xterm/addon-search';
+  import { Terminal } from '@xterm/xterm';
 
   // Props using Svelte 4 syntax for compatibility
   export let terminalData: ActiveTerminal;
@@ -103,6 +103,8 @@
   }
 
   onMount(async () => {
+      // Important: Initialize terminal immediately even if not visible yet
+      // This ensures the terminal is ready when the container becomes visible
       resizeObserver = new ResizeObserver(() => {
           if (isVisible && mode === 'terminal' && terminalData.fitAddon) {
               terminalData.fitAddon.fit();
@@ -175,16 +177,38 @@
       if (primaryContainerRef && primaryContainerRef !== next) {
           primaryContainerRef.removeEventListener('paste', handlePrimaryPaste, true);
           resizeObserver?.unobserve(primaryContainerRef);
-          primaryContainerRef.innerHTML = '';
       }
       if (primaryContainerRef !== next) {
-          next.innerHTML = '';
           terminalData.terminal.open(next);
           terminalData.fitAddon?.fit();
           sendTerminalResize(terminalData.sessionId, terminalData.terminal.cols, terminalData.terminal.rows);
           resizeObserver?.observe(next);
           next.addEventListener('paste', handlePrimaryPaste, true);
           primaryContainerRef = next;
+      }
+  }
+
+  function attachSecondaryContainer(next: HTMLElement) {
+      if (!secondaryTerminal || !secondarySessionId) return;
+      if (secondaryContainerRef && secondaryContainerRef !== next) {
+          secondaryContainerRef.removeEventListener('paste', handleSecondaryPaste, true);
+          secondaryResizeObserver?.disconnect();
+          secondaryResizeObserver = null;
+      }
+      if (secondaryContainerRef !== next) {
+          secondaryTerminal.open(next);
+          secondaryFitAddon?.fit();
+          sendTerminalResize(secondarySessionId, secondaryTerminal.cols, secondaryTerminal.rows);
+          secondaryResizeObserver?.disconnect();
+          secondaryResizeObserver = new ResizeObserver(() => {
+              if (!secondaryFitAddon || !secondaryTerminal || !secondarySessionId) return;
+              secondaryFitAddon.fit();
+              sendTerminalResize(secondarySessionId, secondaryTerminal.cols, secondaryTerminal.rows);
+          });
+          secondaryResizeObserver.observe(next);
+          next.addEventListener('paste', handleSecondaryPaste, true);
+          secondaryPasteHandler = handleSecondaryPaste;
+          secondaryContainerRef = next;
       }
   }
 
@@ -318,25 +342,43 @@
 
   // 分屏功能
   async function handleSplitHorizontal() {
+    // Clean up existing secondary terminal if any
+    if (secondaryTerminal) {
+      await cleanupSecondaryTerminal();
+    }
     splitMode = 'horizontal';
     splitRatio = 0.5;
     await tick();
+    if (container) {
+      attachPrimaryContainer(container);
+    }
     await initSecondaryTerminal();
-    setActivePane('primary');
+    // Don't change selection - keep primary terminal selected
     closeContextMenu();
   }
 
   async function handleSplitVertical() {
+    // Clean up existing secondary terminal if any
+    if (secondaryTerminal) {
+      await cleanupSecondaryTerminal();
+    }
     splitMode = 'vertical';
     splitRatio = 0.5;
     await tick();
+    if (container) {
+      attachPrimaryContainer(container);
+    }
     await initSecondaryTerminal();
-    setActivePane('primary');
+    // Don't change selection - keep primary terminal selected
     closeContextMenu();
   }
 
   async function handleCancelSplit() {
     splitMode = 'none';
+    await tick(); // Wait for DOM update
+    if (container) {
+      attachPrimaryContainer(container);
+    }
     await cleanupSecondaryTerminal();
     setActivePane('primary');
     closeContextMenu();
@@ -346,82 +388,26 @@
     if (secondaryTerminal) return;
 
     try {
-      // 创建新的 SSH 连接
-      const newSessionId = await invoke('connect', { config: terminalData.connection }) as string;
-      secondarySessionId = newSessionId;
-
-      // 获取设置
-      const appSettings = getXtermTheme($settings);
-
-      // 创建新的终端实例
-      const term = new Terminal({
-        cursorBlink: $settings.terminal.cursorBlink,
-        cursorStyle: $settings.terminal.cursorStyle,
-        cursorWidth: 1,
-        fontSize: $settings.terminal.fontSize,
-        fontFamily: $settings.terminal.fontFamily,
-        theme: appSettings,
-        scrollback: $settings.terminal.scrollback,
-        allowProposedApi: true,
-        convertEol: true,
-      });
-
-      const fitAddon = new FitAddon();
-      const searchAddon = new SearchAddon();
-      term.loadAddon(fitAddon);
-      term.loadAddon(searchAddon);
-
-      if (secondaryContainer) {
-        term.open(secondaryContainer);
-        secondaryContainer.innerHTML = '';
-        term.open(secondaryContainer);
-
-        setTimeout(() => {
-          fitAddon.fit();
-        }, 100);
+      if (!secondaryContainer) {
+        await tick();
       }
+      if (!secondaryContainer) return;
 
-      // 监听用户输入
-      term.onData((data: string) => {
-        handleTerminalInput(newSessionId, data, terminalData.connection);
-      });
-
-      // 监听终端输出
-      await setupTerminalListeners(newSessionId, term);
-
-      // 启动终端会话
-      const result = await invoke('start_terminal', {
-        sessionId: newSessionId,
-        width: term.cols,
-        height: term.rows,
-      });
-
+      const newSessionId = await createTerminalSession(terminalData.connection);
+      secondarySessionId = newSessionId;
+      const result = await initDetachedTerminal(secondaryContainer, newSessionId, terminalData.connection);
       if (!result) {
-        console.error('Failed to start secondary terminal session');
-        term.write('\r\n\x1b[31mFailed to start terminal session\x1b[0m\r\n');
         await cleanupSecondaryTerminal();
         return;
       }
 
-      secondaryTerminal = term;
-      secondaryFitAddon = fitAddon;
-      secondarySearchAddon = searchAddon;
-      attachTerminalKeybindings(term, 'secondary');
+      secondaryTerminal = result.terminal;
+      secondaryFitAddon = result.fitAddon;
+      secondarySearchAddon = result.searchAddon;
+      attachTerminalKeybindings(result.terminal, 'secondary');
 
-      // 设置 ResizeObserver
-      if (secondaryContainer) {
-        secondaryResizeObserver = new ResizeObserver(() => {
-          if (secondaryFitAddon) {
-            secondaryFitAddon.fit();
-            if (secondaryTerminal) {
-              sendTerminalResize(newSessionId, secondaryTerminal.cols, secondaryTerminal.rows);
-            }
-          }
-        });
-        secondaryResizeObserver.observe(secondaryContainer);
-        secondaryContainer.addEventListener('paste', handleSecondaryPaste, true);
-        secondaryPasteHandler = handleSecondaryPaste;
-      }
+      attachSecondaryContainer(secondaryContainer);
+
     } catch (error) {
       console.error('Failed to initialize secondary terminal:', error);
       await cleanupSecondaryTerminal();
@@ -429,17 +415,6 @@
   }
 
   async function cleanupSecondaryTerminal() {
-    if (secondaryTerminal) {
-      try {
-        secondaryTerminal.dispose();
-      } catch (e) {
-        console.warn('Failed to dispose secondary terminal:', e);
-      }
-      secondaryTerminal = null;
-    }
-    secondaryFitAddon = null;
-    secondarySearchAddon = null;
-
     if (secondaryResizeObserver) {
       secondaryResizeObserver.disconnect();
       secondaryResizeObserver = null;
@@ -453,7 +428,7 @@
 
     if (secondarySessionId) {
       try {
-        await invoke('close_terminal', { sessionId: secondarySessionId });
+        await closeDetachedTerminal(secondarySessionId);
       } catch (e) {
         console.warn('Failed to close secondary session:', e);
       }
@@ -464,6 +439,17 @@
       }
       secondarySessionId = null;
     }
+
+    if (secondaryTerminal) {
+      try {
+        secondaryTerminal.dispose();
+      } catch (e) {
+        console.warn('Failed to dispose secondary terminal:', e);
+      }
+      secondaryTerminal = null;
+    }
+    secondaryFitAddon = null;
+    secondarySearchAddon = null;
   }
 
   // 分割条拖拽处理
@@ -559,17 +545,25 @@
   }
 
   $: if (secondaryTerminal && secondaryContainer && secondaryContainer !== secondaryContainerRef) {
-      secondaryTerminal.open(secondaryContainer);
-      secondaryFitAddon?.fit();
-      secondaryContainerRef = secondaryContainer;
+      attachSecondaryContainer(secondaryContainer);
   }
 
   // Watch for visibility changes to resize
   $: if (isVisible && mode === 'terminal' && terminalData.fitAddon) {
-      setTimeout(() => {
-          terminalData.fitAddon.fit();
+      // Fit immediately when visible
+      console.log('[TerminalView] Terminal became visible, fitting...');
+      const containerEl = primaryContainerRef || container;
+      if (containerEl && terminalData.fitAddon) {
+        terminalData.fitAddon.fit();
+        if (terminalData.terminal) {
+          console.log('[TerminalView] Terminal dimensions:', {
+            cols: terminalData.terminal.cols,
+            rows: terminalData.terminal.rows,
+          });
+          sendTerminalResize(terminalData.sessionId, terminalData.terminal.cols, terminalData.terminal.rows);
           terminalData.terminal.focus();
-      }, 50);
+        }
+      }
   }
 </script>
 
@@ -591,22 +585,11 @@
   </div>
 
   <div class="flex-1 relative overflow-hidden bg-white dark:bg-slate-950">
-     <!-- Terminal Container - No Split -->
-     {#if splitMode === 'none'}
      <div
-       bind:this={container}
-       class="w-full h-full overflow-hidden"
-       style:display={mode === 'terminal' ? 'block' : 'none'}
-       on:contextmenu|preventDefault={(e) => openContextMenu(e, 'primary')}
-       on:click={() => setActivePane('primary')}
-       on:keydown={(e) => (e.key === 'Enter' || e.key === ' ') && setActivePane('primary')}
-       role="button"
-       tabindex="0"
-     ></div>
-     {:else}
-     <!-- Split Container -->
-     <div bind:this={splitContainer} class={`w-full h-full overflow-hidden flex ${splitMode === 'horizontal' ? 'flex-col' : 'flex-row'}`} style:display={mode === 'terminal' ? 'flex' : 'none'}>
-       <!-- Primary Terminal -->
+       bind:this={splitContainer}
+       class={`w-full h-full overflow-hidden flex ${splitMode === 'vertical' ? 'flex-row' : 'flex-col'}`}
+       style:display={mode === 'terminal' ? 'flex' : 'none'}
+     >
        <div
          class="relative overflow-hidden bg-white dark:bg-slate-950"
          style:height={splitMode === 'horizontal' ? `${splitRatio * 100}%` : '100%'}
@@ -617,59 +600,57 @@
            class="w-full h-full overflow-hidden"
            on:contextmenu|preventDefault={(e) => openContextMenu(e, 'primary')}
            on:click={() => setActivePane('primary')}
-            on:keydown={(e) => (e.key === 'Enter' || e.key === ' ') && setActivePane('primary')}
-            role="button"
-            tabindex="0"
-         ></div>
-         <!-- Split Indicator Label -->
-         <div class="absolute top-1 left-1 text-[10px] px-1.5 py-0.5 bg-blue-500/20 text-blue-600 dark:text-blue-400 rounded border border-blue-500/30 font-medium pointer-events-none">
-           主面板
-         </div>
-       </div>
-
-       <!-- Splitter -->
-      <button
-        type="button"
-        aria-label="调整分屏"
-        class="bg-slate-200 dark:bg-slate-700 hover:bg-blue-500 dark:hover:bg-blue-500 transition-colors cursor-col-resize z-10 p-0 border-0"
-         style:height={splitMode === 'horizontal' ? '4px' : '100%'}
-         style:width={splitMode === 'vertical' ? '4px' : '100%'}
-         style:cursor={splitMode === 'horizontal' ? 'row-resize' : 'col-resize'}
-         on:mousedown={handleSplitStart}
-        on:keydown={handleSplitKeydown}
-      ></button>
-
-       <!-- Secondary Terminal -->
-       <div
-         class="relative overflow-hidden bg-slate-50/50 dark:bg-slate-900/50"
-         style:height={splitMode === 'horizontal' ? `${(1 - splitRatio) * 100}%` : '100%'}
-         style:width={splitMode === 'vertical' ? `${(1 - splitRatio) * 100}%` : '100%'}
-       >
-         {#if secondaryTerminal}
-         <div
-           bind:this={secondaryContainer}
-           class="w-full h-full overflow-hidden"
-           on:contextmenu|preventDefault={(e) => openContextMenu(e, 'secondary')}
-           on:click={() => setActivePane('secondary')}
-           on:keydown={(e) => (e.key === 'Enter' || e.key === ' ') && setActivePane('secondary')}
+           on:keydown={(e) => (e.key === 'Enter' || e.key === ' ') && setActivePane('primary')}
            role="button"
            tabindex="0"
          ></div>
-         {:else}
-         <div class="w-full h-full flex items-center justify-center text-slate-400 dark:text-slate-500">
-           <div class="text-center">
-             <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-slate-400 mx-auto mb-2"></div>
-             <p class="text-sm">正在初始化副面板...</p>
+         {#if splitMode !== 'none'}
+           <div class="absolute top-1 left-1 text-[10px] px-1.5 py-0.5 bg-blue-500/20 text-blue-600 dark:text-blue-400 rounded border border-blue-500/30 font-medium pointer-events-none">
+             主面板
+           </div>
+         {/if}
+       </div>
+
+       {#if splitMode !== 'none'}
+         <button
+           type="button"
+           aria-label="调整分屏"
+           class="bg-slate-200 dark:bg-slate-700 hover:bg-blue-500 dark:hover:bg-blue-500 transition-colors z-10 p-0 border-0"
+           style:height={splitMode === 'horizontal' ? '4px' : '100%'}
+           style:width={splitMode === 'vertical' ? '4px' : '100%'}
+           style:cursor={splitMode === 'horizontal' ? 'row-resize' : 'col-resize'}
+           on:mousedown={handleSplitStart}
+           on:keydown={handleSplitKeydown}
+         ></button>
+
+         <div
+           class="relative overflow-hidden bg-white dark:bg-slate-950"
+           style:height={splitMode === 'horizontal' ? `${(1 - splitRatio) * 100}%` : '100%'}
+           style:width={splitMode === 'vertical' ? `${(1 - splitRatio) * 100}%` : '100%'}
+         >
+           <div
+             bind:this={secondaryContainer}
+             class="w-full h-full overflow-hidden"
+             on:contextmenu|preventDefault={(e) => openContextMenu(e, 'secondary')}
+             on:click={() => setActivePane('secondary')}
+             on:keydown={(e) => (e.key === 'Enter' || e.key === ' ') && setActivePane('secondary')}
+             role="button"
+             tabindex="0"
+           ></div>
+           {#if !secondaryTerminal}
+             <div class="absolute inset-0 flex items-center justify-center text-slate-400 dark:text-slate-500 pointer-events-none">
+               <div class="text-center">
+                 <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-slate-400 mx-auto mb-2"></div>
+                 <p class="text-sm">正在初始化副面板...</p>
+               </div>
+             </div>
+           {/if}
+           <div class="absolute top-1 left-1 text-[10px] px-1.5 py-0.5 bg-green-500/20 text-green-600 dark:text-green-400 rounded border border-green-500/30 font-medium pointer-events-none">
+             副面板
            </div>
          </div>
-         {/if}
-         <!-- Split Indicator Label -->
-         <div class="absolute top-1 left-1 text-[10px] px-1.5 py-0.5 bg-green-500/20 text-green-600 dark:text-green-400 rounded border border-green-500/30 font-medium pointer-events-none">
-           副面板
-         </div>
-       </div>
+       {/if}
      </div>
-     {/if}
 
      <!-- Search Bar -->
      {#if showSearch && mode === 'terminal'}
