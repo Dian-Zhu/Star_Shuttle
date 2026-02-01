@@ -5,6 +5,7 @@
   import { slide } from 'svelte/transition';
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
+  import { applyScrollbarColor } from '../lib/terminalService';
 
   let activeTab = 'terminal';
 
@@ -59,6 +60,12 @@
         customTheme: theme === 'custom' ? s.appearance.customTheme || defaultCustomTheme : undefined
       }
     }));
+
+    // Update scrollbar colors immediately after theme change
+    const container = document.querySelector('.xterm-viewport')?.parentElement as HTMLElement;
+    if (container) {
+      applyScrollbarColor(container, $settings);
+    }
   }
 
   function updateUiSetting<K extends keyof (typeof $settings)['ui']>(key: K, value: (typeof $settings)['ui'][K]) {
