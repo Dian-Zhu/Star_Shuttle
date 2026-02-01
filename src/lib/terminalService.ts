@@ -103,6 +103,148 @@ export function markTerminalStopped(sessionId: string) {
 }
 
 /**
+ * Apply scrollbar color to match terminal theme background
+ * Dynamically sets scrollbar colors after xterm rendering completes
+ */
+function applyScrollbarColor(container: HTMLElement, appSettings: AppSettings): void {
+  log.info('Scrollbar', 'Starting scrollbar color application', {
+    containerExists: !!container,
+    containerId: container?.id,
+    containerClass: container?.className,
+    containerChildren: container?.children.length,
+  });
+
+  // Wait for rendering to complete
+  setTimeout(() => {
+    log.info('Scrollbar', 'Timeout fired, beginning application');
+
+    // Get theme background color
+    const theme = getXtermTheme(appSettings);
+    const bgColor = theme.background || '#0f172a';
+
+    log.info('Scrollbar', `Retrieved theme background color: ${bgColor}`, {
+      themePreset: appSettings.appearance?.terminalTheme,
+      appTheme: appSettings.theme,
+      hasBackground: !!theme.background,
+    });
+
+    // Find viewport element
+    const viewport = container.querySelector('.xterm-viewport') as HTMLElement;
+    log.info('Scrollbar', 'Viewport search result', {
+      viewportExists: !!viewport,
+      viewportTag: viewport?.tagName,
+      viewportClasses: viewport?.className,
+      allXtermElements: container.querySelectorAll('.xterm-viewport, .xterm-screen, .xterm').length,
+    });
+
+    if (!viewport) {
+      log.warn('Scrollbar', 'Viewport not found, retrying...', {
+        containerHTML: container.innerHTML.substring(0, 200),
+        containerChildren: Array.from(container.children).map(c => ({
+          tag: c.tagName,
+          classes: c.className,
+          id: c.id,
+        })),
+      });
+      // Retry after a short delay
+      setTimeout(() => applyScrollbarColor(container, appSettings), 100);
+      return;
+    }
+
+    // Use a unique data attribute to identify this viewport
+    const viewportId = `viewport-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    viewport.setAttribute('data-viewport-id', viewportId);
+
+    // Set viewport background color directly
+    viewport.style.backgroundColor = bgColor;
+
+    log.info('Scrollbar', `Set data attribute on viewport: ${viewportId}`, {
+      attributeValue: viewport.getAttribute('data-viewport-id'),
+      directBgColor: viewport.style.backgroundColor,
+    });
+
+    // Create dynamic style element for xterm viewport
+    const styleId = `xterm-viewport-scrollbar-${viewportId}`;
+    let styleElement = document.getElementById(styleId) as HTMLStyleElement;
+
+    log.info('Scrollbar', `Style element check: ${styleId}`, {
+      existingStyleElement: !!styleElement,
+      existingStyleContent: styleElement?.textContent?.substring(0, 100),
+    });
+
+    if (!styleElement) {
+      styleElement = document.createElement('style');
+      styleElement.id = styleId;
+      document.head.appendChild(styleElement);
+      log.info('Scrollbar', 'Created new style element', {
+        styleId,
+        headChildren: document.head.children.length,
+        styleTagExists: !!document.querySelector(`#${styleId}`),
+      });
+    }
+
+    // Set scrollbar styles to match terminal background using combined selectors
+    const selector = `.xterm-viewport[data-viewport-id="${viewportId}"]`;
+    const cssContent = `
+      /* Force xterm viewport scrollbar to match background */
+      ${selector} {
+        background-color: ${bgColor} !important;
+      }
+      ${selector}::-webkit-scrollbar {
+        width: 6px !important;
+        background-color: ${bgColor} !important;
+      }
+      ${selector}::-webkit-scrollbar-track {
+        background-color: ${bgColor} !important;
+      }
+      ${selector}::-webkit-scrollbar-thumb {
+        background-color: ${bgColor} !important;
+        border-radius: 0 !important;
+      }
+      ${selector}::-webkit-scrollbar-thumb:hover {
+        background-color: ${bgColor} !important;
+      }
+      ${selector}::-webkit-scrollbar-corner {
+        background-color: ${bgColor} !important;
+      }
+    `;
+
+    styleElement.textContent = cssContent;
+
+    log.info('Scrollbar', `Applied scrollbar color CSS: ${bgColor}`, {
+      viewportId,
+      selector,
+      styleElementId: styleElement.id,
+      cssContentPreview: cssContent.substring(0, 200),
+      computedViewportBg: window.getComputedStyle(viewport).backgroundColor,
+    });
+
+    // Verify the style was applied
+    setTimeout(() => {
+      const testScrollbar = document.createElement('div');
+      testScrollbar.style.cssText = 'overflow-y: scroll; width: 20px; height: 20px;';
+      container.appendChild(testScrollbar);
+      const scrollbarWidth = testScrollbar.offsetWidth - testScrollbar.clientWidth;
+      container.removeChild(testScrollbar);
+
+      const viewportStyle = window.getComputedStyle(viewport);
+
+      // Check canvas background color
+      const canvas = container.querySelector('canvas') as HTMLCanvasElement;
+      const canvasBg = canvas ? window.getComputedStyle(canvas).backgroundColor : 'not found';
+
+      log.info('Scrollbar', `Verification results - scrollbar width: ${scrollbarWidth}px`, {
+        viewportBg: viewportStyle.backgroundColor,
+        canvasBg,
+        viewportOverflow: viewportStyle.overflowY,
+        styleElementInDocument: !!document.getElementById(styleId),
+        dataAttributeExists: viewport.hasAttribute('data-viewport-id'),
+      });
+    }, 50);
+  }, 100); // Wait 100ms for rendering to complete
+}
+
+/**
  * State for managing terminal output writes in xterm 6.0
  * @property chunks - Array of pending output chunks to write
  * @property chunkIndex - Current position in chunks array
@@ -582,6 +724,14 @@ export async function initTerminal(container: HTMLElement, sessionId: string, co
     void sendTerminalResize(sessionId, term.cols, term.rows);
     term.focus();
 
+    // Dynamic scrollbar color matching - wait for rendering to complete
+    log.info('TermInit', 'About to call applyScrollbarColor', {
+      sessionId,
+      containerExists: !!container,
+      appSettingsTerminalTheme: appSettings.appearance?.terminalTheme,
+    });
+    applyScrollbarColor(container, appSettings);
+
     // Update the store with the initialized terminal instance
     activeTerminals.update(items => items.map(t => {
       if (t.sessionId === sessionId) {
@@ -705,6 +855,14 @@ export async function initDetachedTerminal(container: HTMLElement, sessionId: st
 
     markTerminalStarted(sessionId);
     void sendTerminalResize(sessionId, term.cols, term.rows);
+
+    // Apply scrollbar color matching for detached terminal
+    log.info('TermInit', 'Detached terminal: About to call applyScrollbarColor', {
+      sessionId,
+      containerExists: !!container,
+      appSettingsTerminalTheme: appSettings.appearance?.terminalTheme,
+    });
+    applyScrollbarColor(container, appSettings);
 
     log.info('TermInit', 'Detached terminal initialized successfully', {
       sessionId,
