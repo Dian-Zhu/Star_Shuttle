@@ -12,6 +12,7 @@
   "app": {
     "windows": [
       {
+        "decorations": false,
         "title": "Star Shuttle",
         "width": 1200,
         "height": 800,

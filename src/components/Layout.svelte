@@ -3,6 +3,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
   import Sidebar from './Sidebar.svelte';
+  import TitleBar from './TitleBar.svelte';
   import TerminalManager from './TerminalManager.svelte';
   import ConnectionModal from './ConnectionModal.svelte';
   import SettingsModal from './SettingsModal.svelte';
@@ -296,14 +297,15 @@
     </div>
   </div>
 {:else}
-  <div class="h-screen w-screen flex bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-200 overflow-hidden font-sans antialiased selection:bg-blue-500/30">
+  <div class="h-screen w-screen flex bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-200 overflow-hidden font-sans antialiased selection:bg-blue-500/30 relative pt-[30px]">
+    <TitleBar />
     <Sidebar />
     
     <main class="flex-1 flex flex-col min-w-0 relative">
       <TerminalManager />
       
       <!-- Toast Messages -->
-      <div class="fixed top-4 right-4 z-[1000] flex flex-col gap-2 pointer-events-none">
+      <div class="fixed top-12 right-4 z-[1000] flex flex-col gap-2 pointer-events-none">
         {#if $successMessage}
           <div 
             transition:fly={{ y: -20, duration: 300 }}

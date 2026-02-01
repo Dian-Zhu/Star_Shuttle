@@ -670,3 +670,21 @@ selectedTerminal.subscribe(value => {
     localStorage.setItem('terminalUi.selectedSessionId', value?.sessionId ?? '');
   }
 });
+
+// Helper function to find group_id by folder path (from tags[0])
+export function getGroupIdByPath(groups: ConnectionGroup[], folderPath: string): string | null {
+  if (!folderPath || folderPath === '未分组') return null;
+  
+  // Exact match
+  const exactMatch = groups.find(g => g.name === folderPath);
+  if (exactMatch) return exactMatch.id;
+  
+  // If folderPath contains '/', try to match the last segment
+  const lastSegment = folderPath.split('/').pop();
+  if (lastSegment) {
+    const partialMatch = groups.find(g => g.name === lastSegment);
+    if (partialMatch) return partialMatch.id;
+  }
+  
+  return null;
+}

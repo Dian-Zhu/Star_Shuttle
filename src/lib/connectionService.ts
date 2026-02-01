@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
-import { connections, errorMessage, successMessage, loading, type Connection } from './store';
+import { connections, errorMessage, successMessage, loading, type Connection, getGroupIdByPath } from './store';
 import { v4 as uuidv4 } from 'uuid';
+import { get } from 'svelte/store';
 
 export async function loadConnections() {
   try {
@@ -63,7 +64,7 @@ function toBackendConnectionConfig(connection: Connection, overrides?: Record<st
     auth_method: connection.auth_method,
     description: connection.description ?? null,
     tags: connection.tags ?? [],
-    group_id: null,
+    group_id: connection.group_id ?? null,
     local_forwards: connection.local_forwards ?? [],
     remote_forwards: connection.remote_forwards ?? [],
     proxy_type: (connection as any).proxy_type ?? 'None',
@@ -162,6 +163,26 @@ export async function saveConnection(connectionData: any): Promise<{ connectionI
     }
 
     const tagsArray = parseTags(connectionData.tags);
+
+    // Load groups to find the corresponding group_id based on tags[0]
+    const { connectionGroups } = await import('./store');
+    const groups = get(connectionGroups);
+    const folderTag = tagsArray[0] || '未分组';
+
+    // Auto-create group if it doesn't exist in connectionGroups
+    // This ensures groups created through tag input don't disappear when connections are moved
+    let finalGroups = groups;
+    if (folderTag !== '未分组' && !groups.some(g => g.name === folderTag)) {
+      const newGroup = {
+        id: uuidv4(),
+        name: folderTag,
+        createdAt: Date.now()
+      };
+      connectionGroups.update(groupList => [...groupList, newGroup]);
+      finalGroups = [...groups, newGroup];
+    }
+
+    const groupId = getGroupIdByPath(finalGroups, folderTag);
 
     const connectionId = connectionData.id || uuidv4();
 
@@ -281,7 +302,7 @@ export async function saveConnection(connectionData: any): Promise<{ connectionI
       auth_method: backendAuthMethod,
       description: connectionData.description || null,
       tags: tagsArray,
-      group_id: null,
+      group_id: groupId,
       local_forwards: effectiveLocalForwards,
       remote_forwards: effectiveRemoteForwards,
       proxy_type: effectiveProxyType,

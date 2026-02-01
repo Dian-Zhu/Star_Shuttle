@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { connections, showConnectionForm, editingConnection, isSidebarCollapsed, showSettings, activeTerminals } from '../lib/store';
-  import { deleteConnection } from '../lib/connectionService';
+  import { connections, showConnectionForm, editingConnection, isSidebarCollapsed, showSettings, activeTerminals, connectionGroups, getGroupIdByPath } from '../lib/store';
+  import { deleteConnection, updateConnectionConfig } from '../lib/connectionService';
   import { connectAndOpen, disconnectTerminal } from '../lib/terminalService';
   import PlusIcon from './icons/PlusIcon.svelte';
   import ServerIcon from './icons/ServerIcon.svelte';
@@ -13,10 +13,7 @@
   import DownloadIcon from './icons/DownloadIcon.svelte';
   import { importConnections, exportConnections } from '../lib/importExportService';
   import { confirm } from '@tauri-apps/plugin-dialog';
-  import { connectionHistory } from '../lib/store';
-  import ClockIcon from './icons/ClockIcon.svelte';
-  import ActivityIcon from './icons/ActivityIcon.svelte';
-  import SystemMonitorModal from './SystemMonitorModal.svelte';
+  import { connectionHistory, successMessage, errorMessage } from '../lib/store';
 
   let searchTerm = '';
   let activeTab: 'servers' | 'history' = 'servers';
@@ -88,6 +85,8 @@
 
   function buildTagTree(items: any[]): TagNode {
     const root: TagNode = { name: '', path: '', children: new Map(), connections: [] };
+
+    // Build tree from connections
     for (const connection of items) {
       const tags: string[] = normalizeTags(connection?.tags);
       const groupTag = tags[0] ? String(tags[0]).trim() : '未分组';
@@ -107,6 +106,45 @@
       }
       node.connections.push(connection);
     }
+
+    // Add empty groups from connectionGroups that don't exist in the tree yet
+    const allGroups = $connectionGroups;
+    const existingPaths = new Set<string>();
+
+    // Collect all existing paths from the tree
+    function collectPaths(node: TagNode) {
+      for (const [name, child] of node.children) {
+        existingPaths.add(child.path);
+        collectPaths(child);
+      }
+    }
+    collectPaths(root);
+
+    // Add "未分组" if it doesn't exist (this is a system group for connections without tags)
+    if (!existingPaths.has('未分组')) {
+      root.children.set('未分组', { name: '未分组', path: '未分组', children: new Map(), connections: [] });
+    }
+
+    // Add missing empty groups from connectionGroups
+    for (const group of allGroups) {
+      if (!existingPaths.has(group.name)) {
+        const parts = group.name === '未分组' ? ['未分组'] : splitTagPath(group.name);
+        if (parts.length === 0) continue;
+        let node = root;
+        for (const part of parts) {
+          const nextPath = node.path ? `${node.path}/${part}` : part;
+          const existing = node.children.get(part);
+          if (existing) {
+            node = existing;
+          } else {
+            const created: TagNode = { name: part, path: nextPath, children: new Map(), connections: [] };
+            node.children.set(part, created);
+            node = created;
+          }
+        }
+      }
+    }
+
     return root;
   }
 
@@ -152,7 +190,16 @@
 
   $: tagTree = buildTagTree(filteredConnections);
   $: {
-    if (!didInitExpanded) didInitExpanded = true;
+    if (!didInitExpanded) {
+      didInitExpanded = true;
+      // Initialize expanded paths with all groups and "未分组"
+      const newPaths = new Set(expandedPaths);
+      newPaths.add('未分组');
+      $connectionGroups.forEach(group => {
+        newPaths.add(group.name);
+      });
+      expandedPaths = newPaths;
+    }
   }
   $: tagRows = flattenTagTree(tagTree, expandedPaths);
 
@@ -218,6 +265,133 @@
       }
   }
 
+  async function createNewGroup() {
+    const groupName = prompt('请输入分组名称:');
+    if (!groupName || !groupName.trim()) return;
+
+    const trimmedName = groupName.trim();
+
+    // Check if group already exists
+    const existingGroups = $connectionGroups;
+    if (existingGroups.some(g => g.name === trimmedName)) {
+      alert('分组已存在');
+      return;
+    }
+
+    // Create new group with a default tag that matches the group name
+    // This ensures the group appears in the sidebar tree structure
+    const newGroup = {
+      id: uuidv4(),
+      name: trimmedName,
+      createdAt: Date.now()
+    };
+
+    connectionGroups.update(groups => [...groups, newGroup]);
+
+    // Auto-expand to show the new group
+    const next = new Set(expandedPaths);
+    next.add(trimmedName);
+    expandedPaths = next;
+  }
+
+  async function deleteGroup(folderPath: string) {
+    // Check if group exists in connectionGroups
+    const group = $connectionGroups.find(g => g.name === folderPath);
+    if (!group) {
+      alert('无法删除系统默认分组（如"未分组"）');
+      return;
+    }
+
+    // Find all connections in this group
+    const connectionsInGroup = $connections.filter(c => {
+      const tags = c.tags || [];
+      const groupTag = tags[0] ? String(tags[0]).trim() : '';
+      return groupTag === folderPath;
+    });
+
+    if (connectionsInGroup.length > 0) {
+      const confirmed = await confirm(
+        `分组「${folderPath}」下有 ${connectionsInGroup.length} 个连接。\n删除分组后，这些连接将移至「未分组」。\n是否继续？`,
+        { title: '删除分组', kind: 'warning' }
+      );
+      if (!confirmed) return;
+
+      // Update all connections in this group to move to "未分组"
+      for (const conn of connectionsInGroup) {
+        const updatedConnection = { ...conn };
+        const newTags = ['未分组', ...conn.tags.slice(1)];
+        updatedConnection.tags = newTags;
+        updatedConnection.group_id = null;
+        await updateConnectionConfig(updatedConnection);
+      }
+
+      // Update local store
+      connections.update(conns =>
+        conns.map(c => {
+          const tags = c.tags || [];
+          const groupTag = tags[0] ? String(tags[0]).trim() : '';
+          if (groupTag === folderPath) {
+            return { ...c, tags: ['未分组', ...tags.slice(1)], group_id: null };
+          }
+          return c;
+        })
+      );
+    } else {
+      const confirmed = await confirm(`确定要删除分组「${folderPath}」吗？`, { title: '删除分组', kind: 'warning' });
+      if (!confirmed) return;
+    }
+
+    // Remove group from connectionGroups
+    connectionGroups.update(groups => groups.filter(g => g.name !== folderPath));
+
+    // Remove from expandedPaths to trigger UI refresh
+    expandedPaths = new Set([...expandedPaths].filter(path => path !== folderPath));
+
+    successMessage.set(`分组「${folderPath}」已删除`);
+    setTimeout(() => successMessage.set(null), 3000);
+  }
+
+  let draggedConnection: any = null;
+
+  function handleDragStart(e: DragEvent, connection: any) {
+    draggedConnection = connection;
+    e.dataTransfer?.setData('text/plain', connection.id);
+    e.dataTransfer!.effectAllowed = 'move';
+  }
+
+  function handleDragOver(e: DragEvent) {
+    e.preventDefault();
+    e.dataTransfer!.dropEffect = 'move';
+  }
+
+  async function handleDrop(e: DragEvent, folderPath: string) {
+    e.preventDefault();
+    if (!draggedConnection) return;
+
+    // Update connection's tags to set first tag as folder path
+    const updatedConnection = { ...draggedConnection };
+    const newTags = [folderPath, ...updatedConnection.tags.slice(1)];
+    updatedConnection.tags = newTags;
+
+    // Find corresponding group_id based on folder path
+    const groupId = getGroupIdByPath($connectionGroups, folderPath);
+    updatedConnection.group_id = groupId;
+
+    // Update in backend
+    await updateConnectionConfig(updatedConnection);
+
+    // Update local store
+    connections.update(conns =>
+      conns.map(c => c.id === updatedConnection.id ? updatedConnection : c)
+    );
+
+    draggedConnection = null;
+  }
+
+  function handleDragEnd() {
+    draggedConnection = null;
+  }
+
   function openContextMenu(e: MouseEvent, kind: 'blank' | 'folder' | 'connection', row: TagRow | null) {
     e.preventDefault();
     contextMenu = {
@@ -256,20 +430,6 @@
 <aside class="flex flex-col bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 transition-all duration-300 ease-in-out {$isSidebarCollapsed ? 'w-16' : 'w-64'}">
   <!-- Sidebar Header -->
   <div class="p-4 border-b border-slate-200 dark:border-slate-800 flex flex-col gap-4">
-    <div class="flex items-center {$isSidebarCollapsed ? 'justify-center' : 'gap-3'}">
-      <div class="w-8 h-8 flex items-center justify-center shrink-0 text-slate-900 dark:text-white">
-        <svg class="w-8 h-8" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
-          <path d="M981.5 215.2c-0.1-55.3-30.9-85.3-86.4-85.4-255.6-0.1-511.3-0.1-766.9 0-55.1 0-85.6 30.4-85.7 86.1-0.3 197.2-0.2 394.3 0 591.5 0.1 57 30.5 86.6 87.8 86.7 126.5 0.1 253 0 379.5 0 128.3 0 256.5 0.1 384.8 0 55.9 0 86.9-29.7 87-84.8 0.2-198 0.2-396-0.1-594.1z m-65.4 586.9c0.1 21.3-6.6 26.6-26.9 26.5-125.7-0.8-251.5-0.4-377.2-0.4-124.9 0-249.7-0.5-374.6 0.5-22.7 0.2-29.7-5.7-29.6-29.2 0.9-192.1 0.9-384.2 0-576.2-0.1-22.3 6.9-27.8 28.2-27.8 250.6 0.6 501.2 0.6 751.7 0 21.3-0.1 28.3 5.5 28.2 27.8-0.7 192.9-0.6 385.8 0.2 578.8z" fill="currentColor"></path>
-          <path d="M249.5 349.1c11.3-0.3 20 5.5 28 12.4 46.9 40.2 94.1 80.2 140.5 121 23.3 20.4 23.3 38.8 0.2 59.1-47.2 41.3-94.8 82-142.7 122.5-18.5 15.6-37.9 15-50.2-1.3-13.8-18.2-7.9-34.4 7.8-48 34.9-30.2 69.6-60.6 105.2-89.9 11.7-9.6 12.7-15 0.4-25.1-36.3-29.9-71.5-61-107.2-91.6-12.7-10.9-17.2-24.3-10.6-39.7 5.1-12.2 15.1-18.9 28.6-19.4zM635.1 653.7c43.6 0 87.3-0.2 130.9 0.1 26.5 0.2 41.3 12.7 40 33.9-1.5 24.4-17.8 32-39.5 32-89 0-178 0.2-267-0.1-27-0.1-41.4-12-41.5-32.8-0.1-21 14.3-32.9 41.1-33 45.3-0.3 90.6-0.1 136-0.1z" fill="currentColor"></path>
-        </svg>
-      </div>
-      {#if !$isSidebarCollapsed}
-        <h1 class="text-base font-bold text-slate-800 dark:text-slate-100 tracking-wide whitespace-nowrap overflow-hidden">
-          Star Shuttle
-        </h1>
-      {/if}
-    </div>
-    
     <div class="flex gap-2">
       <button
         class="{$isSidebarCollapsed ? 'w-8 h-8 p-0' : 'flex-1 py-2 px-3'} flex items-center justify-center {$isSidebarCollapsed ? '' : 'gap-2'} bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-medium transition-all shadow-md hover:shadow-blue-900/30 active:scale-95"
@@ -344,11 +504,13 @@
             {#if row.kind === 'folder'}
               <div class="group relative">
                 <button
-                  class="w-full text-left flex items-center {$isSidebarCollapsed ? 'justify-center p-2' : 'gap-2 p-2'} rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                  class="w-full text-left flex items-center {$isSidebarCollapsed ? 'justify-center p-2' : 'gap-2 p-2'} rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors drop-target"
                   on:click={() => toggleFolder(row.path)}
                   on:contextmenu|preventDefault|stopPropagation={(e) => openContextMenu(e, 'folder', row)}
                   title={$isSidebarCollapsed ? row.name : ''}
                   style={!$isSidebarCollapsed ? `padding-left: ${0.5 + row.depth * 0.75}rem;` : ''}
+                  on:dragover={handleDragOver}
+                  on:drop={(e) => handleDrop(e, row.path)}
                 >
                   {#if !$isSidebarCollapsed}
                     <span class="text-slate-400 dark:text-slate-500 w-4 inline-flex justify-center">
@@ -374,11 +536,14 @@
             {:else}
               <div class="group relative">
                 <button
-                  class="w-full text-left flex items-center {$isSidebarCollapsed ? 'justify-center p-2' : 'gap-3 p-2'} rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors group-hover:shadow-sm"
+                  class="w-full text-left flex items-center {$isSidebarCollapsed ? 'justify-center p-2' : 'gap-3 p-2'} rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors group-hover:shadow-sm cursor-move"
                   on:click={() => handleConnect(row.connection)}
                   on:contextmenu|preventDefault|stopPropagation={(e) => openContextMenu(e, 'connection', row)}
                   title={$isSidebarCollapsed ? `${row.connection.name} (${row.connection.username}@${row.connection.host})` : ''}
                   style={!$isSidebarCollapsed ? `padding-left: ${0.5 + row.depth * 0.75}rem;` : ''}
+                  draggable="true"
+                  on:dragstart={(e) => handleDragStart(e, row.connection)}
+                  on:dragend={handleDragEnd}
                 >
                   <div class="text-slate-400 group-hover:text-blue-500 dark:group-hover:text-blue-400 transition-colors shrink-0">
                     <ServerIcon class="w-4 h-4" />
@@ -531,12 +696,24 @@
         >
           {expandedPaths.has(contextMenuFolderRow.path) ? '折叠' : '展开'}
         </button>
+        <button
+          class="w-full text-left px-4 py-2 hover:bg-slate-100 dark:hover:bg-gray-700 text-red-600 dark:text-red-400 hover:text-red-500 dark:hover:text-red-300"
+          on:click|stopPropagation={() => { closeContextMenu(); deleteGroup(contextMenuFolderRow.path); }}
+        >
+          删除分组
+        </button>
       {:else}
         <button
           class="w-full text-left px-4 py-2 hover:bg-slate-100 dark:hover:bg-gray-700 text-slate-700 dark:text-gray-200"
           on:click|stopPropagation={() => { closeContextMenu(); editingConnection.set(null); showConnectionForm.set(true); }}
         >
           新建连接
+        </button>
+        <button
+          class="w-full text-left px-4 py-2 hover:bg-slate-100 dark:hover:bg-gray-700 text-slate-700 dark:text-gray-200"
+          on:click|stopPropagation={() => { closeContextMenu(); createNewGroup(); }}
+        >
+          新建分组
         </button>
         <div class="border-t border-slate-200 dark:border-gray-700 my-1"></div>
         <button
@@ -582,3 +759,13 @@
     </button>
   </div>
 </aside>
+
+<style>
+  .drop-target.drag-over {
+    background-color: rgba(59, 130, 246, 0.1) !important;
+    border-color: #3b82f6 !important;
+  }
+  .cursor-move {
+    cursor: move;
+  }
+</style>
