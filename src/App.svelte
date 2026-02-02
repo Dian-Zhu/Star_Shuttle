@@ -20,10 +20,7 @@
 
   // Initialize scrollbar colors when settings change
   $: if ($settings) {
-    const container = document.querySelector('.xterm-viewport')?.parentElement as HTMLElement;
-    if (container) {
-      applyScrollbarColor(container, $settings);
-    }
+    applyScrollbarColor($settings);
   }
 
   $: effectiveTheme = $settings.theme === 'system' 

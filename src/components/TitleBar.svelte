@@ -1,6 +1,5 @@
 <script lang="ts">
   import { getCurrentWindow } from '@tauri-apps/api/window';
-  import { settings } from '../lib/store';
   
   const appWindow = getCurrentWindow();
   
@@ -68,7 +67,6 @@
     border-bottom: 1px solid var(--color-border);
     color: var(--color-text-secondary);
     -webkit-app-region: drag;
-    app-region: drag;
     pointer-events: none;
   }
   
@@ -79,7 +77,6 @@
     padding-left: 8px;
     height: 100%;
     -webkit-app-region: drag;
-    app-region: drag;
     pointer-events: auto;
   }
   
@@ -101,7 +98,6 @@
     flex: 1;
     height: 100%;
     -webkit-app-region: drag;
-    app-region: drag;
     cursor: move;
     pointer-events: auto;
   }
@@ -110,7 +106,6 @@
     display: flex;
     height: 100%;
     -webkit-app-region: no-drag;
-    app-region: no-drag;
   }
   
   .titlebar-controls button {

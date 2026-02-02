@@ -3,17 +3,21 @@
   import { connections, showConnectionForm, editingConnection, isSidebarCollapsed, showSettings, activeTerminals, connectionGroups, getGroupIdByPath } from '../lib/store';
   import { deleteConnection, updateConnectionConfig } from '../lib/connectionService';
   import { connectAndOpen, disconnectTerminal } from '../lib/terminalService';
+  import SystemMonitorModal from './SystemMonitorModal.svelte';
   import PlusIcon from './icons/PlusIcon.svelte';
   import ServerIcon from './icons/ServerIcon.svelte';
   import TrashIcon from './icons/TrashIcon.svelte';
   import SettingsIcon from './icons/SettingsIcon.svelte';
+  import ActivityIcon from './icons/ActivityIcon.svelte';
+  import ClockIcon from './icons/ClockIcon.svelte';
   import ChevronLeftIcon from './icons/ChevronLeftIcon.svelte';
   import ChevronRightIcon from './icons/ChevronRightIcon.svelte';
   import UploadIcon from './icons/UploadIcon.svelte';
   import DownloadIcon from './icons/DownloadIcon.svelte';
   import { importConnections, exportConnections } from '../lib/importExportService';
   import { confirm } from '@tauri-apps/plugin-dialog';
-  import { connectionHistory, successMessage, errorMessage } from '../lib/store';
+  import { connectionHistory, successMessage } from '../lib/store';
+  import { v4 as uuidv4 } from 'uuid';
 
   let searchTerm = '';
   let activeTab: 'servers' | 'history' = 'servers';
@@ -113,7 +117,7 @@
 
     // Collect all existing paths from the tree
     function collectPaths(node: TagNode) {
-      for (const [name, child] of node.children) {
+      for (const child of node.children.values()) {
         existingPaths.add(child.path);
         collectPaths(child);
       }
@@ -352,6 +356,7 @@
   }
 
   let draggedConnection: any = null;
+  let dragOverFolderPath: string | null = null;
 
   function handleDragStart(e: DragEvent, connection: any) {
     draggedConnection = connection;
@@ -386,10 +391,12 @@
     );
 
     draggedConnection = null;
+    dragOverFolderPath = null;
   }
 
   function handleDragEnd() {
     draggedConnection = null;
+    dragOverFolderPath = null;
   }
 
   function openContextMenu(e: MouseEvent, kind: 'blank' | 'folder' | 'connection', row: TagRow | null) {
@@ -505,11 +512,16 @@
               <div class="group relative">
                 <button
                   class="w-full text-left flex items-center {$isSidebarCollapsed ? 'justify-center p-2' : 'gap-2 p-2'} rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors drop-target"
+                  class:drag-over={dragOverFolderPath === row.path}
                   on:click={() => toggleFolder(row.path)}
                   on:contextmenu|preventDefault|stopPropagation={(e) => openContextMenu(e, 'folder', row)}
                   title={$isSidebarCollapsed ? row.name : ''}
                   style={!$isSidebarCollapsed ? `padding-left: ${0.5 + row.depth * 0.75}rem;` : ''}
                   on:dragover={handleDragOver}
+                  on:dragenter={() => (dragOverFolderPath = row.path)}
+                  on:dragleave={() => {
+                    if (dragOverFolderPath === row.path) dragOverFolderPath = null;
+                  }}
                   on:drop={(e) => handleDrop(e, row.path)}
                 >
                   {#if !$isSidebarCollapsed}

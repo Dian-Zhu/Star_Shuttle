@@ -62,10 +62,7 @@
     }));
 
     // Update scrollbar colors immediately after theme change
-    const container = document.querySelector('.xterm-viewport')?.parentElement as HTMLElement;
-    if (container) {
-      applyScrollbarColor(container, $settings);
-    }
+    applyScrollbarColor($settings);
   }
 
   function updateUiSetting<K extends keyof (typeof $settings)['ui']>(key: K, value: (typeof $settings)['ui'][K]) {

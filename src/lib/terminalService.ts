@@ -6,7 +6,7 @@ import { SearchAddon } from '@xterm/addon-search';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { get } from 'svelte/store';
-import { activeTerminals, connections, selectedTerminalIndex, type Connection, type ActiveTerminal, errorMessage, successMessage, settings, connectionHistory, broadcastInputEnabled, broadcastSessionIds, getStoredTerminalUiState, getXtermTheme } from './store';
+import { activeTerminals, connections, selectedTerminalIndex, type Connection, type ActiveTerminal, type AppSettings, errorMessage, successMessage, settings, connectionHistory, broadcastInputEnabled, broadcastSessionIds, getStoredTerminalUiState, getXtermTheme } from './store';
 import '@xterm/xterm/css/xterm.css';
 
 const IS_DEV = import.meta.env.DEV;
@@ -105,7 +105,7 @@ export function markTerminalStopped(sessionId: string) {
 /**
  * Apply scrollbar color to match terminal theme background
  */
-export function applyScrollbarColor(container: HTMLElement, appSettings: AppSettings): void {
+export function applyScrollbarColor(appSettings: AppSettings): void {
   log.info('Scrollbar', 'Updating scrollbar colors for terminal');
   const theme = getXtermTheme(appSettings);
   const terminalBg = theme.background || '#0f172a';
@@ -632,7 +632,7 @@ export async function initTerminal(container: HTMLElement, sessionId: string, co
       containerExists: !!container,
       appSettingsTerminalTheme: appSettings.appearance?.terminalTheme,
     });
-    applyScrollbarColor(container, appSettings);
+    applyScrollbarColor(appSettings);
 
     // Update the store with the initialized terminal instance
     activeTerminals.update(items => items.map(t => {
@@ -764,7 +764,7 @@ export async function initDetachedTerminal(container: HTMLElement, sessionId: st
       containerExists: !!container,
       appSettingsTerminalTheme: appSettings.appearance?.terminalTheme,
     });
-    applyScrollbarColor(container, appSettings);
+    applyScrollbarColor(appSettings);
 
     log.info('TermInit', 'Detached terminal initialized successfully', {
       sessionId,
