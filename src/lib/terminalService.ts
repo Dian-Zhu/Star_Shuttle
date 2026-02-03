@@ -6,7 +6,7 @@ import { SearchAddon } from '@xterm/addon-search';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { get } from 'svelte/store';
-import { activeTerminals, connections, selectedTerminalIndex, type Connection, type ActiveTerminal, type AppSettings, errorMessage, successMessage, settings, connectionHistory, broadcastInputEnabled, broadcastSessionIds, getStoredTerminalUiState, getXtermTheme } from './store';
+import { activeTerminals, connections, selectedTerminalIndex, type Connection, type ActiveTerminal, type AppSettings, errorMessage, successMessage, settings, connectionHistory, broadcastInputEnabled, broadcastSessionIds, getStoredTerminalUiState, getXtermTheme, terminalSessionMap } from './store';
 import '@xterm/xterm/css/xterm.css';
 
 const IS_DEV = import.meta.env.DEV;
@@ -920,7 +920,23 @@ export function handleTerminalInput(sessionId: string, data: string, connection:
 
   const selected = get(broadcastSessionIds);
   const baseTargets = selected.length > 0 ? selected : [sessionId];
-  const targets = baseTargets.includes(sessionId) ? baseTargets : [sessionId, ...baseTargets];
+  // Expand targets to include all child sessions from split panes
+  const expandedTargets = new Set<string>();
+  const sessionMap = get(terminalSessionMap);
+  
+  for (const targetId of baseTargets) {
+    expandedTargets.add(targetId);
+    // If this target is a root session, include all its children
+    const children = sessionMap.get(targetId);
+    if (children) {
+      children.forEach(childId => expandedTargets.add(childId));
+    }
+  }
+  
+  const targets = Array.from(expandedTargets);
+  if (!targets.includes(sessionId)) {
+      targets.push(sessionId);
+  }
 
   const terminals = get(activeTerminals);
   const connectionBySessionId = new Map(terminals.map(t => [t.sessionId, t.connection] as const));
@@ -986,6 +1002,39 @@ export async function monitorSessionStatus(sessionId: string) {
 /**
  * xterm 6.0: Enhanced terminal cleanup with better resource management
  */
+
+export async function closeSplitSession(sessionId: string, terminal?: any) {
+  try {
+    if (terminal) {
+      try {
+        terminal.dispose();
+      } catch (e) {
+        log.warn('TermCleanup', 'Failed to dispose split terminal', e);
+      }
+    }
+    
+    await closeDetachedTerminal(sessionId);
+    await invoke('disconnect', { sessionId });
+    
+    // Clean up listeners
+    const inputListener = inputListeners.get(sessionId);
+    if (inputListener) {
+      inputListener.dispose();
+      inputListeners.delete(sessionId);
+    }
+    
+    const unlisten = outputListeners.get(sessionId);
+    if (unlisten) {
+      unlisten();
+      outputListeners.delete(sessionId);
+    }
+    
+    log.info('TermCleanup', 'Split session closed', { sessionId });
+  } catch (e) {
+    log.error('TermCleanup', 'Failed to close split session', e);
+  }
+}
+
 export async function closeTerminal(sessionId: string) {
   const terminals = get(activeTerminals);
   const index = terminals.findIndex(t => t.sessionId === sessionId);
@@ -1038,6 +1087,12 @@ export async function closeTerminal(sessionId: string) {
     // Remove from store
     activeTerminals.update(items => items.filter(t => t.sessionId !== sessionId));
     broadcastSessionIds.update(ids => ids.filter(id => id !== sessionId));
+    
+    // Remove from session map
+    terminalSessionMap.update(map => {
+      map.delete(sessionId);
+      return map;
+    });
 
     // Adjust selected index
     const currentIndex = get(selectedTerminalIndex);

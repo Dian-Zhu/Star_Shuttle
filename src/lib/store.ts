@@ -95,6 +95,9 @@ export const errorMessage = writable<string | null>(null);
 export const successMessage = writable<string | null>(null);
 export const fileClipboard = writable<FileClipboardItem | null>(null);
 export const terminalSplitConfigs = writable<Map<string, SplitConfig>>(new Map());
+// Map root sessionId -> Set of all child sessionIds (including root itself)
+export const terminalSessionMap = writable<Map<string, Set<string>>>(new Map());
+export const activePaneId = writable<string | null>(null);
 
 // History Store
 const loadHistory = (): HistoryItem[] => {

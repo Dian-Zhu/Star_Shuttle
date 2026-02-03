@@ -4,7 +4,7 @@
   import { Terminal } from '@xterm/xterm';
   import { FitAddon } from '@xterm/addon-fit';
   import { SearchAddon } from '@xterm/addon-search';
-  import { settings, getXtermTheme, type Connection } from '../../lib/store';
+  import { settings, getXtermTheme, activePaneId, broadcastInputEnabled, broadcastSessionIds, terminalSessionMap, type Connection } from '../../lib/store';
   import { 
     initTerminal, 
     initDetachedTerminal, 
@@ -15,18 +15,47 @@
 
   export let sessionId: string;
   export let connection: Connection;
+  export let id: string = ''; // Pane ID for drag and drop
   export let isRoot: boolean = false;
+
+  let isActive = false;
+  $: isActive = $activePaneId === id;
+
+  let isBroadcastTarget = false;
+  $: {
+      if ($broadcastInputEnabled) {
+          if ($broadcastSessionIds.length === 0) {
+              isBroadcastTarget = true;
+          } else {
+              isBroadcastTarget = $broadcastSessionIds.includes(sessionId);
+              if (!isBroadcastTarget) {
+                   // Check if my root session is in the broadcast list
+                   for (const [rootId, children] of $terminalSessionMap) {
+                       if ($broadcastSessionIds.includes(rootId) && children.has(sessionId)) {
+                           isBroadcastTarget = true;
+                           break;
+                       }
+                   }
+              }
+          }
+      } else {
+          isBroadcastTarget = false;
+      }
+  }
   // If provided, use existing instance (for root terminal that is already initialized)
   export let existingTerminal: Terminal | null = null;
   export let existingFitAddon: FitAddon | null = null;
   export let existingSearchAddon: SearchAddon | null = null;
   export let onInit: ((term: Terminal, fit: FitAddon, search: SearchAddon) => void) | undefined = undefined;
+  export let onFocus: (() => void) | undefined = undefined;
   
   export let isVisible: boolean = true;
 
   const dispatch = createEventDispatcher<{
     split: { direction: 'horizontal' | 'vertical' };
     close: void;
+    active: void;
+    rearrange: { sourceId: string; targetId: string; direction: 'top' | 'bottom' | 'left' | 'right' };
   }>();
   
   let container: HTMLElement;
@@ -35,6 +64,70 @@
   let searchAddon: SearchAddon | null = null;
   let resizeObserver: ResizeObserver | null = null;
   let isInitialized = false;
+  
+  // Drag and Drop State
+  let dropPosition: 'top' | 'bottom' | 'left' | 'right' | null = null;
+  let isDragging = false;
+
+  function handleDragStart(e: DragEvent) {
+    if (!id) return;
+    e.dataTransfer?.setData('text/plain', id);
+    e.dataTransfer?.setData('application/x-starshuttle-pane', id);
+    e.dataTransfer!.effectAllowed = 'move';
+    isDragging = true;
+  }
+
+  function handleDragEnd() {
+    isDragging = false;
+  }
+
+  function handleDragOver(e: DragEvent) {
+    if (!container || isDragging) return;
+    if (!e.dataTransfer?.types.includes('application/x-starshuttle-pane')) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    const rect = container.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const w = rect.width;
+    const h = rect.height;
+
+    // Determine region based on distance to edges
+    const distLeft = x;
+    const distRight = w - x;
+    const distTop = y;
+    const distBottom = h - y;
+    const min = Math.min(distLeft, distRight, distTop, distBottom);
+    
+    // Threshold to prevent flickering or center dead zone? 
+    // Just simple closest edge logic
+    if (min === distLeft) dropPosition = 'left';
+    else if (min === distRight) dropPosition = 'right';
+    else if (min === distTop) dropPosition = 'top';
+    else dropPosition = 'bottom';
+  }
+
+  function handleDragLeave(e: DragEvent) {
+    // Prevent clearing when entering a child element
+    if (e.relatedTarget && e.currentTarget instanceof Node && (e.currentTarget as Node).contains(e.relatedTarget as Node)) {
+        return;
+    }
+    dropPosition = null;
+  }
+
+  function handleDrop(e: DragEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    const sourceId = e.dataTransfer?.getData('application/x-starshuttle-pane');
+    // console.log('Drop event:', { sourceId, targetId: id, dropPosition });
+    
+    if (sourceId && sourceId !== id && dropPosition) {
+      dispatch('rearrange', { sourceId, targetId: id, direction: dropPosition });
+    }
+    dropPosition = null;
+  }
   
   // Search state
   let showSearch = false;
@@ -102,9 +195,17 @@
       fitAddon = existingFitAddon;
       searchAddon = existingSearchAddon;
       
-      terminal.open(container);
+      // Ensure terminal is opened in the new container
+      if (terminal.element?.parentElement !== container) {
+          terminal.open(container);
+      }
+      
       fitAddon?.fit();
       attachTerminalKeybindings(terminal);
+      
+      // Re-bind onData listener if needed? 
+      // xterm onData listeners persist, but we might want to ensure our input handling is correct.
+      // Actually, since we don't dispose the terminal, the listeners attached in initDetachedTerminal or initTerminal are still valid.
       
       if (terminal && fitAddon && searchAddon && onInit) {
         onInit(terminal, fitAddon, searchAddon);
@@ -124,6 +225,23 @@
       }
     }
 
+    if (terminal) {
+        terminal.onTitleChange(() => {
+             // Use title change as a proxy for activity/focus if needed, 
+             // but better to use onFocus event from xterm textarea
+        });
+        // We can listen to the textarea focus
+        terminal.textarea?.addEventListener('focus', () => {
+            if (onFocus) onFocus();
+            dispatch('active');
+        });
+        // Also click on container
+        container.addEventListener('mousedown', () => {
+             if (onFocus) onFocus();
+             dispatch('active');
+        });
+    }
+
     if (container) {
       resizeObserver.observe(container);
       container.addEventListener('paste', handlePaste, true);
@@ -139,30 +257,10 @@
     }
     document.removeEventListener('click', handleDocumentClick);
     container?.removeEventListener('paste', handlePaste, true);
-
-    // Only cleanup if it's NOT the root terminal (root terminal lifecycle is managed by parent)
-    // AND if we created it (not existingTerminal)
-    if (!isRoot && !existingTerminal) {
-      if (sessionId) {
-        try {
-          await closeDetachedTerminal(sessionId);
-        } catch (e) {
-          console.warn('Failed to close detached terminal:', e);
-        }
-        try {
-          await invoke('disconnect', { sessionId });
-        } catch (e) {
-          console.warn('Failed to disconnect detached session:', e);
-        }
-      }
-      if (terminal) {
-        try {
-          terminal.dispose();
-        } catch (e) {
-          console.warn('Failed to dispose terminal:', e);
-        }
-      }
-    }
+    
+    // We NO LONGER dispose/disconnect here. 
+    // Session cleanup is now managed explicitly by the parent view or closeSplitSession.
+    // This allows the component to be unmounted/remounted during layout changes without killing the session.
   });
 
   // Reactive settings updates
@@ -307,14 +405,53 @@
   }
 </script>
 
-<div class="relative w-full h-full overflow-hidden group">
+<div class="relative w-full h-full overflow-hidden group"
+    class:ring-2={isActive && !isBroadcastTarget}
+    class:ring-blue-500={isActive && !isBroadcastTarget}
+    class:ring-4={isBroadcastTarget}
+    class:ring-red-500={isBroadcastTarget}
+    class:ring-inset={true}
+    on:dragover={handleDragOver}
+    on:dragleave={handleDragLeave}
+    on:drop={handleDrop}
+    role="region"
+    aria-label="Terminal Pane Drop Zone"
+  >
+  <!-- Drop Indicator -->
+  {#if dropPosition}
+    <div class="absolute z-30 bg-blue-500/30 border-2 border-blue-500 pointer-events-none transition-all duration-100"
+      style:top={dropPosition === 'top' ? '0' : dropPosition === 'bottom' ? '50%' : '0'}
+      style:bottom={dropPosition === 'bottom' ? '0' : dropPosition === 'top' ? '50%' : '0'}
+      style:left={dropPosition === 'left' ? '0' : dropPosition === 'right' ? '50%' : '0'}
+      style:right={dropPosition === 'right' ? '0' : dropPosition === 'left' ? '50%' : '0'}
+    ></div>
+  {/if}
+
+  <!-- Drag Handle Header -->
+  <div 
+    class="absolute top-0 left-0 right-0 h-6 bg-slate-100/90 dark:bg-slate-800/90 backdrop-blur-sm opacity-0 group-hover:opacity-100 transition-opacity z-20 flex items-center px-2 cursor-grab active:cursor-grabbing border-b border-slate-200 dark:border-slate-700"
+    draggable="true"
+    on:dragstart={handleDragStart}
+    on:dragend={handleDragEnd}
+  >
+    <svg class="w-3 h-3 text-slate-400 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8h16M4 16h16"></path></svg>
+    <span class="text-xs text-slate-600 dark:text-slate-300 truncate flex-1 font-medium select-none">{connection.name || 'Terminal'}</span>
+    <!-- Close button -->
+    {#if !isRoot}
+    <button class="p-0.5 hover:bg-red-100 dark:hover:bg-red-900/50 rounded text-slate-400 hover:text-red-500" on:click|stopPropagation={handleClosePane} title="Close Pane">
+      <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+    </button>
+    {/if}
+  </div>
+
   <div
-    bind:this={container}
-    class="w-full h-full overflow-hidden"
-    on:contextmenu|preventDefault={openContextMenu}
-    role="button"
-    tabindex="0"
-  ></div>
+      bind:this={container}
+      class="w-full h-full overflow-hidden"
+      on:contextmenu|preventDefault={openContextMenu}
+      role="button"
+      tabindex="0"
+    ></div>
+  </div>
 
   <!-- Search Bar -->
   {#if showSearch}

@@ -50,10 +50,15 @@
   function handlePaneClose(e: CustomEvent, paneId: string) {
       dispatch('closePane', { targetId: paneId });
   }
+
+  function handlePaneActive(e: CustomEvent, paneId: string) {
+      dispatch('activePane', { targetId: paneId });
+  }
 </script>
 
 {#if node.type === 'pane'}
   <TerminalPane 
+    id={node.id}
     sessionId={node.sessionId}
     connection={node.connection}
     isRoot={node.isRoot}
@@ -64,6 +69,8 @@
     isVisible={isVisible}
     on:split={(e) => handlePaneSplit(e, node.id)}
     on:close={(e) => handlePaneClose(e, node.id)}
+    on:active={(e) => handlePaneActive(e, node.id)}
+    on:rearrange
   />
 {:else}
   <div 
@@ -79,6 +86,8 @@
         isVisible={isVisible} 
         on:split
         on:closePane
+        on:activePane
+        on:rearrange
       />
     </div>
 
@@ -100,6 +109,7 @@
         isVisible={isVisible} 
         on:split
         on:closePane
+        on:activePane
       />
     </div>
   </div>
