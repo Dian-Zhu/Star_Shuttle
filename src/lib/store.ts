@@ -60,6 +60,7 @@ export interface ActiveTerminal {
   terminal: Terminal;
   fitAddon: FitAddon;
   searchAddon: SearchAddon;
+  fileExplorerPath?: string; // Add this line
 }
 
 export interface SplitConfig {
@@ -71,9 +72,7 @@ export interface SplitConfig {
 export type FileClipboardItem = {
   source: 'local' | 'remote';
   sessionId?: string;
-  path: string;
-  name: string;
-  isDirectory: boolean;
+  entries: { path: string; name: string; isDirectory: boolean }[];
   operation: 'copy';
 };
 
@@ -97,7 +96,6 @@ export const fileClipboard = writable<FileClipboardItem | null>(null);
 export const terminalSplitConfigs = writable<Map<string, SplitConfig>>(new Map());
 // Map root sessionId -> Set of all child sessionIds (including root itself)
 export const terminalSessionMap = writable<Map<string, Set<string>>>(new Map());
-export const activePaneId = writable<string | null>(null);
 
 // History Store
 const loadHistory = (): HistoryItem[] => {
@@ -143,34 +141,29 @@ connectionGroups.subscribe(value => {
 
 // Global Settings Store
 export interface AppSettings {
-  theme: 'dark' | 'light' | 'system';
+  theme: 'dark' | 'light' | 'system' | 'custom';
   ui: {
     sidebarCollapsed: boolean;
+    rightSidebarOpen: boolean;
+    rightSidebarWidth: number;
   };
   appearance: {
     terminalTheme: 'auto' | 'dracula' | 'nord' | 'solarized-dark' | 'solarized-light' | 'monokai' | 'one-dark' | 'github-dark' | 'tokyo-night' | 'catppuccin' | 'custom';
-    customTheme?: {
-      background: string;
-      foreground: string;
-      cursor: string;
-      selectionBackground: string;
-      black: string;
-      red: string;
-      green: string;
-      yellow: string;
-      blue: string;
-      magenta: string;
-      cyan: string;
-      white: string;
-      brightBlack: string;
-      brightRed: string;
-      brightGreen: string;
-      brightYellow: string;
-      brightBlue: string;
-      brightMagenta: string;
-      brightCyan: string;
-      brightWhite: string;
+    customTheme?: ITheme;
+    customUITheme?: {
+      backgroundColor: string;
+      surfaceColor: string;
+      statusBarColor: string;
+      surfaceLightColor: string;
+      textColor: string;
+      secondaryTextColor: string;
+      borderColor: string;
+      borderLightColor: string;
     };
+    accentColor?: string;
+    backgroundImage?: string | null;
+    backgroundOpacity?: number; // 0-1, 默认 0.5
+    backgroundBlur?: number; // 0-20, 默认 0
   };
   terminal: {
     fontSize: number;
@@ -185,6 +178,7 @@ export interface AppSettings {
   shortcuts: {
     commandPalette: string;
     toggleSidebar: string;
+    toggleFileBrowser: string;
     newConnection: string;
     settings: string;
     closeTerminal: string;
@@ -192,6 +186,14 @@ export interface AppSettings {
     nextTab: string;
     copy: string;
     paste: string;
+    fileBrowserRefresh: string;
+    fileBrowserNewFolder: string;
+    fileBrowserNewFile: string;
+    fileBrowserRename: string;
+    fileBrowserDelete: string;
+    fileBrowserSelectAll: string;
+    fileBrowserOpen: string;
+    fileBrowserBack: string;
   };
   security: {
     autoLockMinutes: number; // 0 = disabled
@@ -203,9 +205,22 @@ const defaultSettings: AppSettings = {
   theme: 'dark',
   ui: {
     sidebarCollapsed: false,
+    rightSidebarOpen: false,
+    rightSidebarWidth: 400,
   },
   appearance: {
     terminalTheme: 'auto',
+    accentColor: 'blue',
+    customUITheme: {
+      backgroundColor: '#0f172a',
+      surfaceColor: '#1e293b',
+      statusBarColor: '#1e293b',
+      surfaceLightColor: '#334155',
+      textColor: '#f8fafc',
+      secondaryTextColor: '#94a3b8',
+      borderColor: '#334155',
+      borderLightColor: '#475569',
+    }
   },
   terminal: {
     fontSize: 14,
@@ -220,6 +235,7 @@ const defaultSettings: AppSettings = {
   shortcuts: {
     commandPalette: 'Ctrl+Shift+P',
     toggleSidebar: 'Ctrl+B',
+    toggleFileBrowser: 'Ctrl+Shift+B',
     newConnection: 'Ctrl+Shift+N',
     settings: 'Ctrl+Shift+S',
     closeTerminal: 'Ctrl+Shift+W',
@@ -227,6 +243,14 @@ const defaultSettings: AppSettings = {
     nextTab: 'Ctrl+Shift+]',
     copy: 'Ctrl+Shift+C',
     paste: 'Ctrl+Shift+V',
+    fileBrowserRefresh: 'F5',
+    fileBrowserNewFolder: 'F7',
+    fileBrowserNewFile: 'Ctrl+Alt+N',
+    fileBrowserRename: 'F2',
+    fileBrowserDelete: 'Delete',
+    fileBrowserSelectAll: 'Ctrl+A',
+    fileBrowserOpen: 'Enter',
+    fileBrowserBack: 'Backspace',
   },
   security: {
     autoLockMinutes: 0,
@@ -275,14 +299,23 @@ const loadSettings = (): AppSettings => {
 
     const shortcutOrder: Array<keyof AppSettings['shortcuts']> = [
       'commandPalette',
-      'toggleSidebar',
-      'newConnection',
+    'toggleSidebar',
+    'toggleFileBrowser',
+    'newConnection',
       'settings',
       'closeTerminal',
       'prevTab',
       'nextTab',
       'copy',
-      'paste'
+      'paste',
+      'fileBrowserRefresh',
+      'fileBrowserNewFolder',
+      'fileBrowserNewFile',
+      'fileBrowserRename',
+      'fileBrowserDelete',
+      'fileBrowserSelectAll',
+      'fileBrowserOpen',
+      'fileBrowserBack'
     ];
     const seen = new Map<string, keyof AppSettings['shortcuts']>();
     const sanitizedShortcuts = { ...merged.shortcuts };
@@ -310,7 +343,7 @@ const loadSettings = (): AppSettings => {
   }
 };
 
-export function getXtermTheme(appSettings: AppSettings): ITheme {
+function getBaseXtermTheme(appSettings: AppSettings): ITheme {
   const preset = appSettings.appearance?.terminalTheme ?? 'auto';
 
   // Custom theme
@@ -598,6 +631,14 @@ export function getXtermTheme(appSettings: AppSettings): ITheme {
   };
 }
 
+export function getXtermTheme(appSettings: AppSettings): ITheme {
+  const theme = getBaseXtermTheme(appSettings);
+  if (appSettings.appearance?.backgroundImage) {
+    return { ...theme, background: 'rgba(0,0,0,0)' };
+  }
+  return theme;
+}
+
 export const settings = writable<AppSettings>(loadSettings());
 
 // Create a derived store for backward compatibility or ease of use if needed, 
@@ -618,6 +659,24 @@ export const isSidebarCollapsed = {
         settings.update(s => ({
             ...s,
             ui: { ...s.ui, sidebarCollapsed: value }
+        }));
+    }
+};
+
+export const isRightSidebarOpen = {
+    subscribe: (run: (value: boolean) => void) => {
+        return settings.subscribe(s => run(s.ui.rightSidebarOpen));
+    },
+    update: (fn: (value: boolean) => boolean) => {
+        settings.update(s => ({
+            ...s,
+            ui: { ...s.ui, rightSidebarOpen: fn(s.ui.rightSidebarOpen) }
+        }));
+    },
+    set: (value: boolean) => {
+        settings.update(s => ({
+            ...s,
+            ui: { ...s.ui, rightSidebarOpen: value }
         }));
     }
 };

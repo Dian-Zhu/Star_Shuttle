@@ -16,7 +16,11 @@
   let files: FileEntry[] = [];
   let loading = false;
   let error: string | null = null;
-  let selectedFile: FileEntry | null = null;
+  
+  // Selection State
+  let selectedPaths: Set<string> = new Set();
+  let lastSelectedPath: string | null = null;
+  
   let contextMenu = { x: 0, y: 0, show: false, file: null as FileEntry | null };
   let fileInput: HTMLInputElement;
   let isDragging = false;
@@ -201,7 +205,8 @@
 
     loading = true;
     error = null;
-    selectedFile = null;
+    selectedPaths.clear();
+    lastSelectedPath = null;
     contextMenu.show = false;
 
     activeLoadAbortController?.abort();
@@ -252,25 +257,63 @@
     loadFiles(path);
   }
 
-  function handleUp() {
-    if (currentPath === '/' || currentPath === '') return;
-    if (currentPath === '.') {
-        loadFiles('..');
-        return;
-    }
-    const parts = currentPath.split('/').filter(p => p);
-    if (parts.length > 0) {
-        parts.pop();
-        const parent = parts.length === 0 ? '/' : parts.join('/');
-        loadFiles(parent === '' ? '/' : parent); 
+  function handleSelect(e: MouseEvent, file: FileEntry) {
+    if (e.ctrlKey || e.metaKey) {
+      if (selectedPaths.has(file.path)) {
+        selectedPaths.delete(file.path);
+      } else {
+        selectedPaths.add(file.path);
+        lastSelectedPath = file.path;
+      }
+      selectedPaths = selectedPaths; // trigger reactivity
+    } else if (e.shiftKey && lastSelectedPath) {
+      // Range selection
+      const lastIdx = files.findIndex(f => f.path === lastSelectedPath);
+      const currIdx = files.indexOf(file);
+      if (lastIdx !== -1 && currIdx !== -1) {
+        const start = Math.min(lastIdx, currIdx);
+        const end = Math.max(lastIdx, currIdx);
+        selectedPaths.clear();
+        for (let i = start; i <= end; i++) {
+          selectedPaths.add(files[i].path);
+        }
+        selectedPaths = selectedPaths;
+      } else {
+         // Fallback if lastSelectedPath not found in current files (e.g. after reload)
+         selectedPaths.clear();
+         selectedPaths.add(file.path);
+         lastSelectedPath = file.path;
+         selectedPaths = selectedPaths;
+      }
     } else {
-        loadFiles('..');
+      // Single select
+      selectedPaths.clear();
+      selectedPaths.add(file.path);
+      lastSelectedPath = file.path;
+      selectedPaths = selectedPaths;
     }
   }
 
   function handleContextMenu(e: MouseEvent, file: FileEntry | null) {
     e.preventDefault();
-    selectedFile = file;
+    
+    // If clicking on a file
+    if (file) {
+      // If the file is NOT in the current selection, select it (exclusive)
+      if (!selectedPaths.has(file.path)) {
+        selectedPaths.clear();
+        selectedPaths.add(file.path);
+        lastSelectedPath = file.path;
+        selectedPaths = selectedPaths;
+      }
+      // If it IS in the selection, do nothing to selection (preserve multi-select for right click)
+    } else {
+      // Clicked on empty space
+      selectedPaths.clear();
+      lastSelectedPath = null;
+      selectedPaths = selectedPaths;
+    }
+
     contextMenu = {
       x: e.clientX,
       y: e.clientY,
@@ -319,15 +362,25 @@
 
   async function handleDelete() {
     closeContextMenu();
-    if (!selectedFile) return;
+    if (selectedPaths.size === 0) return;
     
-    if (!confirm(`确定要删除 ${selectedFile.name} 吗？`)) return;
+    // Get file names for confirmation
+    const selectedFiles = files.filter(f => selectedPaths.has(f.path));
+    if (selectedFiles.length === 0) return;
+
+    const confirmMsg = selectedFiles.length === 1 
+      ? `确定要删除 ${selectedFiles[0].name} 吗？` 
+      : `确定要删除选中的 ${selectedFiles.length} 个项目吗？`;
+
+    if (!confirm(confirmMsg)) return;
 
     try {
-      if (selectedFile.isDirectory) {
-        await sftpService.removeDirectory(sessionId, selectedFile.path);
-      } else {
-        await sftpService.removeFile(sessionId, selectedFile.path);
+      for (const file of selectedFiles) {
+        if (file.isDirectory) {
+          await sftpService.removeDirectory(sessionId, file.path);
+        } else {
+          await sftpService.removeFile(sessionId, file.path);
+        }
       }
       invalidateCache(currentPath);
       loadFiles(currentPath, { force: true });
@@ -338,20 +391,24 @@
 
   async function handleRename() {
     closeContextMenu();
-    if (!contextMenu.file) return;
+    // Rename only supports single file
+    if (selectedPaths.size !== 1) return;
+    
+    const path = Array.from(selectedPaths)[0];
+    const file = files.find(f => f.path === path);
+    if (!file) return;
 
-    const newName = prompt('请输入新名称:', contextMenu.file.name);
-    if (!newName || newName === contextMenu.file.name) return;
+    const newName = prompt('请输入新名称:', file.name);
+    if (!newName || newName === file.name) return;
 
     // Construct new path.
-    // Assumption: contextMenu.file.path is the full path. We need to replace the filename.
-    const parts = contextMenu.file.path.split('/');
+    const parts = file.path.split('/');
     parts.pop(); // Remove old filename
     const parentPath = parts.join('/');
     const newPath = parentPath === '' ? `/${newName}` : `${parentPath}/${newName}`;
 
     try {
-      await sftpService.rename(sessionId, contextMenu.file.path, newPath);
+      await sftpService.rename(sessionId, file.path, newPath);
       invalidateCache(currentPath);
       loadFiles(currentPath, { force: true });
     } catch (e: any) {
@@ -471,24 +528,29 @@
 
   async function handleDownload() {
     closeContextMenu();
-    if (!contextMenu.file || contextMenu.file.isDirectory) return;
+    // Only support single file download for now
+    if (selectedPaths.size !== 1) return;
+    
+    const path = Array.from(selectedPaths)[0];
+    const file = files.find(f => f.path === path);
+    if (!file || file.isDirectory) return;
 
     loading = true;
     try {
       let content: Uint8Array;
       try {
-        content = await sftpService.readFile(sessionId, contextMenu.file.path);
+        content = await sftpService.readFile(sessionId, file.path);
       } catch (e) {
-        content = await sftpService.scpDownload(sessionId, contextMenu.file.path);
+        content = await sftpService.scpDownload(sessionId, file.path);
       }
 
       // 使用保存对话框让用户选择保存位置
       const filePath = await save({
         filters: [{
-          name: contextMenu.file.name.split('.').pop() || 'All Files',
-          extensions: contextMenu.file.name.includes('.') ? [contextMenu.file.name.split('.').pop()!] : ['*']
+          name: file.name.split('.').pop() || 'All Files',
+          extensions: file.name.includes('.') ? [file.name.split('.').pop()!] : ['*']
         }],
-        defaultPath: contextMenu.file.name
+        defaultPath: file.name
       });
 
       if (!filePath) {
@@ -523,13 +585,20 @@
 
   function handleCopy() {
     closeContextMenu();
-    if (!contextMenu.file) return;
+    if (selectedPaths.size === 0) return;
+
+    const entries = files
+      .filter(f => selectedPaths.has(f.path))
+      .map(f => ({
+        path: f.path,
+        name: f.name,
+        isDirectory: f.isDirectory
+      }));
+
     fileClipboard.set({
       source: 'remote',
       sessionId,
-      path: contextMenu.file.path,
-      name: contextMenu.file.name,
-      isDirectory: contextMenu.file.isDirectory,
+      entries,
       operation: 'copy',
     });
   }
@@ -537,30 +606,38 @@
   async function handlePaste() {
     closeContextMenu();
     const item = get(fileClipboard);
-    if (!item) return;
-    if (item.isDirectory) return;
+    if (!item || !item.entries || item.entries.length === 0) return;
 
-    const destDir = selectedFile?.isDirectory ? selectedFile.path : currentPath;
-    const destPath = joinPath(destDir, item.name);
+    // Determine destination
+    let destDir = currentPath;
+    if (selectedPaths.size === 1) {
+      const path = Array.from(selectedPaths)[0];
+      const file = files.find(f => f.path === path);
+      if (file && file.isDirectory) {
+        destDir = file.path;
+      }
+    }
 
     loading = true;
     error = null;
     try {
-      if (item.source === 'local') {
-        const content = await localFsService.readFile(item.path);
-        try {
-          await sftpService.writeFile(sessionId, destPath, content, false);
-        } catch (e) {
-          await sftpService.scpUpload(sessionId, destPath, content);
-        }
-      } else {
-        if (!item.sessionId) return;
+      for (const entry of item.entries) {
+        if (entry.isDirectory) continue; // Skip directories for now
+        
+        const destPath = joinPath(destDir, entry.name);
+        
         let content: Uint8Array;
-        try {
-          content = await sftpService.readFile(item.sessionId, item.path);
-        } catch (e) {
-          content = await sftpService.scpDownload(item.sessionId, item.path);
+        if (item.source === 'local') {
+          content = await localFsService.readFile(entry.path);
+        } else {
+          if (!item.sessionId) continue;
+          try {
+            content = await sftpService.readFile(item.sessionId, entry.path);
+          } catch (e) {
+            content = await sftpService.scpDownload(item.sessionId, entry.path);
+          }
         }
+
         try {
           await sftpService.writeFile(sessionId, destPath, content, false);
         } catch (e) {
@@ -589,19 +666,23 @@
 
     const copyShortcut = $settings.shortcuts.copy;
     const pasteShortcut = $settings.shortcuts.paste;
+    const renameShortcut = $settings.shortcuts.fileBrowserRename;
+    const deleteShortcut = $settings.shortcuts.fileBrowserDelete;
+    const openShortcut = $settings.shortcuts.fileBrowserOpen;
+    const backShortcut = $settings.shortcuts.fileBrowserBack;
+    const selectAllShortcut = $settings.shortcuts.fileBrowserSelectAll;
+
+    if (matchesShortcut(e, selectAllShortcut)) {
+      e.preventDefault();
+      selectedPaths.clear();
+      files.forEach(f => selectedPaths.add(f.path));
+      selectedPaths = selectedPaths;
+      return;
+    }
 
     if (matchesShortcut(e, copyShortcut)) {
       e.preventDefault();
-      if (selectedFile) {
-        fileClipboard.set({
-          source: 'remote',
-          sessionId,
-          path: selectedFile.path,
-          name: selectedFile.name,
-          isDirectory: selectedFile.isDirectory,
-          operation: 'copy',
-        });
-      }
+      handleCopy();
       return;
     }
 
@@ -609,6 +690,120 @@
       e.preventDefault();
       void handlePaste();
       return;
+    }
+
+    const refreshShortcut = $settings.shortcuts.fileBrowserRefresh;
+    const newFolderShortcut = $settings.shortcuts.fileBrowserNewFolder;
+    const newFileShortcut = $settings.shortcuts.fileBrowserNewFile;
+
+    if (matchesShortcut(e, refreshShortcut)) {
+      e.preventDefault();
+      loadFiles(currentPath, { force: true });
+      return;
+    }
+
+    if (matchesShortcut(e, newFolderShortcut)) {
+      e.preventDefault();
+      void handleCreateFolder();
+      return;
+    }
+
+    if (matchesShortcut(e, newFileShortcut)) {
+      e.preventDefault();
+      void handleCreateFile();
+      return;
+    }
+
+    if (matchesShortcut(e, renameShortcut)) {
+      e.preventDefault();
+      void handleRename();
+      return;
+    }
+
+    if (matchesShortcut(e, deleteShortcut)) {
+      e.preventDefault();
+      void handleDelete();
+      return;
+    }
+
+    if (matchesShortcut(e, openShortcut)) {
+      e.preventDefault();
+      if (selectedPaths.size === 1) {
+        const path = Array.from(selectedPaths)[0];
+        const file = files.find(f => f.path === path);
+        if (file) {
+          void openEditor(file);
+        }
+      }
+      return;
+    }
+
+    if (matchesShortcut(e, backShortcut)) {
+      e.preventDefault();
+      if (currentPath !== '/' && currentPath !== '') {
+        loadFiles('..');
+      }
+      return;
+    }
+
+    // Keyboard Navigation
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (files.length === 0) return;
+      
+      let nextIndex = 0;
+      // Use lastSelectedPath to find current position
+      if (lastSelectedPath) {
+        const idx = files.findIndex(f => f.path === lastSelectedPath);
+        if (idx !== -1 && idx < files.length - 1) {
+          nextIndex = idx + 1;
+        } else if (idx !== -1) {
+          nextIndex = idx; // stay at bottom
+        }
+      }
+      
+      const file = files[nextIndex];
+      // Update selection based on modifier keys?
+      // For simplicity, arrow keys = single select new item (like standard explorer)
+      // unless Shift is held (not implementing shift-arrow for now to keep it simple, just single move)
+      selectedPaths.clear();
+      selectedPaths.add(file.path);
+      lastSelectedPath = file.path;
+      selectedPaths = selectedPaths;
+      
+      scrollToJsonFile(nextIndex);
+      return;
+    }
+
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (files.length === 0) return;
+      
+      let prevIndex = files.length - 1;
+      if (lastSelectedPath) {
+        const idx = files.findIndex(f => f.path === lastSelectedPath);
+        if (idx > 0) {
+          prevIndex = idx - 1;
+        } else if (idx !== -1) {
+          prevIndex = 0;
+        }
+      }
+
+      const file = files[prevIndex];
+      selectedPaths.clear();
+      selectedPaths.add(file.path);
+      lastSelectedPath = file.path;
+      selectedPaths = selectedPaths;
+
+      scrollToJsonFile(prevIndex);
+      return;
+    }
+  }
+
+  function scrollToJsonFile(index: number) {
+    const el = document.getElementById('file-row-' + index);
+    if (el) {
+      el.scrollIntoView({ block: 'nearest' });
     }
   }
 
@@ -717,7 +912,7 @@
 </script>
 
 <div 
-  class="flex flex-col h-full bg-white dark:bg-gray-900 text-slate-900 dark:text-white relative {isDragging ? 'border-2 border-blue-500 bg-slate-50 dark:bg-gray-800' : ''}" 
+  class="flex flex-col h-full bg-app-bg text-app-text relative {isDragging ? 'border-2 border-primary-500 bg-app-surface' : ''}" 
   on:contextmenu|preventDefault={(e) => handleContextMenu(e, null)} 
   role="presentation"
   on:dragover|preventDefault={handleDragOver}
@@ -729,44 +924,44 @@
   {#if editorOpen}
     <div class="fixed inset-0 z-50 flex items-center justify-center" role="presentation">
       <button type="button" class="absolute inset-0 bg-slate-900/60 dark:bg-black/60" on:click={closeEditor} aria-label="关闭编辑器"></button>
-      <div class="relative w-[min(900px,95vw)] h-[min(700px,90vh)] bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-700 rounded-lg shadow-xl flex flex-col" role="dialog" aria-modal="true">
-        <div class="flex items-center justify-between px-4 py-2 border-b border-slate-200 dark:border-gray-700 gap-3">
-          <div class="text-sm text-slate-700 dark:text-gray-200 truncate flex-1">{editorFile?.path}</div>
+      <div class="relative w-[min(900px,95vw)] h-[min(700px,90vh)] bg-app-bg border border-app-border rounded-lg shadow-xl flex flex-col" role="dialog" aria-modal="true">
+        <div class="flex items-center justify-between px-4 py-2 border-b border-app-border gap-3">
+          <div class="text-sm text-app-text truncate flex-1">{editorFile?.path}</div>
           <div class="flex items-center gap-2 flex-none">
-            <button class="px-3 py-1 rounded bg-slate-100 dark:bg-gray-800 hover:bg-slate-200 dark:hover:bg-gray-700 text-slate-700 dark:text-gray-200 disabled:opacity-60" on:click={closeEditor} disabled={editorSaving}>
+            <button class="px-3 py-1 rounded bg-app-surface hover:bg-app-bg-hover text-app-text disabled:opacity-60" on:click={closeEditor} disabled={editorSaving}>
               关闭
             </button>
-            <button class="px-3 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-60" on:click={saveEditor} disabled={editorSaving || editorLoading || !editorFile}>
+            <button class="px-3 py-1 rounded bg-primary-600 hover:bg-primary-500 text-white disabled:opacity-60" on:click={saveEditor} disabled={editorSaving || editorLoading || !editorFile}>
               {editorSaving ? '保存中…' : '保存'}
             </button>
           </div>
         </div>
         {#if editorLoading}
-          <div class="flex-1 flex items-center justify-center text-slate-500 dark:text-gray-300">加载中…</div>
+          <div class="flex-1 flex items-center justify-center text-app-text-secondary">加载中…</div>
         {:else}
-          <textarea class="flex-1 w-full bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-gray-100 font-mono text-sm p-3 outline-none resize-none" bind:value={editorContent} disabled={editorSaving}></textarea>
+          <textarea class="flex-1 w-full bg-app-surface text-app-text font-mono text-sm p-3 outline-none resize-none" bind:value={editorContent} disabled={editorSaving}></textarea>
         {/if}
         {#if editorError}
-          <div class="px-4 py-2 border-t border-slate-200 dark:border-gray-700 text-red-600 dark:text-red-400 text-sm">{editorError}</div>
+          <div class="px-4 py-2 border-t border-app-border text-red-600 dark:text-red-400 text-sm">{editorError}</div>
         {/if}
       </div>
     </div>
   {/if}
   {#if isDragging}
-    <div class="absolute inset-0 bg-blue-500/20 flex items-center justify-center z-50 pointer-events-none">
-      <div class="text-2xl font-bold text-blue-600 dark:text-blue-200">Drop files to upload</div>
+    <div class="absolute inset-0 bg-primary-500/20 flex items-center justify-center z-50 pointer-events-none">
+      <div class="text-2xl font-bold text-primary-600 dark:text-primary-200">Drop files to upload</div>
     </div>
   {/if}
   {#if isCrossDragging}
-    <div class="absolute inset-0 bg-blue-500/10 flex items-center justify-center z-40 pointer-events-none">
-      <div class="text-lg font-semibold text-blue-600 dark:text-blue-200">拖拽到此处上传到远程</div>
+    <div class="absolute inset-0 bg-primary-500/10 flex items-center justify-center z-40 pointer-events-none">
+      <div class="text-lg font-semibold text-primary-600 dark:text-primary-200">拖拽到此处上传到远程</div>
     </div>
   {/if}
   <!-- Toolbar -->
-  <div class="flex items-center p-2 border-b border-slate-200 dark:border-gray-700 space-x-2">
+  <div class="flex items-center p-2 border-b border-app-border space-x-2">
     <button 
-        class="p-1 hover:bg-slate-200 dark:hover:bg-gray-700 rounded text-slate-600 dark:text-gray-300" 
-        on:click={handleUp} 
+        class="p-1 hover:bg-app-bg-hover rounded text-app-text-secondary" 
+        on:click={() => loadFiles('..')} 
         title="Up"
     >
       <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
@@ -774,7 +969,7 @@
       </svg>
     </button>
     <button 
-        class="p-1 hover:bg-slate-200 dark:hover:bg-gray-700 rounded text-slate-600 dark:text-gray-300" 
+        class="p-1 hover:bg-app-bg-hover rounded text-app-text-secondary" 
         on:click={() => loadFiles(currentPath, { force: true })} 
         title="Refresh"
     >
@@ -783,7 +978,7 @@
       </svg>
     </button>
     <button 
-        class="p-1 hover:bg-slate-200 dark:hover:bg-gray-700 rounded text-slate-600 dark:text-gray-300" 
+        class="p-1 hover:bg-app-bg-hover rounded text-app-text-secondary" 
         on:click={handleCreateFolder} 
         title="New Folder"
     >
@@ -793,7 +988,7 @@
       </svg>
     </button>
     <button 
-        class="p-1 hover:bg-slate-200 dark:hover:bg-gray-700 rounded text-slate-600 dark:text-gray-300" 
+        class="p-1 hover:bg-app-bg-hover rounded text-app-text-secondary" 
         on:click={() => fileInput.click()} 
         title="Upload File"
     >
@@ -809,7 +1004,7 @@
       style="display: none;" 
     />
     <input 
-      class="flex-1 bg-white dark:bg-gray-800 border border-slate-300 dark:border-gray-600 rounded px-2 py-1 text-sm text-slate-900 dark:text-gray-200"
+      class="flex-1 bg-app-surface border border-app-border rounded px-2 py-1 text-sm text-app-text"
       value={currentPath}
       on:change={(e) => loadFiles(e.currentTarget.value)}
     />
@@ -819,7 +1014,7 @@
   <div class="flex-1 overflow-auto" role="grid">
     {#if loading}
       <div class="absolute inset-0 top-10 bg-white/50 dark:bg-gray-900/50 flex items-center justify-center z-10">
-        <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 dark:border-white"></div>
+        <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500 dark:border-white"></div>
       </div>
     {/if}
 
@@ -830,20 +1025,21 @@
     {/if}
 
     <table class="w-full text-sm text-left border-collapse">
-      <thead class="bg-slate-100 dark:bg-gray-800 sticky top-0 text-slate-500 dark:text-gray-400 text-xs uppercase font-semibold">
+      <thead class="bg-app-surface sticky top-0 text-app-text-secondary text-xs uppercase font-semibold">
         <tr>
-          <th class="p-2 border-b border-slate-200 dark:border-gray-700">Name</th>
-          <th class="p-2 border-b border-slate-200 dark:border-gray-700 w-24">Size</th>
-          <th class="p-2 border-b border-slate-200 dark:border-gray-700 w-40">Modified</th>
-          <th class="p-2 border-b border-slate-200 dark:border-gray-700 w-20">Perms</th>
+          <th class="p-2 border-b border-app-border">Name</th>
+          <th class="p-2 border-b border-app-border w-24">Size</th>
+          <th class="p-2 border-b border-app-border w-40">Modified</th>
+          <th class="p-2 border-b border-app-border w-20">Perms</th>
         </tr>
       </thead>
       <tbody>
-        {#each files as file}
+        {#each files as file, i}
           {@const iconType = getFileIcon(file.name, file.isDirectory)}
           <tr
-            class="cursor-pointer border-b border-slate-100 dark:border-gray-800 transition-colors duration-75 {selectedFile === file ? 'bg-blue-100 dark:bg-blue-900/30' : 'hover:bg-slate-50 dark:hover:bg-gray-800'}"
-            on:click|stopPropagation={() => selectedFile = file}
+            id={'file-row-' + i}
+            class="cursor-pointer border-b border-app-border transition-colors duration-75 {selectedPaths.has(file.path) ? 'bg-primary-100 dark:bg-primary-900/30' : 'hover:bg-app-bg-hover'}"
+            on:click|stopPropagation={(e) => handleSelect(e, file)}
             on:dblclick={() => openEditor(file)}
             on:contextmenu|preventDefault|stopPropagation={(e) => handleContextMenu(e, file)}
             draggable={!file.isDirectory}
@@ -851,11 +1047,11 @@
           >
             <td class="p-2 flex items-center space-x-2">
               <FileIcon iconType={iconType} />
-              <span class={file.isDirectory ? 'font-medium text-slate-900 dark:text-white' : 'text-slate-700 dark:text-gray-300'}>{file.name}</span>
+              <span class={file.isDirectory ? 'font-medium text-app-text' : 'text-app-text'}>{file.name}</span>
             </td>
-            <td class="p-2 text-slate-500 dark:text-gray-400 font-mono text-xs">{file.isDirectory ? '-' : formatSize(file.size)}</td>
-            <td class="p-2 text-slate-500 dark:text-gray-400 text-xs">{formatDate(file.modified)}</td>
-            <td class="p-2 text-slate-400 dark:text-gray-500 font-mono text-xs">{file.permissions}</td>
+            <td class="p-2 text-app-text-secondary font-mono text-xs">{file.isDirectory ? '-' : formatSize(file.size)}</td>
+            <td class="p-2 text-app-text-secondary text-xs">{formatDate(file.modified)}</td>
+            <td class="p-2 text-app-text-secondary font-mono text-xs">{file.permissions}</td>
           </tr>
         {/each}
       </tbody>
@@ -864,29 +1060,33 @@
 
   {#if contextMenu.show}
     <div
-      class="fixed bg-white dark:bg-gray-800 border border-slate-200 dark:border-gray-700 rounded shadow-lg py-1 z-50 text-sm min-w-[180px]"
+      class="fixed bg-app-bg border border-app-border rounded shadow-lg py-1 z-50 text-sm min-w-[180px]"
       style="top: {contextMenu.y}px; left: {contextMenu.x}px"
       role="menu"
       tabindex="-1"
     >
       {#if contextMenu.file}
         {@const fileIcon = getFileIcon(contextMenu.file.name, contextMenu.file.isDirectory)}
-        <div class="px-4 py-2 border-b border-slate-200 dark:border-gray-700 flex items-center space-x-2">
+        <div class="px-4 py-2 border-b border-app-border flex items-center space-x-2">
           <FileIcon iconType={fileIcon} />
-          <span class="truncate font-medium text-slate-900 dark:text-white">{contextMenu.file.name}</span>
+          <span class="truncate font-medium text-app-text">
+            {selectedPaths.size > 1 ? `${selectedPaths.size} items selected` : contextMenu.file.name}
+          </span>
         </div>
         {#if !contextMenu.file.isDirectory}
+          {#if selectedPaths.size === 1}
+            <button
+              class="w-full text-left px-4 py-2 hover:bg-app-bg-hover text-app-text flex items-center space-x-2"
+              on:click|stopPropagation={handleDownload}
+            >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+              </svg>
+              <span>下载</span>
+            </button>
+          {/if}
           <button
-            class="w-full text-left px-4 py-2 hover:bg-slate-100 dark:hover:bg-gray-700 text-slate-700 dark:text-gray-200 flex items-center space-x-2"
-            on:click|stopPropagation={handleDownload}
-          >
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
-            </svg>
-            <span>下载</span>
-          </button>
-          <button
-            class="w-full text-left px-4 py-2 hover:bg-slate-100 dark:hover:bg-gray-700 text-slate-700 dark:text-gray-200 flex items-center space-x-2"
+            class="w-full text-left px-4 py-2 hover:bg-app-bg-hover text-app-text flex items-center space-x-2"
             on:click|stopPropagation={handleCopy}
           >
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -895,17 +1095,19 @@
             <span>复制</span>
           </button>
         {/if}
+        {#if selectedPaths.size === 1}
+          <button
+            class="w-full text-left px-4 py-2 hover:bg-app-bg-hover text-app-text flex items-center space-x-2"
+            on:click|stopPropagation={handleRename}
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+            </svg>
+            <span>重命名</span>
+          </button>
+        {/if}
         <button
-          class="w-full text-left px-4 py-2 hover:bg-slate-100 dark:hover:bg-gray-700 text-slate-700 dark:text-gray-200 flex items-center space-x-2"
-          on:click|stopPropagation={handleRename}
-        >
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
-          </svg>
-          <span>重命名</span>
-        </button>
-        <button
-          class="w-full text-left px-4 py-2 hover:bg-slate-100 dark:hover:bg-gray-700 text-red-600 dark:text-red-400 hover:text-red-500 dark:hover:text-red-300 flex items-center space-x-2"
+          class="w-full text-left px-4 py-2 hover:bg-app-bg-hover text-red-600 dark:text-red-400 hover:text-red-500 dark:hover:text-red-300 flex items-center space-x-2"
           on:click|stopPropagation={handleDelete}
         >
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -913,10 +1115,10 @@
           </svg>
           <span>删除</span>
         </button>
-        <div class="border-t border-slate-200 dark:border-gray-700 my-1"></div>
+        <div class="border-t border-app-border my-1"></div>
       {/if}
       <button
-        class="w-full text-left px-4 py-2 hover:bg-slate-100 dark:hover:bg-gray-700 text-slate-700 dark:text-gray-200 flex items-center space-x-2"
+        class="w-full text-left px-4 py-2 hover:bg-app-bg-hover text-app-text flex items-center space-x-2"
         on:click|stopPropagation={handleCreateFolder}
       >
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -925,7 +1127,7 @@
         <span>新建文件夹</span>
       </button>
       <button
-        class="w-full text-left px-4 py-2 hover:bg-slate-100 dark:hover:bg-gray-700 text-slate-700 dark:text-gray-200 flex items-center space-x-2"
+        class="w-full text-left px-4 py-2 hover:bg-app-bg-hover text-app-text flex items-center space-x-2"
         on:click|stopPropagation={handleCreateFile}
       >
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -934,7 +1136,7 @@
         <span>新建文件</span>
       </button>
       <button
-        class="w-full text-left px-4 py-2 hover:bg-slate-100 dark:hover:bg-gray-700 text-slate-700 dark:text-gray-200 flex items-center space-x-2 disabled:opacity-60"
+        class="w-full text-left px-4 py-2 hover:bg-app-bg-hover text-app-text flex items-center space-x-2 disabled:opacity-60"
         on:click|stopPropagation={handlePaste}
         disabled={!$fileClipboard}
       >
@@ -944,7 +1146,7 @@
         <span>粘贴</span>
       </button>
       <button
-        class="w-full text-left px-4 py-2 hover:bg-slate-100 dark:hover:bg-gray-700 text-slate-700 dark:text-gray-200 flex items-center space-x-2"
+        class="w-full text-left px-4 py-2 hover:bg-app-bg-hover text-app-text flex items-center space-x-2"
         on:click|stopPropagation={() => loadFiles(currentPath, { force: true })}
       >
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

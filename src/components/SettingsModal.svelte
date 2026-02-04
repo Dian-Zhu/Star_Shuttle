@@ -1,7 +1,11 @@
 <script lang="ts">
   // Force rebuild.
   import { showSettings, settings, type AppSettings } from '../lib/store';
+  import { themeColors } from '../lib/themeColors';
   import XIcon from './icons/XIcon.svelte';
+  import EyeDropperIcon from './icons/EyeDropperIcon.svelte';
+  import UploadIcon from './icons/UploadIcon.svelte';
+  import TrashIcon from './icons/TrashIcon.svelte';
   import { slide } from 'svelte/transition';
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
@@ -34,21 +38,40 @@
   const shortcutLabels: Record<ShortcutKey, string> = {
     commandPalette: '命令面板',
     toggleSidebar: '切换侧边栏',
+    toggleFileBrowser: '切换文件浏览器面板',
     newConnection: '新建连接',
     settings: '设置',
     closeTerminal: '关闭终端',
     prevTab: '上一个标签页',
     nextTab: '下一个标签页',
     copy: '复制',
-    paste: '粘贴'
+    paste: '粘贴',
+    fileBrowserRefresh: '文件浏览器：刷新',
+    fileBrowserNewFolder: '文件浏览器：新建文件夹',
+    fileBrowserNewFile: '文件浏览器：新建文件',
+    fileBrowserRename: '文件浏览器：重命名',
+    fileBrowserDelete: '文件浏览器：删除',
+    fileBrowserSelectAll: '文件浏览器：全选',
+    fileBrowserOpen: '文件浏览器：打开/进入',
+    fileBrowserBack: '文件浏览器：返回上一级'
   };
 
   onMount(() => {
     checkLockStatus();
   });
 
-  function updateTheme(theme: 'dark' | 'light') {
-    settings.update(s => ({ ...s, theme }));
+  function updateTheme(theme: AppSettings['theme']) {
+    settings.update(s => {
+      let newSettings = { ...s, theme };
+      // Initialize customUITheme if selecting custom for the first time
+      if (theme === 'custom' && !s.appearance.customUITheme) {
+        newSettings.appearance = {
+          ...s.appearance,
+          customUITheme: { ...defaultCustomUITheme }
+        };
+      }
+      return newSettings;
+    });
   }
 
   function updateTerminalTheme(theme: 'auto' | 'dracula' | 'nord' | 'solarized-dark' | 'solarized-light' | 'monokai' | 'one-dark' | 'github-dark' | 'tokyo-night' | 'catppuccin' | 'custom') {
@@ -63,6 +86,50 @@
 
     // Update scrollbar colors immediately after theme change
     applyScrollbarColor($settings);
+  }
+
+  function updateAccentColorSetting(color: string) {
+    settings.update(s => ({
+      ...s,
+      appearance: {
+        ...s.appearance,
+        accentColor: color
+      }
+    }));
+  }
+
+  function updateAppearanceSetting<K extends keyof AppSettings['appearance']>(
+    key: K,
+    value: AppSettings['appearance'][K]
+  ) {
+    settings.update(s => ({
+      ...s,
+      appearance: {
+        ...s.appearance,
+        [key]: value
+      }
+    }));
+  }
+
+  function handleBackgroundImageUpload(e: Event) {
+    const input = e.target as HTMLInputElement;
+    if (input.files && input.files[0]) {
+      const file = input.files[0];
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const result = e.target?.result;
+        if (typeof result === 'string') {
+          updateAppearanceSetting('backgroundImage', result);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+    // Clear input so same file can be selected again
+    input.value = '';
+  }
+
+  function clearBackgroundImage() {
+    updateAppearanceSetting('backgroundImage', null);
   }
 
   function updateUiSetting<K extends keyof (typeof $settings)['ui']>(key: K, value: (typeof $settings)['ui'][K]) {
@@ -95,9 +162,9 @@
     updateTerminalSetting('scrollback', clamped);
   }
 
-  function updateConnectionSetting<K extends keyof (typeof $settings)['connection']>(
+  function updateConnectionSetting<K extends keyof AppSettings['connection']>(
     key: K,
-    value: (typeof $settings)['connection'][K]
+    value: AppSettings['connection'][K]
   ) {
     settings.update(s => ({
       ...s,
@@ -108,9 +175,9 @@
     }));
   }
 
-  function updateShortcutSetting<K extends keyof (typeof $settings)['shortcuts']>(
+  function updateShortcutSetting<K extends keyof AppSettings['shortcuts']>(
     key: K,
-    value: (typeof $settings)['shortcuts'][K]
+    value: AppSettings['shortcuts'][K]
   ) {
     settings.update(s => ({
       ...s,
@@ -121,9 +188,9 @@
     }));
   }
 
-  function updateSecuritySetting<K extends keyof (typeof $settings)['security']>(
+  function updateSecuritySetting<K extends keyof AppSettings['security']>(
     key: K,
-    value: (typeof $settings)['security'][K]
+    value: AppSettings['security'][K]
   ) {
     settings.update(s => ({
       ...s,
@@ -400,17 +467,28 @@
     brightBlue: '#3b8eea',
     brightMagenta: '#d670d6',
     brightCyan: '#29b8db',
-    brightWhite: '#ffffff'
+    brightWhite: '#ffffff',
+    cursorAccent: '#000000',
+    selectionForeground: '#ffffff',
+    selectionInactiveBackground: '#3a3d41',
+    scrollbarSliderBackground: '#79797966',
+    scrollbarSliderHoverBackground: '#646464bb',
+    scrollbarSliderActiveBackground: '#bfbfbf66',
+    overviewRulerBorder: '#7f7f7f',
+    extendedAnsi: []
   };
 
   // Color key labels
-  type CustomThemeKey = keyof NonNullable<AppSettings['appearance']['customTheme']>;
+  type CustomThemeKey = Exclude<keyof NonNullable<AppSettings['appearance']['customTheme']>, 'extendedAnsi'>;
 
   const colorLabels: Record<CustomThemeKey, string> = {
     background: '背景',
     foreground: '前景',
     cursor: '光标',
+    cursorAccent: '光标文字',
     selectionBackground: '选中背景',
+    selectionForeground: '选中文字',
+    selectionInactiveBackground: '非激活选中',
     black: '黑色',
     red: '红色',
     green: '绿色',
@@ -426,12 +504,28 @@
     brightBlue: '亮蓝',
     brightMagenta: '亮品红',
     brightCyan: '亮青色',
-    brightWhite: '亮白'
+    brightWhite: '亮白',
+    scrollbarSliderBackground: '滚动条',
+    scrollbarSliderHoverBackground: '滚动条悬停',
+    scrollbarSliderActiveBackground: '滚动条激活',
+    overviewRulerBorder: '概览尺边框'
   };
 
   const basicColorKeys: CustomThemeKey[] = ['background', 'foreground', 'cursor', 'selectionBackground'];
   const standardColorKeys: CustomThemeKey[] = ['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white'];
   const brightColorKeys: CustomThemeKey[] = ['brightBlack', 'brightRed', 'brightGreen', 'brightYellow', 'brightBlue', 'brightMagenta', 'brightCyan', 'brightWhite'];
+
+  async function handleEyeDropper(updateFn: (color: string) => void) {
+     if (!('EyeDropper' in window)) return;
+     try {
+       // @ts-ignore
+       const eyeDropper = new (window as any).EyeDropper();
+       const result = await eyeDropper.open();
+       updateFn(result.sRGBHex);
+     } catch (e) {
+       // ignore
+     }
+   }
 
   function updateCustomColor(key: CustomThemeKey, value: string) {
     if (!$settings.appearance.customTheme) {
@@ -465,18 +559,75 @@
       }
     }));
   }
+  // Custom UI Theme logic
+  const defaultCustomUITheme = {
+    backgroundColor: '#0f172a',
+    surfaceColor: '#1e293b',
+    statusBarColor: '#1e293b',
+    surfaceLightColor: '#334155',
+    textColor: '#f8fafc',
+    secondaryTextColor: '#94a3b8',
+    borderColor: '#475569',
+    borderLightColor: '#64748b'
+  };
+
+  type CustomUIThemeKey = keyof typeof defaultCustomUITheme;
+
+  const customUIColorLabels: Record<CustomUIThemeKey, string> = {
+    backgroundColor: '背景颜色',
+    surfaceColor: '表面颜色',
+    statusBarColor: '下边栏颜色',
+    surfaceLightColor: '亮表面色',
+    textColor: '主要文字',
+    secondaryTextColor: '次要文字',
+    borderColor: '边框颜色',
+    borderLightColor: '亮边框色'
+  };
+
+  function updateCustomUITheme(key: CustomUIThemeKey, value: string) {
+    if (!$settings.appearance.customUITheme) {
+      settings.update(s => ({
+        ...s,
+        appearance: {
+          ...s.appearance,
+          customUITheme: { ...defaultCustomUITheme, [key]: value }
+        }
+      }));
+    } else {
+      settings.update(s => ({
+        ...s,
+        appearance: {
+          ...s.appearance,
+          customUITheme: {
+            ...s.appearance.customUITheme!,
+            [key]: value
+          }
+        }
+      }));
+    }
+  }
+
+  function resetCustomUITheme() {
+    settings.update(s => ({
+      ...s,
+      appearance: {
+        ...s.appearance,
+        customUITheme: { ...defaultCustomUITheme }
+      }
+    }));
+  }
 </script>
 
 <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" role="button" tabindex="0" on:click|self={handleClose} on:keydown={(e) => e.key === 'Escape' && handleClose()}>
-  <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl w-full max-w-3xl h-[600px] flex overflow-hidden text-slate-900 dark:text-slate-200">
+  <div class="bg-app-surface border border-app-border rounded-xl shadow-2xl w-full max-w-3xl h-[600px] flex overflow-hidden text-app-text">
     
     <!-- Sidebar -->
-    <div class="w-48 border-r border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/50 p-4 flex flex-col gap-1">
-      <h2 class="text-lg font-semibold text-slate-800 dark:text-slate-100 px-3 py-2 mb-2">设置</h2>
+    <div class="w-48 border-r border-app-border bg-app-surface-light p-4 flex flex-col gap-1">
+      <h2 class="text-lg font-semibold text-app-text px-3 py-2 mb-2">设置</h2>
       
       {#each tabs as tab}
         <button
-          class="text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors {activeTab === tab.id ? 'bg-blue-600 text-white' : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-800'}"
+          class="text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors {activeTab === tab.id ? 'bg-primary-600 text-white' : 'text-app-text-secondary hover:text-app-text hover:bg-app-bg'}"
           on:click={() => activeTab = tab.id}
         >
           {tab.label}
@@ -485,14 +636,14 @@
     </div>
 
     <!-- Content -->
-    <div class="flex-1 flex flex-col min-w-0">
+    <div class="flex-1 flex flex-col min-w-0 bg-app-surface">
       <!-- Header -->
-      <div class="flex items-center justify-between px-6 py-4 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
-        <h3 class="text-base font-medium text-slate-800 dark:text-slate-200">
+      <div class="flex items-center justify-between px-6 py-4 border-b border-app-border">
+        <h3 class="text-base font-medium text-app-text">
           {tabs.find(t => t.id === activeTab)?.label}
         </h3>
         <button 
-          class="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors p-1 rounded-md hover:bg-slate-100 dark:hover:bg-slate-800"
+          class="text-app-text-secondary hover:text-app-text transition-colors p-1 rounded-md hover:bg-app-bg"
           on:click={handleClose}
         >
           <XIcon class="w-5 h-5" />
@@ -505,44 +656,45 @@
           <div class="space-y-6" in:slide={{ duration: 200 }}>
             <!-- Theme -->
             <div>
-              <label class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-2" for="theme">
+              <label class="block text-sm font-medium text-app-text-secondary mb-2" for="theme">
                 主题
               </label>
               <select
                 id="theme"
                 value={$settings.theme}
                 on:change={(e) => updateTheme(e.currentTarget.value as any)}
-                class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-200 focus:border-blue-500 outline-none"
+                class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text focus:border-primary-500 outline-none"
               >
                 <option value="system">跟随系统</option>
                 <option value="dark">深色</option>
                 <option value="light">浅色</option>
+                <option value="custom">自定义</option>
               </select>
             </div>
 
             <!-- Language -->
             <div>
-              <label class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-2" for="language">
+              <label class="block text-sm font-medium text-app-text-secondary mb-2" for="language">
                 语言
               </label>
               <select
                 id="language"
-                class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-200 focus:border-blue-500 outline-none"
+                class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text focus:border-primary-500 outline-none"
                 disabled
               >
                 <option value="zh-CN">简体中文</option>
                 <option value="en-US" disabled>English (Coming Soon)</option>
               </select>
-              <p class="mt-2 text-xs text-slate-500">语言设置暂未开放</p>
+              <p class="mt-2 text-xs text-app-text-secondary">语言设置暂未开放</p>
             </div>
 
             <!-- UI -->
             <div class="flex items-center justify-between">
               <div>
-                <label class="block text-sm font-medium text-slate-600 dark:text-slate-400" for="sidebarCollapsed">
+                <label class="block text-sm font-medium text-app-text-secondary" for="sidebarCollapsed">
                   折叠侧边栏
                 </label>
-                <p class="text-xs text-slate-500 mt-0.5">在窗口左侧显示紧凑模式</p>
+                <p class="text-xs text-app-text-secondary mt-0.5">在窗口左侧显示紧凑模式</p>
               </div>
               <label class="relative inline-flex items-center cursor-pointer">
                 <input
@@ -552,18 +704,18 @@
                   on:change={(e) => updateUiSetting('sidebarCollapsed', (e.target as HTMLInputElement).checked)}
                   class="sr-only peer"
                 >
-                <div class="w-11 h-6 bg-slate-200 dark:bg-slate-700 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                <div class="w-11 h-6 bg-app-surface-light peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-600"></div>
               </label>
             </div>
 
             <!-- App Info -->
-            <div class="pt-6 border-t border-slate-200 dark:border-slate-800">
+            <div class="pt-6 border-t border-app-border">
                <div class="flex justify-between items-center">
                  <div>
-                   <h4 class="text-sm font-medium text-slate-900 dark:text-slate-200">关于 Star Shuttle</h4>
-                   <p class="text-xs text-slate-500 mt-1">Version 0.1.0</p>
+                   <h4 class="text-sm font-medium text-app-text">关于 Star Shuttle</h4>
+                   <p class="text-xs text-app-text-secondary mt-1">Version 0.1.0</p>
                  </div>
-                 <button class="text-xs text-blue-500 hover:text-blue-400 transition-colors">
+                 <button class="text-xs text-primary-500 hover:text-primary-400 transition-colors">
                    检查更新
                  </button>
                </div>
@@ -572,20 +724,20 @@
 
         {:else if activeTab === 'shortcuts'}
            <div class="space-y-6" in:slide={{ duration: 200 }}>
-             <h3 class="text-lg font-medium text-slate-800 dark:text-slate-200">快捷键设置</h3>
+             <h3 class="text-lg font-medium text-app-text">快捷键设置</h3>
              
              <div class="space-y-4">
-                <div class="grid grid-cols-2 gap-4 items-center border-b border-slate-200 dark:border-slate-800 pb-4">
+                <div class="grid grid-cols-2 gap-4 items-center border-b border-app-border pb-4">
                   <div>
-                    <span class="block text-sm font-medium text-slate-700 dark:text-slate-300">命令面板</span>
-                    <span class="text-xs text-slate-500">快速访问所有命令</span>
+                    <span class="block text-sm font-medium text-app-text-secondary">命令面板</span>
+                    <span class="text-xs text-app-text-secondary">快速访问所有命令</span>
                   </div>
                   <div class="space-y-1">
                     <input
                       type="text"
                       value={shortcutDrafts.commandPalette}
                       on:input={(e) => handleShortcutInput('commandPalette', (e.target as HTMLInputElement).value)}
-                      class="bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-200 text-sm font-mono focus:border-blue-500 outline-none w-full"
+                      class="bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text text-sm font-mono focus:border-primary-500 outline-none w-full"
                     />
                     {#if shortcutErrors.commandPalette}
                       <div class="text-xs text-red-500 dark:text-red-400">{shortcutErrors.commandPalette}</div>
@@ -593,17 +745,53 @@
                   </div>
                 </div>
 
-                <div class="grid grid-cols-2 gap-4 items-center border-b border-slate-200 dark:border-slate-800 pb-4">
+                <div class="grid grid-cols-2 gap-4 items-center border-b border-app-border pb-4">
                   <div>
-                    <span class="block text-sm font-medium text-slate-700 dark:text-slate-300">新建连接</span>
-                    <span class="text-xs text-slate-500">打开新建连接窗口</span>
+                    <span class="block text-sm font-medium text-app-text-secondary">切换侧边栏</span>
+                    <span class="text-xs text-app-text-secondary">显示/隐藏左侧侧边栏</span>
+                  </div>
+                  <div class="space-y-1">
+                    <input
+                      type="text"
+                      value={shortcutDrafts.toggleSidebar}
+                      on:input={(e) => handleShortcutInput('toggleSidebar', (e.target as HTMLInputElement).value)}
+                      class="bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text text-sm font-mono focus:border-primary-500 outline-none w-full"
+                    />
+                    {#if shortcutErrors.toggleSidebar}
+                      <div class="text-xs text-red-500 dark:text-red-400">{shortcutErrors.toggleSidebar}</div>
+                    {/if}
+                  </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4 items-center border-b border-app-border pb-4">
+                  <div>
+                    <span class="block text-sm font-medium text-app-text-secondary">切换文件浏览器面板</span>
+                    <span class="text-xs text-app-text-secondary">显示/隐藏右侧文件浏览器面板</span>
+                  </div>
+                  <div class="space-y-1">
+                    <input
+                      type="text"
+                      value={shortcutDrafts.toggleFileBrowser}
+                      on:input={(e) => handleShortcutInput('toggleFileBrowser', (e.target as HTMLInputElement).value)}
+                      class="bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text text-sm font-mono focus:border-primary-500 outline-none w-full"
+                    />
+                    {#if shortcutErrors.toggleFileBrowser}
+                      <div class="text-xs text-red-500 dark:text-red-400">{shortcutErrors.toggleFileBrowser}</div>
+                    {/if}
+                  </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4 items-center border-b border-app-border pb-4">
+                  <div>
+                    <span class="block text-sm font-medium text-app-text-secondary">新建连接</span>
+                    <span class="text-xs text-app-text-secondary">打开新建连接窗口</span>
                   </div>
                   <div class="space-y-1">
                     <input
                       type="text"
                       value={shortcutDrafts.newConnection}
                       on:input={(e) => handleShortcutInput('newConnection', (e.target as HTMLInputElement).value)}
-                      class="bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-200 text-sm font-mono focus:border-blue-500 outline-none w-full"
+                      class="bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text text-sm font-mono focus:border-primary-500 outline-none w-full"
                     />
                     {#if shortcutErrors.newConnection}
                       <div class="text-xs text-red-500 dark:text-red-400">{shortcutErrors.newConnection}</div>
@@ -611,17 +799,17 @@
                   </div>
                 </div>
 
-                <div class="grid grid-cols-2 gap-4 items-center border-b border-slate-200 dark:border-slate-800 pb-4">
+                <div class="grid grid-cols-2 gap-4 items-center border-b border-app-border pb-4">
                   <div>
-                    <span class="block text-sm font-medium text-slate-700 dark:text-slate-300">设置</span>
-                    <span class="text-xs text-slate-500">打开设置窗口</span>
+                    <span class="block text-sm font-medium text-app-text-secondary">设置</span>
+                    <span class="text-xs text-app-text-secondary">打开设置窗口</span>
                   </div>
                   <div class="space-y-1">
                     <input
                       type="text"
                       value={shortcutDrafts.settings}
                       on:input={(e) => handleShortcutInput('settings', (e.target as HTMLInputElement).value)}
-                      class="bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-200 text-sm font-mono focus:border-blue-500 outline-none w-full"
+                      class="bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text text-sm font-mono focus:border-primary-500 outline-none w-full"
                     />
                     {#if shortcutErrors.settings}
                       <div class="text-xs text-red-500 dark:text-red-400">{shortcutErrors.settings}</div>
@@ -629,17 +817,17 @@
                   </div>
                 </div>
 
-                <div class="grid grid-cols-2 gap-4 items-center border-b border-slate-200 dark:border-slate-800 pb-4">
+                <div class="grid grid-cols-2 gap-4 items-center border-b border-app-border pb-4">
                   <div>
-                    <span class="block text-sm font-medium text-slate-700 dark:text-slate-300">关闭终端</span>
-                    <span class="text-xs text-slate-500">关闭当前活动的终端会话</span>
+                    <span class="block text-sm font-medium text-app-text-secondary">关闭终端</span>
+                    <span class="text-xs text-app-text-secondary">关闭当前活动的终端会话</span>
                   </div>
                   <div class="space-y-1">
                     <input
                       type="text"
                       value={shortcutDrafts.closeTerminal}
                       on:input={(e) => handleShortcutInput('closeTerminal', (e.target as HTMLInputElement).value)}
-                      class="bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-200 text-sm font-mono focus:border-blue-500 outline-none w-full"
+                      class="bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text text-sm font-mono focus:border-primary-500 outline-none w-full"
                     />
                     {#if shortcutErrors.closeTerminal}
                       <div class="text-xs text-red-500 dark:text-red-400">{shortcutErrors.closeTerminal}</div>
@@ -647,17 +835,17 @@
                   </div>
                 </div>
 
-                <div class="grid grid-cols-2 gap-4 items-center border-b border-slate-200 dark:border-slate-800 pb-4">
+                <div class="grid grid-cols-2 gap-4 items-center border-b border-app-border pb-4">
                   <div>
-                    <span class="block text-sm font-medium text-slate-700 dark:text-slate-300">上一个标签页</span>
-                    <span class="text-xs text-slate-500">切换到左侧终端标签</span>
+                    <span class="block text-sm font-medium text-app-text-secondary">上一个标签页</span>
+                    <span class="text-xs text-app-text-secondary">切换到左侧终端标签</span>
                   </div>
                   <div class="space-y-1">
                     <input
                       type="text"
                       value={shortcutDrafts.prevTab}
                       on:input={(e) => handleShortcutInput('prevTab', (e.target as HTMLInputElement).value)}
-                      class="bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-200 text-sm font-mono focus:border-blue-500 outline-none w-full"
+                      class="bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text text-sm font-mono focus:border-primary-500 outline-none w-full"
                     />
                     {#if shortcutErrors.prevTab}
                       <div class="text-xs text-red-500 dark:text-red-400">{shortcutErrors.prevTab}</div>
@@ -665,17 +853,17 @@
                   </div>
                 </div>
 
-                <div class="grid grid-cols-2 gap-4 items-center border-b border-slate-200 dark:border-slate-800 pb-4">
+                <div class="grid grid-cols-2 gap-4 items-center border-b border-app-border pb-4">
                   <div>
-                    <span class="block text-sm font-medium text-slate-700 dark:text-slate-300">下一个标签页</span>
-                    <span class="text-xs text-slate-500">切换到右侧终端标签</span>
+                    <span class="block text-sm font-medium text-app-text-secondary">下一个标签页</span>
+                    <span class="text-xs text-app-text-secondary">切换到右侧终端标签</span>
                   </div>
                   <div class="space-y-1">
                     <input
                       type="text"
                       value={shortcutDrafts.nextTab}
                       on:input={(e) => handleShortcutInput('nextTab', (e.target as HTMLInputElement).value)}
-                      class="bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-200 text-sm font-mono focus:border-blue-500 outline-none w-full"
+                      class="bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text text-sm font-mono focus:border-primary-500 outline-none w-full"
                     />
                     {#if shortcutErrors.nextTab}
                       <div class="text-xs text-red-500 dark:text-red-400">{shortcutErrors.nextTab}</div>
@@ -683,17 +871,17 @@
                   </div>
                 </div>
 
-                <div class="grid grid-cols-2 gap-4 items-center border-b border-slate-200 dark:border-slate-800 pb-4">
+                <div class="grid grid-cols-2 gap-4 items-center border-b border-app-border pb-4">
                   <div>
-                    <span class="block text-sm font-medium text-slate-700 dark:text-slate-300">复制</span>
-                    <span class="text-xs text-slate-500">复制选中文件到剪贴板</span>
+                    <span class="block text-sm font-medium text-app-text-secondary">复制</span>
+                    <span class="text-xs text-app-text-secondary">复制选中文件到剪贴板</span>
                   </div>
                   <div class="space-y-1">
                     <input
                       type="text"
                       value={shortcutDrafts.copy}
                       on:input={(e) => handleShortcutInput('copy', (e.target as HTMLInputElement).value)}
-                      class="bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-200 text-sm font-mono focus:border-blue-500 outline-none w-full"
+                      class="bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text text-sm font-mono focus:border-primary-500 outline-none w-full"
                     />
                     {#if shortcutErrors.copy}
                       <div class="text-xs text-red-500 dark:text-red-400">{shortcutErrors.copy}</div>
@@ -701,26 +889,170 @@
                   </div>
                 </div>
 
-                <div class="grid grid-cols-2 gap-4 items-center border-b border-slate-200 dark:border-slate-800 pb-4">
+                <div class="grid grid-cols-2 gap-4 items-center border-b border-app-border pb-4">
                   <div>
-                    <span class="block text-sm font-medium text-slate-700 dark:text-slate-300">粘贴</span>
-                    <span class="text-xs text-slate-500">从剪贴板粘贴文件</span>
+                    <span class="block text-sm font-medium text-app-text-secondary">粘贴</span>
+                    <span class="text-xs text-app-text-secondary">从剪贴板粘贴文件</span>
                   </div>
                   <div class="space-y-1">
                     <input
                       type="text"
                       value={shortcutDrafts.paste}
                       on:input={(e) => handleShortcutInput('paste', (e.target as HTMLInputElement).value)}
-                      class="bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-200 text-sm font-mono focus:border-blue-500 outline-none w-full"
+                      class="bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text text-sm font-mono focus:border-primary-500 outline-none w-full"
                     />
                     {#if shortcutErrors.paste}
                       <div class="text-xs text-red-500 dark:text-red-400">{shortcutErrors.paste}</div>
                     {/if}
                   </div>
                 </div>
-             </div>
-             
-             <div class="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-900/30 rounded-lg p-3 text-xs text-blue-800 dark:text-blue-200">
+
+                <div class="grid grid-cols-2 gap-4 items-center border-b border-app-border pb-4">
+                  <div>
+                    <span class="block text-sm font-medium text-app-text-secondary">文件浏览器：刷新</span>
+                    <span class="text-xs text-app-text-secondary">刷新当前目录</span>
+                  </div>
+                  <div class="space-y-1">
+                    <input
+                      type="text"
+                      value={shortcutDrafts.fileBrowserRefresh}
+                      on:input={(e) => handleShortcutInput('fileBrowserRefresh', (e.target as HTMLInputElement).value)}
+                      class="bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text text-sm font-mono focus:border-primary-500 outline-none w-full"
+                    />
+                    {#if shortcutErrors.fileBrowserRefresh}
+                      <div class="text-xs text-red-500 dark:text-red-400">{shortcutErrors.fileBrowserRefresh}</div>
+                    {/if}
+                  </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4 items-center border-b border-app-border pb-4">
+                  <div>
+                    <span class="block text-sm font-medium text-app-text-secondary">文件浏览器：新建文件夹</span>
+                    <span class="text-xs text-app-text-secondary">在当前目录新建文件夹</span>
+                  </div>
+                  <div class="space-y-1">
+                    <input
+                      type="text"
+                      value={shortcutDrafts.fileBrowserNewFolder}
+                      on:input={(e) => handleShortcutInput('fileBrowserNewFolder', (e.target as HTMLInputElement).value)}
+                      class="bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text text-sm font-mono focus:border-primary-500 outline-none w-full"
+                    />
+                    {#if shortcutErrors.fileBrowserNewFolder}
+                      <div class="text-xs text-red-500 dark:text-red-400">{shortcutErrors.fileBrowserNewFolder}</div>
+                    {/if}
+                  </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4 items-center border-b border-app-border pb-4">
+                  <div>
+                    <span class="block text-sm font-medium text-app-text-secondary">文件浏览器：新建文件</span>
+                    <span class="text-xs text-app-text-secondary">在当前目录新建文件</span>
+                  </div>
+                  <div class="space-y-1">
+                    <input
+                      type="text"
+                      value={shortcutDrafts.fileBrowserNewFile}
+                      on:input={(e) => handleShortcutInput('fileBrowserNewFile', (e.target as HTMLInputElement).value)}
+                      class="bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text text-sm font-mono focus:border-primary-500 outline-none w-full"
+                    />
+                    {#if shortcutErrors.fileBrowserNewFile}
+                      <div class="text-xs text-red-500 dark:text-red-400">{shortcutErrors.fileBrowserNewFile}</div>
+                    {/if}
+                  </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4 items-center border-b border-app-border pb-4">
+                  <div>
+                    <span class="block text-sm font-medium text-app-text-secondary">文件浏览器：重命名</span>
+                    <span class="text-xs text-app-text-secondary">重命名选中的文件或文件夹</span>
+                  </div>
+                  <div class="space-y-1">
+                    <input
+                      type="text"
+                      value={shortcutDrafts.fileBrowserRename}
+                      on:input={(e) => handleShortcutInput('fileBrowserRename', (e.target as HTMLInputElement).value)}
+                      class="bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text text-sm font-mono focus:border-primary-500 outline-none w-full"
+                    />
+                    {#if shortcutErrors.fileBrowserRename}
+                      <div class="text-xs text-red-500 dark:text-red-400">{shortcutErrors.fileBrowserRename}</div>
+                    {/if}
+                  </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4 items-center border-b border-app-border pb-4">
+                  <div>
+                    <span class="block text-sm font-medium text-app-text-secondary">文件浏览器：删除</span>
+                    <span class="text-xs text-app-text-secondary">删除选中的文件或文件夹</span>
+                  </div>
+                  <div class="space-y-1">
+                    <input
+                      type="text"
+                      value={shortcutDrafts.fileBrowserDelete}
+                      on:input={(e) => handleShortcutInput('fileBrowserDelete', (e.target as HTMLInputElement).value)}
+                      class="bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text text-sm font-mono focus:border-primary-500 outline-none w-full"
+                    />
+                    {#if shortcutErrors.fileBrowserDelete}
+                      <div class="text-xs text-red-500 dark:text-red-400">{shortcutErrors.fileBrowserDelete}</div>
+                    {/if}
+                  </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4 items-center border-b border-app-border pb-4">
+                  <div>
+                    <span class="block text-sm font-medium text-app-text-secondary">文件浏览器：全选</span>
+                    <span class="text-xs text-app-text-secondary">选中所有文件和文件夹</span>
+                  </div>
+                  <div class="space-y-1">
+                    <input
+                      type="text"
+                      value={shortcutDrafts.fileBrowserSelectAll}
+                      on:input={(e) => handleShortcutInput('fileBrowserSelectAll', (e.target as HTMLInputElement).value)}
+                      class="bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text text-sm font-mono focus:border-primary-500 outline-none w-full"
+                    />
+                    {#if shortcutErrors.fileBrowserSelectAll}
+                      <div class="text-xs text-red-500 dark:text-red-400">{shortcutErrors.fileBrowserSelectAll}</div>
+                    {/if}
+                  </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4 items-center border-b border-app-border pb-4">
+                  <div>
+                    <span class="block text-sm font-medium text-app-text-secondary">文件浏览器：打开/进入</span>
+                    <span class="text-xs text-app-text-secondary">进入文件夹或打开文件</span>
+                  </div>
+                  <div class="space-y-1">
+                    <input
+                      type="text"
+                      value={shortcutDrafts.fileBrowserOpen}
+                      on:input={(e) => handleShortcutInput('fileBrowserOpen', (e.target as HTMLInputElement).value)}
+                      class="bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text text-sm font-mono focus:border-primary-500 outline-none w-full"
+                    />
+                    {#if shortcutErrors.fileBrowserOpen}
+                      <div class="text-xs text-red-500 dark:text-red-400">{shortcutErrors.fileBrowserOpen}</div>
+                    {/if}
+                  </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4 items-center border-b border-app-border pb-4">
+                  <div>
+                    <span class="block text-sm font-medium text-app-text-secondary">文件浏览器：返回上一级</span>
+                    <span class="text-xs text-app-text-secondary">返回上级目录</span>
+                  </div>
+                  <div class="space-y-1">
+                    <input
+                      type="text"
+                      value={shortcutDrafts.fileBrowserBack}
+                      on:input={(e) => handleShortcutInput('fileBrowserBack', (e.target as HTMLInputElement).value)}
+                      class="bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text text-sm font-mono focus:border-primary-500 outline-none w-full"
+                    />
+                    {#if shortcutErrors.fileBrowserBack}
+                      <div class="text-xs text-red-500 dark:text-red-400">{shortcutErrors.fileBrowserBack}</div>
+                    {/if}
+                  </div>
+                </div>
+              </div>
+              
+              <div class="bg-primary-50 dark:bg-primary-900/20 border border-primary-200 dark:border-primary-900/30 rounded-lg p-3 text-xs text-primary-800 dark:text-primary-200">
                <p>提示：快捷键格式为 "修饰键+按键"，例如 "Ctrl+Shift+P"。支持 Ctrl, Shift, Alt, Meta (Cmd)。</p>
              </div>
            </div>
@@ -729,7 +1061,7 @@
           <div class="space-y-6" in:slide={{ duration: 200 }}>
             <!-- Font Size -->
             <div>
-              <label class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-2" for="fontSize">
+              <label class="block text-sm font-medium text-app-text-secondary mb-2" for="fontSize">
                 字体大小 ({$settings.terminal.fontSize}px)
               </label>
               <div class="flex items-center gap-4">
@@ -741,7 +1073,7 @@
                   step="1"
                   value={$settings.terminal.fontSize}
                   on:input={(e) => updateTerminalSetting('fontSize', Number((e.target as HTMLInputElement).value))}
-                  class="flex-1 h-2 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                  class="flex-1 h-2 bg-app-border rounded-lg appearance-none cursor-pointer accent-primary-600"
                 />
                 <input 
                   type="number" 
@@ -750,37 +1082,37 @@
                   max="24"
                   step="1"
                   on:input={(e) => updateTerminalSetting('fontSize', Number((e.target as HTMLInputElement).value))}
-                  class="w-16 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-2 py-1 text-center text-slate-900 dark:text-slate-200 focus:border-blue-500 outline-none"
+                  class="w-16 bg-app-bg border border-app-border rounded-lg px-2 py-1 text-center text-app-text focus:border-primary-500 outline-none"
                 />
               </div>
             </div>
 
             <!-- Font Family -->
             <div>
-              <label class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-2" for="fontFamily">
+              <label class="block text-sm font-medium text-app-text-secondary mb-2" for="fontFamily">
                 字体
               </label>
               <select
                 id="fontFamily"
                 value={$settings.terminal.fontFamily}
                 on:change={(e) => updateTerminalSetting('fontFamily', (e.target as HTMLSelectElement).value)}
-                class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-200 focus:border-blue-500 outline-none"
+                class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text focus:border-primary-500 outline-none"
               >
                 {#each fontFamilies as font}
                   <option value={font.value}>{font.label}</option>
                 {/each}
               </select>
-              <p class="mt-2 text-xs text-slate-500">
+              <p class="mt-2 text-xs text-app-text-secondary">
                 当前字体预览: <span style="font-family: {$settings.terminal.fontFamily}">The quick brown fox jumps over the lazy dog 0123456789</span>
               </p>
             </div>
 
             <div class="flex items-center justify-between">
               <div>
-                <label class="block text-sm font-medium text-slate-600 dark:text-slate-400" for="scrollback">
+                <label class="block text-sm font-medium text-app-text-secondary" for="scrollback">
                   滚动行数
                 </label>
-                <p class="text-xs text-slate-500 mt-0.5">保留的历史输出行数</p>
+                <p class="text-xs text-app-text-secondary mt-0.5">保留的历史输出行数</p>
               </div>
               <input
                 type="number"
@@ -790,22 +1122,22 @@
                 step="500"
                 value={$settings.terminal.scrollback}
                 on:input={(e) => updateTerminalScrollback((e.target as HTMLInputElement).value)}
-                class="w-24 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-2 py-1 text-center text-slate-900 dark:text-slate-200 focus:border-blue-500 outline-none"
+                class="w-24 bg-app-bg border border-app-border rounded-lg px-2 py-1 text-center text-app-text focus:border-primary-500 outline-none"
               />
             </div>
 
             <div class="flex items-center justify-between">
               <div>
-                <label class="block text-sm font-medium text-slate-600 dark:text-slate-400" for="cursorStyle">
+                <label class="block text-sm font-medium text-app-text-secondary" for="cursorStyle">
                   光标样式
                 </label>
-                <p class="text-xs text-slate-500 mt-0.5">设置光标的形状</p>
+                <p class="text-xs text-app-text-secondary mt-0.5">设置光标的形状</p>
               </div>
               <select
                 id="cursorStyle"
                 value={$settings.terminal.cursorStyle}
                 on:change={(e) => updateTerminalSetting('cursorStyle', (e.target as HTMLSelectElement).value as 'block' | 'underline' | 'bar')}
-                class="bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-200 focus:border-blue-500 outline-none"
+                class="bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text focus:border-primary-500 outline-none"
               >
                 <option value="block">方块</option>
                 <option value="underline">下划线</option>
@@ -816,10 +1148,10 @@
             <!-- Cursor Blink -->
             <div class="flex items-center justify-between">
               <div>
-                <label class="block text-sm font-medium text-slate-600 dark:text-slate-400" for="cursorBlink">
+                <label class="block text-sm font-medium text-app-text-secondary" for="cursorBlink">
                   光标闪烁
                 </label>
-                <p class="text-xs text-slate-500 mt-0.5">启用后光标将闪烁</p>
+                <p class="text-xs text-app-text-secondary mt-0.5">启用后光标将闪烁</p>
               </div>
               <label class="relative inline-flex items-center cursor-pointer">
                 <input
@@ -829,7 +1161,7 @@
                   on:change={(e) => updateTerminalSetting('cursorBlink', (e.target as HTMLInputElement).checked)}
                   class="sr-only peer"
                 >
-                <div class="w-11 h-6 bg-slate-200 dark:bg-slate-700 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                <div class="w-11 h-6 bg-app-border peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-600"></div>
               </label>
             </div>
           </div>
@@ -839,10 +1171,10 @@
             <!-- Auto Reconnect -->
             <div class="flex items-center justify-between">
               <div>
-                <label class="block text-sm font-medium text-slate-600 dark:text-slate-400" for="autoReconnect">
+                <label class="block text-sm font-medium text-app-text-secondary" for="autoReconnect">
                   自动重连
                 </label>
-                <p class="text-xs text-slate-500 mt-0.5">意外断开连接时尝试自动重新连接</p>
+                <p class="text-xs text-app-text-secondary mt-0.5">意外断开连接时尝试自动重新连接</p>
               </div>
               <label class="relative inline-flex items-center cursor-pointer">
                 <input
@@ -852,7 +1184,7 @@
                   on:change={(e) => updateConnectionSetting('autoReconnect', (e.target as HTMLInputElement).checked)}
                   class="sr-only peer"
                 >
-                <div class="w-11 h-6 bg-slate-200 dark:bg-slate-700 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                <div class="w-11 h-6 bg-app-border peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-600"></div>
               </label>
             </div>
           </div>
@@ -862,9 +1194,9 @@
             <!-- Theme Mode -->
             <div>
               <span class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-3">主题模式</span>
-              <div class="grid grid-cols-2 gap-4">
+              <div class="grid grid-cols-3 gap-4">
                 <button
-                  class="relative p-4 border rounded-xl flex flex-col items-center gap-2 transition-all {$settings.theme === 'dark' ? 'border-blue-500 bg-blue-50 dark:bg-blue-500/10' : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'}"
+                  class="relative p-4 border rounded-xl flex flex-col items-center gap-2 transition-all {$settings.theme === 'dark' ? 'border-primary-500 bg-primary-50 dark:bg-primary-500/10' : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'}"
                   on:click={() => updateTheme('dark')}
                 >
                   <div class="w-full h-20 bg-slate-900 rounded-lg border border-slate-800 shadow-sm overflow-hidden relative">
@@ -873,12 +1205,12 @@
                   </div>
                   <span class="text-sm font-medium text-slate-900 dark:text-slate-200">深色模式</span>
                   {#if $settings.theme === 'dark'}
-                    <div class="absolute top-2 right-2 w-2 h-2 bg-blue-500 rounded-full"></div>
+                    <div class="absolute top-2 right-2 w-2 h-2 bg-primary-500 rounded-full"></div>
                   {/if}
                 </button>
 
                 <button
-                  class="relative p-4 border rounded-xl flex flex-col items-center gap-2 transition-all {$settings.theme === 'light' ? 'border-blue-500 bg-blue-50 dark:bg-blue-500/10' : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'}"
+                  class="relative p-4 border rounded-xl flex flex-col items-center gap-2 transition-all {$settings.theme === 'light' ? 'border-primary-500 bg-primary-50 dark:bg-primary-500/10' : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'}"
                   on:click={() => updateTheme('light')}
                 >
                   <div class="w-full h-20 bg-slate-100 rounded-lg border border-slate-200 shadow-sm overflow-hidden relative">
@@ -887,9 +1219,87 @@
                   </div>
                   <span class="text-sm font-medium text-slate-900 dark:text-slate-200">浅色模式</span>
                   {#if $settings.theme === 'light'}
-                    <div class="absolute top-2 right-2 w-2 h-2 bg-blue-500 rounded-full"></div>
+                    <div class="absolute top-2 right-2 w-2 h-2 bg-primary-500 rounded-full"></div>
                   {/if}
                 </button>
+
+                <button
+                  class="relative p-4 border rounded-xl flex flex-col items-center gap-2 transition-all {$settings.theme === 'custom' ? 'border-primary-500 bg-primary-50 dark:bg-primary-500/10' : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'}"
+                  on:click={() => updateTheme('custom')}
+                >
+                  <div class="w-full h-20 bg-gradient-to-br from-slate-900 to-slate-800 rounded-lg border border-slate-700 shadow-sm overflow-hidden relative">
+                    <div class="absolute left-0 top-0 bottom-0 w-8 bg-slate-800/50 border-r border-slate-700/50"></div>
+                    <div class="absolute right-2 top-2 w-12 h-2 bg-slate-700/50 rounded"></div>
+                  </div>
+                  <span class="text-sm font-medium text-slate-900 dark:text-slate-200">自定义</span>
+                  {#if $settings.theme === 'custom'}
+                    <div class="absolute top-2 right-2 w-2 h-2 bg-primary-500 rounded-full"></div>
+                  {/if}
+                </button>
+              </div>
+
+              {#if $settings.theme === 'custom'}
+                <div class="mt-4 p-4 border border-slate-200 dark:border-slate-700 rounded-xl space-y-3" transition:slide={{ duration: 200 }}>
+                   <div class="flex items-center justify-between">
+                     <h4 class="text-sm font-medium text-slate-900 dark:text-slate-200">自定义颜色</h4>
+                     <button
+                       class="text-xs px-3 py-1 bg-primary-600 hover:bg-primary-500 text-white rounded transition-colors"
+                       on:click={resetCustomUITheme}
+                     >
+                       重置
+                     </button>
+                   </div>
+                   <div class="grid grid-cols-2 gap-4">
+                    {#each Object.entries(customUIColorLabels) as [k, label] (k)}
+                       {@const key = k as CustomUIThemeKey}
+                       {@const inputId = `custom-ui-color-${key}`}
+                       <div>
+                         <label for={inputId} class="block text-xs text-slate-500 mb-1">{label}</label>
+                         <div class="flex gap-2">
+                           <input
+                             id={inputId}
+                             type="color"
+                             value={$settings.appearance.customUITheme?.[key] || defaultCustomUITheme[key]}
+                             on:input={(e) => updateCustomUITheme(key, e.currentTarget.value)}
+                             class="h-8 w-12 rounded cursor-pointer border border-slate-300 dark:border-slate-600 p-0.5 bg-transparent"
+                           />
+                           <input
+                             type="text"
+                             value={$settings.appearance.customUITheme?.[key] || defaultCustomUITheme[key]}
+                             on:input={(e) => updateCustomUITheme(key, e.currentTarget.value)}
+                             class="flex-1 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded px-2 text-xs font-mono"
+                           />
+                           {#if 'EyeDropper' in window}
+                             <button
+                               class="p-1.5 border border-slate-200 dark:border-slate-700 rounded bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-500 hover:text-primary-500 transition-colors"
+                               title="取色器"
+                               on:click={() => handleEyeDropper((c) => updateCustomUITheme(key, c))}
+                             >
+                               <EyeDropperIcon class="w-4 h-4" />
+                             </button>
+                           {/if}
+                         </div>
+                       </div>
+                     {/each}
+                   </div>
+                </div>
+              {/if}
+            </div>
+
+            <!-- Accent Color -->
+            <div>
+              <span class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-3">主题色</span>
+              <div class="flex flex-wrap gap-3">
+                {#each Object.entries(themeColors) as [key, colors]}
+                  <button
+                    class="w-8 h-8 rounded-full border-2 transition-all {($settings.appearance.accentColor || 'blue') === key ? 'border-slate-900 dark:border-white scale-110' : 'border-transparent hover:scale-105'}"
+                    style="background-color: {colors[500]}"
+                    on:click={() => updateAccentColorSetting(key)}
+                    title={key}
+                    aria-label={`Select ${key} accent color`}
+                  >
+                  </button>
+                {/each}
               </div>
             </div>
 
@@ -899,7 +1309,7 @@
               <div class="grid grid-cols-5 gap-2">
                 {#each terminalThemes as theme}
                   <button
-                    class="relative p-2 border rounded-lg flex flex-col items-center gap-2 transition-all {$settings.appearance.terminalTheme === theme.id ? 'border-blue-500 bg-blue-50 dark:bg-blue-500/10' : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'}"
+                    class="relative p-2 border rounded-lg flex flex-col items-center gap-2 transition-all {$settings.appearance.terminalTheme === theme.id ? 'border-primary-500 bg-primary-50 dark:bg-primary-500/10' : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'}"
                     on:click={() => updateTerminalTheme(theme.id)}
                     title={theme.name}
                   >
@@ -913,7 +1323,7 @@
                     </div>
                     <span class="text-xs text-slate-700 dark:text-slate-300 truncate w-full text-center">{theme.name}</span>
                     {#if $settings.appearance.terminalTheme === theme.id}
-                      <div class="absolute top-1 right-1 w-2 h-2 bg-blue-500 rounded-full"></div>
+                      <div class="absolute top-1 right-1 w-2 h-2 bg-primary-500 rounded-full"></div>
                     {/if}
                   </button>
                 {/each}
@@ -926,7 +1336,7 @@
                 <div class="flex items-center justify-between mb-4">
                   <span class="text-sm font-medium text-slate-700 dark:text-slate-300">自定义主题</span>
                   <button
-                    class="text-xs px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded transition-colors"
+                    class="text-xs px-3 py-1 bg-primary-600 hover:bg-primary-500 text-white rounded transition-colors"
                     on:click={resetCustomTheme}
                   >
                     重置
@@ -937,7 +1347,7 @@
                   <!-- Basic Colors -->
                   <div class="space-y-2">
                     <h4 class="text-xs font-medium text-slate-600 dark:text-slate-400 uppercase">基础颜色</h4>
-                    {#each basicColorKeys as key}
+                  {#each basicColorKeys as key (key)}
                       {@const label = colorLabels[key]}
                       {@const value = $settings.appearance.customTheme?.[key] || '#000000'}
                       {@const inputId = `custom-color-${key}`}
@@ -954,8 +1364,17 @@
                           type="text"
                           value={value}
                           on:input={(e) => updateCustomColor(key, (e.target as HTMLInputElement).value)}
-                          class="flex-1 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded px-2 py-1 text-xs font-mono text-slate-900 dark:text-slate-200 focus:border-blue-500 outline-none"
+                          class="flex-1 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded px-2 py-1 text-xs font-mono text-slate-900 dark:text-slate-200 focus:border-primary-500 outline-none"
                         />
+                        {#if 'EyeDropper' in window}
+                          <button
+                            class="p-1.5 border border-slate-200 dark:border-slate-700 rounded bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-500 hover:text-primary-500 transition-colors"
+                            title="取色器"
+                            on:click={() => handleEyeDropper((c) => updateCustomColor(key, c))}
+                          >
+                            <EyeDropperIcon class="w-4 h-4" />
+                          </button>
+                        {/if}
                       </div>
                     {/each}
                   </div>
@@ -963,7 +1382,7 @@
                   <!-- Standard Colors -->
                   <div class="space-y-2">
                     <h4 class="text-xs font-medium text-slate-600 dark:text-slate-400 uppercase">标准颜色</h4>
-                    {#each standardColorKeys as key}
+                  {#each standardColorKeys as key (key)}
                       {@const label = colorLabels[key]}
                       {@const value = $settings.appearance.customTheme?.[key] || '#000000'}
                       {@const inputId = `custom-color-${key}`}
@@ -980,8 +1399,17 @@
                           type="text"
                           value={value}
                           on:input={(e) => updateCustomColor(key, (e.target as HTMLInputElement).value)}
-                          class="flex-1 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded px-2 py-1 text-xs font-mono text-slate-900 dark:text-slate-200 focus:border-blue-500 outline-none"
+                          class="flex-1 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded px-2 py-1 text-xs font-mono text-slate-900 dark:text-slate-200 focus:border-primary-500 outline-none"
                         />
+                        {#if 'EyeDropper' in window}
+                          <button
+                            class="p-1.5 border border-slate-200 dark:border-slate-700 rounded bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-500 hover:text-primary-500 transition-colors"
+                            title="取色器"
+                            on:click={() => handleEyeDropper((c) => updateCustomColor(key, c))}
+                          >
+                            <EyeDropperIcon class="w-4 h-4" />
+                          </button>
+                        {/if}
                       </div>
                     {/each}
                   </div>
@@ -990,7 +1418,7 @@
                   <div class="col-span-2 space-y-2">
                     <h4 class="text-xs font-medium text-slate-600 dark:text-slate-400 uppercase">亮色变体</h4>
                     <div class="grid grid-cols-4 gap-2">
-                      {#each brightColorKeys as key}
+                      {#each brightColorKeys as key (key)}
                         {@const label = colorLabels[key]}
                         {@const value = $settings.appearance.customTheme?.[key] || '#000000'}
                         {@const inputId = `custom-color-${key}`}
@@ -1010,11 +1438,83 @@
                 </div>
               </div>
             {/if}
+
+            <!-- Background Image -->
+            <div>
+              <span class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-3">终端背景</span>
+              <div class="border border-slate-200 dark:border-slate-700 rounded-lg p-4 bg-slate-50 dark:bg-slate-900/50 space-y-4">
+                <div class="flex items-start gap-4">
+                  <!-- Preview -->
+                  <div class="relative w-32 h-20 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 overflow-hidden shrink-0 group">
+                    {#if $settings.appearance.backgroundImage}
+                      <img src={$settings.appearance.backgroundImage} alt="Background Preview" class="w-full h-full object-cover" />
+                      <button
+                        class="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                        on:click={clearBackgroundImage}
+                      >
+                        <TrashIcon class="w-5 h-5 text-white" />
+                      </button>
+                    {:else}
+                      <div class="w-full h-full flex items-center justify-center text-slate-400">
+                        <span class="text-xs">无背景</span>
+                      </div>
+                    {/if}
+                  </div>
+
+                  <!-- Controls -->
+                  <div class="flex-1 space-y-3">
+                    <div>
+                      <label class="block text-xs text-slate-500 mb-1">上传图片</label>
+                      <label class="inline-flex items-center gap-2 px-3 py-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded text-xs font-medium cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors text-slate-700 dark:text-slate-300">
+                        <UploadIcon class="w-4 h-4" />
+                        <span>选择文件...</span>
+                        <input type="file" accept="image/*" class="hidden" on:change={handleBackgroundImageUpload} />
+                      </label>
+                    </div>
+                  </div>
+                </div>
+
+                {#if $settings.appearance.backgroundImage}
+                  <div class="grid grid-cols-2 gap-4 pt-2 border-t border-slate-200 dark:border-slate-700">
+                    <div>
+                      <div class="flex justify-between mb-1">
+                        <label class="text-xs text-slate-500">不透明度</label>
+                        <span class="text-xs text-slate-500">{Math.round(($settings.appearance.backgroundOpacity ?? 0.5) * 100)}%</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0"
+                        max="1"
+                        step="0.05"
+                        value={$settings.appearance.backgroundOpacity ?? 0.5}
+                        on:input={(e) => updateAppearanceSetting('backgroundOpacity', Number(e.currentTarget.value))}
+                        class="w-full h-1 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer"
+                      />
+                    </div>
+                    <div>
+                      <div class="flex justify-between mb-1">
+                        <label class="text-xs text-slate-500">模糊度</label>
+                        <span class="text-xs text-slate-500">{$settings.appearance.backgroundBlur ?? 0}px</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0"
+                        max="20"
+                        step="1"
+                        value={$settings.appearance.backgroundBlur ?? 0}
+                        on:input={(e) => updateAppearanceSetting('backgroundBlur', Number(e.currentTarget.value))}
+                        class="w-full h-1 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer"
+                      />
+                    </div>
+                  </div>
+                {/if}
+              </div>
+            </div>
           </div>
         {:else if activeTab === 'security'}
            <div class="space-y-6" in:slide={{ duration: 200 }}>
-             <h3 class="text-lg font-medium text-slate-800 dark:text-slate-200">应用安全锁</h3>
-             <p class="text-sm text-slate-600 dark:text-slate-400">设置启动密码以保护您的连接信息。</p>
+             <h3 class="text-lg font-medium text-app-text">应用安全锁</h3>
+             <p class="text-sm text-app-text-secondary">设置启动密码以保护您的连接信息。</p>
              
              {#if securityMessage}
                <div class="p-3 bg-green-50 dark:bg-green-500/10 border border-green-200 dark:border-green-500/20 text-green-600 dark:text-green-400 rounded-lg text-sm">
@@ -1030,31 +1530,31 @@
 
              {#if !hasLock}
                <!-- Setup Lock -->
-               <div class="space-y-4 border border-slate-200 dark:border-slate-800 rounded-lg p-4 bg-slate-50 dark:bg-slate-950/30">
-                 <h4 class="font-medium text-slate-700 dark:text-slate-300">设置新密码</h4>
+               <div class="space-y-4 border border-app-border rounded-lg p-4 bg-app-surface">
+                 <h4 class="font-medium text-app-text">设置新密码</h4>
                  <div>
-                   <label class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1" for="new-pwd">新密码</label>
-                   <input type="password" id="new-pwd" bind:value={newPassword} class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-white focus:border-blue-500 outline-none" />
+                   <label class="block text-sm font-medium text-app-text-secondary mb-1" for="new-pwd">新密码</label>
+                   <input type="password" id="new-pwd" bind:value={newPassword} class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text focus:border-primary-500 outline-none" />
                  </div>
                  <div>
-                   <label class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1" for="confirm-pwd">确认密码</label>
-                   <input type="password" id="confirm-pwd" bind:value={confirmPassword} class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-white focus:border-blue-500 outline-none" />
+                   <label class="block text-sm font-medium text-app-text-secondary mb-1" for="confirm-pwd">确认密码</label>
+                   <input type="password" id="confirm-pwd" bind:value={confirmPassword} class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text focus:border-primary-500 outline-none" />
                  </div>
-                 <button class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-medium transition-colors" on:click={handleSetLock}>
+                 <button class="px-4 py-2 bg-primary-600 hover:bg-primary-500 text-white rounded-lg text-sm font-medium transition-colors" on:click={handleSetLock}>
                    启用应用锁
                  </button>
                </div>
              {:else}
                <!-- Auto Lock Settings -->
-               <div class="space-y-4 border border-slate-200 dark:border-slate-800 rounded-lg p-4 bg-slate-50 dark:bg-slate-950/30">
-                 <h4 class="font-medium text-slate-700 dark:text-slate-300">自动锁定</h4>
+               <div class="space-y-4 border border-app-border rounded-lg p-4 bg-app-surface">
+                 <h4 class="font-medium text-app-text">自动锁定</h4>
                  
                  <div class="flex items-center justify-between">
                     <div>
-                      <label class="block text-sm font-medium text-slate-600 dark:text-slate-400" for="autoLockTime">
+                      <label class="block text-sm font-medium text-app-text-secondary" for="autoLockTime">
                         自动锁定时间
                       </label>
-                      <p class="text-xs text-slate-500 mt-0.5">无操作指定时间后自动锁定 (0 为禁用)</p>
+                      <p class="text-xs text-app-text-secondary mt-0.5">无操作指定时间后自动锁定 (0 为禁用)</p>
                     </div>
                     <div class="flex items-center gap-2">
                       <input 
@@ -1064,18 +1564,18 @@
                         max="120"
                         value={$settings.security.autoLockMinutes}
                         on:input={(e) => updateSecuritySetting('autoLockMinutes', Number((e.target as HTMLInputElement).value))}
-                        class="w-16 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-2 py-1 text-center text-slate-900 dark:text-slate-200 focus:border-blue-500 outline-none"
+                        class="w-16 bg-app-bg border border-app-border rounded-lg px-2 py-1 text-center text-app-text focus:border-primary-500 outline-none"
                       />
-                      <span class="text-sm text-slate-500">分钟</span>
+                      <span class="text-sm text-app-text-secondary">分钟</span>
                    </div>
                 </div>
 
-                <div class="flex items-center justify-between border-t border-slate-200 dark:border-slate-800 pt-4">
+                <div class="flex items-center justify-between border-t border-app-border pt-4">
                    <div>
-                     <label class="block text-sm font-medium text-slate-600 dark:text-slate-400" for="lockOnBlur">
+                     <label class="block text-sm font-medium text-app-text-secondary" for="lockOnBlur">
                        失去焦点时锁定
                      </label>
-                     <p class="text-xs text-slate-500 mt-0.5">当切换到其他应用窗口时自动锁定</p>
+                     <p class="text-xs text-app-text-secondary mt-0.5">当切换到其他应用窗口时自动锁定</p>
                    </div>
                    <label class="relative inline-flex items-center cursor-pointer">
                      <input
@@ -1085,32 +1585,32 @@
                        on:change={(e) => updateSecuritySetting('lockOnBlur', (e.target as HTMLInputElement).checked)}
                        class="sr-only peer"
                      >
-                     <div class="w-11 h-6 bg-slate-200 dark:bg-slate-700 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                     <div class="w-11 h-6 bg-app-border peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-600"></div>
                    </label>
                 </div>
               </div>
 
               <!-- Change/Remove Lock -->
-              <div class="space-y-4 border border-slate-200 dark:border-slate-800 rounded-lg p-4 bg-slate-50 dark:bg-slate-950/30">
-                <h4 class="font-medium text-slate-700 dark:text-slate-300">管理密码</h4>
+              <div class="space-y-4 border border-app-border rounded-lg p-4 bg-app-surface">
+                <h4 class="font-medium text-app-text">管理密码</h4>
                 <div>
-                  <label class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-1" for="curr-pwd">当前密码</label>
-                  <input type="password" id="curr-pwd" bind:value={oldPassword} class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-white focus:border-blue-500 outline-none" />
+                  <label class="block text-sm font-medium text-app-text-secondary mb-1" for="curr-pwd">当前密码</label>
+                  <input type="password" id="curr-pwd" bind:value={oldPassword} class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text focus:border-primary-500 outline-none" />
                 </div>
                 
-                <div class="pt-4 border-t border-slate-200 dark:border-slate-800">
-                   <h5 class="text-sm font-medium text-slate-600 dark:text-slate-400 mb-3">修改密码（可选）</h5>
+                <div class="pt-4 border-t border-app-border">
+                   <h5 class="text-sm font-medium text-app-text-secondary mb-3">修改密码（可选）</h5>
                    <div class="space-y-3">
                        <div>
-                       <label class="block text-sm font-medium text-slate-500 mb-1" for="new-pwd-change">新密码</label>
-                       <input type="password" id="new-pwd-change" bind:value={newPassword} class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-white focus:border-blue-500 outline-none" />
+                       <label class="block text-sm font-medium text-app-text-secondary mb-1" for="new-pwd-change">新密码</label>
+                       <input type="password" id="new-pwd-change" bind:value={newPassword} class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text focus:border-primary-500 outline-none" />
                        </div>
                        <div>
-                       <label class="block text-sm font-medium text-slate-500 mb-1" for="confirm-pwd-change">确认新密码</label>
-                       <input type="password" id="confirm-pwd-change" bind:value={confirmPassword} class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-white focus:border-blue-500 outline-none" />
+                       <label class="block text-sm font-medium text-app-text-secondary mb-1" for="confirm-pwd-change">确认新密码</label>
+                       <input type="password" id="confirm-pwd-change" bind:value={confirmPassword} class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text focus:border-primary-500 outline-none" />
                        </div>
                        <div class="flex gap-3 pt-2">
-                           <button class="px-4 py-2 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-900 dark:text-white rounded-lg text-sm font-medium transition-colors" on:click={handleChangeLock}>
+                           <button class="px-4 py-2 bg-app-surface-light hover:bg-app-border text-app-text rounded-lg text-sm font-medium transition-colors" on:click={handleChangeLock}>
                            更新密码
                            </button>
                            <button class="px-4 py-2 bg-red-50 dark:bg-red-900/30 hover:bg-red-100 dark:hover:bg-red-900/50 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-900/50 rounded-lg text-sm font-medium transition-colors" on:click={handleRemoveLock}>

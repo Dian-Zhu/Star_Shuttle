@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { connections, showConnectionForm, editingConnection, isSidebarCollapsed, showSettings, activeTerminals, connectionGroups, getGroupIdByPath } from '../lib/store';
+  import { connections, showConnectionForm, editingConnection, isSidebarCollapsed, isRightSidebarOpen, showSettings, activeTerminals, connectionGroups, getGroupIdByPath } from '../lib/store';
   import { deleteConnection, updateConnectionConfig } from '../lib/connectionService';
   import { connectAndOpen, disconnectTerminal } from '../lib/terminalService';
   import SystemMonitorModal from './SystemMonitorModal.svelte';
@@ -10,8 +10,7 @@
   import SettingsIcon from './icons/SettingsIcon.svelte';
   import ActivityIcon from './icons/ActivityIcon.svelte';
   import ClockIcon from './icons/ClockIcon.svelte';
-  import ChevronLeftIcon from './icons/ChevronLeftIcon.svelte';
-  import ChevronRightIcon from './icons/ChevronRightIcon.svelte';
+  import FolderIcon from './icons/FolderIcon.svelte';
   import UploadIcon from './icons/UploadIcon.svelte';
   import DownloadIcon from './icons/DownloadIcon.svelte';
   import { importConnections, exportConnections } from '../lib/importExportService';
@@ -252,10 +251,6 @@
     showConnectionForm.set(true);
   }
 
-  function toggleSidebar() {
-    isSidebarCollapsed.update(v => !v);
-  }
-
   function openMonitor(connection: any, event: MouseEvent) {
       event.stopPropagation();
       // Find active session
@@ -434,12 +429,12 @@
     />
 {/if}
 
-<aside class="flex flex-col bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 transition-all duration-300 ease-in-out {$isSidebarCollapsed ? 'w-16' : 'w-64'}">
+<aside class="flex flex-col bg-app-bg border-r border-app-border text-app-text-secondary transition-all duration-300 ease-in-out {$isSidebarCollapsed ? 'w-[47px]' : 'w-64'}">
   <!-- Sidebar Header -->
-  <div class="p-4 border-b border-slate-200 dark:border-slate-800 flex flex-col gap-4">
+  <div class="{$isSidebarCollapsed ? 'p-2' : 'p-4'} border-b border-app-border flex flex-col gap-4">
     <div class="flex gap-2">
       <button
-        class="{$isSidebarCollapsed ? 'w-8 h-8 p-0' : 'flex-1 py-2 px-3'} flex items-center justify-center {$isSidebarCollapsed ? '' : 'gap-2'} bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-medium transition-all shadow-md hover:shadow-blue-900/30 active:scale-95"
+        class="{$isSidebarCollapsed ? 'w-8 h-8 p-0' : 'flex-1 py-2 px-3'} flex items-center justify-center {$isSidebarCollapsed ? '' : 'gap-2'} bg-primary-600 hover:bg-primary-500 text-white rounded-lg font-medium transition-all shadow-md hover:shadow-primary-900/30 active:scale-95"
         on:click={() => { editingConnection.set(null); showConnectionForm.set(true); }}
         title="新建连接"
       >
@@ -455,13 +450,13 @@
   {#if !$isSidebarCollapsed}
     <div class="px-4 pt-4 flex gap-1">
        <button 
-         class="flex-1 py-1.5 text-xs font-medium rounded-md transition-all {activeTab === 'servers' ? 'bg-slate-200 dark:bg-slate-800 text-slate-900 dark:text-slate-100' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}"
+         class="flex-1 py-1.5 text-xs font-medium rounded-md transition-all {activeTab === 'servers' ? 'bg-app-surface text-app-text' : 'text-app-text-secondary hover:text-app-text'}"
          on:click={() => activeTab = 'servers'}
        >
          服务器
        </button>
        <button 
-         class="flex-1 py-1.5 text-xs font-medium rounded-md transition-all {activeTab === 'history' ? 'bg-slate-200 dark:bg-slate-800 text-slate-900 dark:text-slate-100' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}"
+         class="flex-1 py-1.5 text-xs font-medium rounded-md transition-all {activeTab === 'history' ? 'bg-app-surface text-app-text' : 'text-app-text-secondary hover:text-app-text'}"
          on:click={() => activeTab = 'history'}
        >
          历史
@@ -477,9 +472,9 @@
           type="text"
           placeholder="搜索连接..."
           bind:value={searchTerm}
-          class="w-full bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg py-1.5 px-3 pl-9 text-sm text-slate-900 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/50 transition-all"
+          class="w-full bg-app-surface border border-app-border rounded-lg py-1.5 px-3 pl-9 text-sm text-app-text placeholder-app-text-secondary focus:outline-none focus:border-primary-500/50 focus:ring-1 focus:ring-primary-500/50 transition-all"
         />
-        <svg class="absolute left-3 top-2 w-4 h-4 text-slate-400 dark:text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg class="absolute left-3 top-2 w-4 h-4 text-app-text-secondary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
         </svg>
       </div>
@@ -494,13 +489,13 @@
   >
     {#if activeTab === 'servers'}
         {#if !$isSidebarCollapsed}
-            <div class="px-2 py-1.5 flex justify-between items-center text-xs font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wider whitespace-nowrap">
+            <div class="px-2 py-1.5 flex justify-between items-center text-xs font-semibold text-app-text-secondary uppercase tracking-wider whitespace-nowrap">
               <span>服务器列表</span>
               <div class="flex gap-1">
-                 <button class="p-1 hover:text-slate-200 transition-colors" title="导入配置" on:click={importConnections}>
+                 <button class="p-1 hover:text-app-text transition-colors" title="导入配置" on:click={importConnections}>
                     <UploadIcon className="w-3 h-3" />
                  </button>
-                 <button class="p-1 hover:text-slate-200 transition-colors" title="导出配置" on:click={() => exportConnections()}>
+                 <button class="p-1 hover:text-app-text transition-colors" title="导出配置" on:click={() => exportConnections()}>
                     <DownloadIcon className="w-3 h-3" />
                  </button>
               </div>
@@ -511,7 +506,7 @@
             {#if row.kind === 'folder'}
               <div class="group relative">
                 <button
-                  class="w-full text-left flex items-center {$isSidebarCollapsed ? 'justify-center p-2' : 'gap-2 p-2'} rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors drop-target"
+                  class="w-full text-left flex items-center {$isSidebarCollapsed ? 'justify-center p-2' : 'gap-2 p-2'} rounded-lg hover:bg-app-surface transition-colors drop-target"
                   class:drag-over={dragOverFolderPath === row.path}
                   on:click={() => toggleFolder(row.path)}
                   on:contextmenu|preventDefault|stopPropagation={(e) => openContextMenu(e, 'folder', row)}
@@ -525,7 +520,7 @@
                   on:drop={(e) => handleDrop(e, row.path)}
                 >
                   {#if !$isSidebarCollapsed}
-                    <span class="text-slate-400 dark:text-slate-500 w-4 inline-flex justify-center">
+                    <span class="text-app-text-secondary w-4 inline-flex justify-center">
                       {#if expandedPaths.has(row.path)}
                         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
@@ -537,9 +532,9 @@
                       {/if}
                     </span>
                     <span class="flex-1 min-w-0">
-                      <span class="font-medium text-slate-700 dark:text-slate-200 truncate">{row.name}</span>
+                      <span class="font-medium text-app-text truncate">{row.name}</span>
                     </span>
-                    <span class="text-[10px] text-slate-400 dark:text-slate-500 bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded-full">
+                    <span class="text-[10px] text-app-text-secondary bg-app-surface px-1.5 py-0.5 rounded-full">
                       {row.count}
                     </span>
                   {/if}
@@ -548,7 +543,7 @@
             {:else}
               <div class="group relative">
                 <button
-                  class="w-full text-left flex items-center {$isSidebarCollapsed ? 'justify-center p-2' : 'gap-3 p-2'} rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors group-hover:shadow-sm cursor-move"
+                  class="w-full text-left flex items-center {$isSidebarCollapsed ? 'justify-center p-2' : 'gap-3 p-2'} rounded-lg hover:bg-app-surface transition-colors group-hover:shadow-sm cursor-move"
                   on:click={() => handleConnect(row.connection)}
                   on:contextmenu|preventDefault|stopPropagation={(e) => openContextMenu(e, 'connection', row)}
                   title={$isSidebarCollapsed ? `${row.connection.name} (${row.connection.username}@${row.connection.host})` : ''}
@@ -557,18 +552,18 @@
                   on:dragstart={(e) => handleDragStart(e, row.connection)}
                   on:dragend={handleDragEnd}
                 >
-                  <div class="text-slate-400 group-hover:text-blue-500 dark:group-hover:text-blue-400 transition-colors shrink-0">
+                  <div class="text-app-text-secondary group-hover:text-primary-500 dark:group-hover:text-primary-400 transition-colors shrink-0">
                     <ServerIcon class="w-4 h-4" />
                   </div>
                   {#if !$isSidebarCollapsed}
                     <div class="flex-1 min-w-0">
-                      <div class="font-medium text-slate-700 dark:text-slate-200 truncate group-hover:text-slate-900 dark:group-hover:text-white transition-colors flex items-center gap-2">
+                      <div class="font-medium text-app-text truncate group-hover:text-app-text transition-colors flex items-center gap-2">
                         <span class="truncate">{row.connection.name}</span>
-                        <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 shrink-0">
+                        <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-app-surface text-app-text-secondary shrink-0">
                           {(row.connection as any).protocol === 'Rdp' ? 'RDP' : 'SSH'}
                         </span>
                       </div>
-                      <div class="text-xs text-slate-500 truncate mt-0.5 font-mono opacity-80">
+                      <div class="text-xs text-app-text-secondary truncate mt-0.5 font-mono opacity-80">
                         {#if row.connection.username}{row.connection.username}@{/if}{row.connection.host}
                       </div>
                     </div>
@@ -586,14 +581,14 @@
                     </button>
                   {/if}
                   <button
-                    class="absolute right-9 top-2.5 p-1.5 rounded-md text-slate-400 dark:text-slate-500 hover:text-blue-500 dark:hover:text-blue-400 hover:bg-slate-200 dark:hover:bg-slate-700/50 opacity-0 group-hover:opacity-100 transition-all"
+                    class="absolute right-9 top-2.5 p-1.5 rounded-md text-app-text-secondary hover:text-primary-500 dark:hover:text-primary-400 hover:bg-app-border opacity-0 group-hover:opacity-100 transition-all"
                     on:click={(e) => handleEdit(row.connection, e)}
                     title="编辑连接"
                   >
                     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 4H6a2 2 0 00-2 2v12a2 2 0 002 2h12a2 2 0 002-2v-5M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
                   </button>
                   <button
-                    class="absolute right-2 top-2.5 p-1.5 rounded-md text-slate-400 dark:text-slate-500 hover:text-red-500 dark:hover:text-red-400 hover:bg-slate-200 dark:hover:bg-slate-700/50 opacity-0 group-hover:opacity-100 transition-all"
+                    class="absolute right-2 top-2.5 p-1.5 rounded-md text-app-text-secondary hover:text-red-500 dark:hover:text-red-400 hover:bg-app-border opacity-0 group-hover:opacity-100 transition-all"
                     on:click={(e) => handleDelete(row.connection.id, e)}
                     title="删除连接"
                   >
@@ -605,14 +600,14 @@
           {/each}
         {:else}
           {#if !$isSidebarCollapsed}
-            <div class="flex flex-col items-center justify-center py-10 text-slate-400 dark:text-slate-500">
+            <div class="flex flex-col items-center justify-center py-10 text-app-text-secondary">
               <p class="text-sm">未找到连接</p>
             </div>
           {/if}
         {/if}
     {:else if activeTab === 'history'}
         {#if !$isSidebarCollapsed}
-            <div class="px-2 py-1.5 flex justify-between items-center text-xs font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wider whitespace-nowrap">
+            <div class="px-2 py-1.5 flex justify-between items-center text-xs font-semibold text-app-text-secondary uppercase tracking-wider whitespace-nowrap">
               <span>最近连接</span>
             </div>
         {/if}
@@ -620,27 +615,27 @@
           {#each filteredHistory as item}
             <div class="group relative">
               <button
-                class="w-full text-left flex items-center {$isSidebarCollapsed ? 'justify-center p-2' : 'gap-3 p-2.5'} rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors group-hover:shadow-sm"
+                class="w-full text-left flex items-center {$isSidebarCollapsed ? 'justify-center p-2' : 'gap-3 p-2.5'} rounded-lg hover:bg-app-surface transition-colors group-hover:shadow-sm"
                 on:click={() => handleConnect(item.connection)}
                 title={$isSidebarCollapsed ? `${item.connection.name} - ${formatTimeAgo(item.lastConnected)}` : ''}
               >
-                <div class="text-slate-400 group-hover:text-green-500 dark:group-hover:text-green-400 transition-colors shrink-0">
+                <div class="text-app-text-secondary group-hover:text-green-500 dark:group-hover:text-green-400 transition-colors shrink-0">
                   <ClockIcon className="w-4 h-4" />
                 </div>
                 {#if !$isSidebarCollapsed}
                   <div class="flex-1 min-w-0">
                     <div class="flex justify-between items-center">
-                       <div class="font-medium text-slate-700 dark:text-slate-200 truncate group-hover:text-slate-900 dark:group-hover:text-white transition-colors flex items-center gap-2">
+                       <div class="font-medium text-app-text truncate group-hover:text-app-text transition-colors flex items-center gap-2">
                          <span class="truncate">{item.connection.name}</span>
-                         <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 shrink-0">
+                         <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-app-surface text-app-text-secondary shrink-0">
                            {(item.connection as any).protocol === 'Rdp' ? 'RDP' : 'SSH'}
                          </span>
                        </div>
-                       <span class="text-[10px] text-slate-400 bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded-full">
+                       <span class="text-[10px] text-app-text-secondary bg-app-surface px-1.5 py-0.5 rounded-full">
                          {formatTimeAgo(item.lastConnected)}
                        </span>
                     </div>
-                    <div class="text-xs text-slate-500 truncate mt-0.5 font-mono opacity-80">
+                    <div class="text-xs text-app-text-secondary truncate mt-0.5 font-mono opacity-80">
                       {#if item.connection.username}{item.connection.username}@{/if}{item.connection.host}
                     </div>
                   </div>
@@ -650,7 +645,7 @@
           {/each}
         {:else}
           {#if !$isSidebarCollapsed}
-            <div class="flex flex-col items-center justify-center py-10 text-slate-400 dark:text-slate-500">
+            <div class="flex flex-col items-center justify-center py-10 text-app-text-secondary">
               <p class="text-sm">无历史记录</p>
             </div>
           {/if}
@@ -660,115 +655,131 @@
 
   {#if contextMenu.show}
     <div
-      class="fixed bg-white dark:bg-gray-800 border border-slate-200 dark:border-gray-700 rounded shadow-lg py-1 z-50 text-sm min-w-[180px]"
+      class="fixed z-50 w-48 bg-app-surface border border-app-border rounded-lg shadow-xl py-1"
       style="top: {contextMenu.y}px; left: {contextMenu.x}px"
-      role="menu"
-      tabindex="-1"
-      on:click|stopPropagation={() => {}}
-      on:keydown|stopPropagation={() => {}}
     >
       {#if contextMenuConnectionRow}
         <button
-          class="w-full text-left px-4 py-2 hover:bg-slate-100 dark:hover:bg-gray-700 text-slate-700 dark:text-gray-200"
-          on:click|stopPropagation={() => { closeContextMenu(); handleConnect(contextMenuConnectionRow.connection); }}
+          class="w-full text-left px-4 py-2 text-sm text-app-text hover:bg-app-bg-hover flex items-center gap-2"
+          on:click={() => {
+            closeContextMenu();
+            handleConnect(contextMenuConnectionRow.connection);
+          }}
         >
+          <div class="w-4 h-4 flex items-center justify-center">
+             <ActivityIcon class="w-3.5 h-3.5" />
+          </div>
           连接
         </button>
         {#if activeConnectionIds.has(contextMenuConnectionRow.connection.id)}
           <button
-            class="w-full text-left px-4 py-2 hover:bg-slate-100 dark:hover:bg-gray-700 text-slate-700 dark:text-gray-200"
+            class="w-full text-left px-4 py-2 text-sm text-app-text hover:bg-app-bg-hover flex items-center gap-2"
             on:click|stopPropagation={() => { closeContextMenu(); handleDisconnect(contextMenuConnectionRow.connection); }}
           >
+            <div class="w-4 h-4"></div>
             断开连接
           </button>
           <button
-            class="w-full text-left px-4 py-2 hover:bg-slate-100 dark:hover:bg-gray-700 text-slate-700 dark:text-gray-200"
+            class="w-full text-left px-4 py-2 text-sm text-app-text hover:bg-app-bg-hover flex items-center gap-2"
             on:click|stopPropagation={(e) => { closeContextMenu(); openMonitor(contextMenuConnectionRow.connection, e as any); }}
           >
+            <div class="w-4 h-4 flex items-center justify-center">
+               <ActivityIcon class="w-3.5 h-3.5" />
+            </div>
             系统监控
           </button>
         {/if}
-        <div class="border-t border-slate-200 dark:border-gray-700 my-1"></div>
+        <div class="my-1 border-t border-app-border"></div>
         <button
-          class="w-full text-left px-4 py-2 hover:bg-slate-100 dark:hover:bg-gray-700 text-slate-700 dark:text-gray-200"
+          class="w-full text-left px-4 py-2 text-sm text-app-text hover:bg-app-bg-hover flex items-center gap-2"
           on:click|stopPropagation={(e) => { closeContextMenu(); handleEdit(contextMenuConnectionRow.connection, e as any); }}
         >
+          <div class="w-4 h-4 flex items-center justify-center">
+            <SettingsIcon class="w-3.5 h-3.5" />
+          </div>
           编辑
         </button>
         <button
-          class="w-full text-left px-4 py-2 hover:bg-slate-100 dark:hover:bg-gray-700 text-red-600 dark:text-red-400 hover:text-red-500 dark:hover:text-red-300"
+          class="w-full text-left px-4 py-2 text-sm text-red-500 hover:bg-app-bg-hover flex items-center gap-2"
           on:click|stopPropagation={(e) => { closeContextMenu(); handleDelete(contextMenuConnectionRow.connection.id, e as any); }}
         >
+          <div class="w-4 h-4 flex items-center justify-center">
+            <TrashIcon class="w-3.5 h-3.5" />
+          </div>
           删除
         </button>
       {:else if contextMenuFolderRow}
-        <button
-          class="w-full text-left px-4 py-2 hover:bg-slate-100 dark:hover:bg-gray-700 text-slate-700 dark:text-gray-200"
-          on:click|stopPropagation={() => { closeContextMenu(); toggleFolder(contextMenuFolderRow.path); }}
+         <button
+          class="w-full text-left px-4 py-2 text-sm text-red-500 hover:bg-app-bg-hover flex items-center gap-2"
+          on:click={() => {
+            closeContextMenu();
+            deleteGroup(contextMenuFolderRow.path);
+          }}
         >
-          {expandedPaths.has(contextMenuFolderRow.path) ? '折叠' : '展开'}
-        </button>
-        <button
-          class="w-full text-left px-4 py-2 hover:bg-slate-100 dark:hover:bg-gray-700 text-red-600 dark:text-red-400 hover:text-red-500 dark:hover:text-red-300"
-          on:click|stopPropagation={() => { closeContextMenu(); deleteGroup(contextMenuFolderRow.path); }}
-        >
+          <div class="w-4 h-4 flex items-center justify-center">
+            <TrashIcon class="w-3.5 h-3.5" />
+          </div>
           删除分组
         </button>
       {:else}
-        <button
-          class="w-full text-left px-4 py-2 hover:bg-slate-100 dark:hover:bg-gray-700 text-slate-700 dark:text-gray-200"
-          on:click|stopPropagation={() => { closeContextMenu(); editingConnection.set(null); showConnectionForm.set(true); }}
+         <button
+          class="w-full text-left px-4 py-2 text-sm text-app-text hover:bg-app-bg-hover flex items-center gap-2"
+          on:click={() => {
+            closeContextMenu();
+            editingConnection.set(null);
+            showConnectionForm.set(true);
+          }}
         >
+          <div class="w-4 h-4 flex items-center justify-center">
+             <PlusIcon class="w-3.5 h-3.5" />
+          </div>
           新建连接
         </button>
-        <button
-          class="w-full text-left px-4 py-2 hover:bg-slate-100 dark:hover:bg-gray-700 text-slate-700 dark:text-gray-200"
-          on:click|stopPropagation={() => { closeContextMenu(); createNewGroup(); }}
+         <button
+          class="w-full text-left px-4 py-2 text-sm text-app-text hover:bg-app-bg-hover flex items-center gap-2"
+          on:click={() => {
+            closeContextMenu();
+            createNewGroup();
+          }}
         >
+          <div class="w-4 h-4 flex items-center justify-center">
+             <FolderIcon class="w-3.5 h-3.5" />
+          </div>
           新建分组
-        </button>
-        <div class="border-t border-slate-200 dark:border-gray-700 my-1"></div>
-        <button
-          class="w-full text-left px-4 py-2 hover:bg-slate-100 dark:hover:bg-gray-700 text-slate-700 dark:text-gray-200"
-          on:click|stopPropagation={() => { closeContextMenu(); importConnections(); }}
-        >
-          导入配置
-        </button>
-        <button
-          class="w-full text-left px-4 py-2 hover:bg-slate-100 dark:hover:bg-gray-700 text-slate-700 dark:text-gray-200"
-          on:click|stopPropagation={() => { closeContextMenu(); exportConnections(); }}
-        >
-          导出配置
         </button>
       {/if}
     </div>
   {/if}
 
   <!-- Sidebar Footer -->
-  <div class="p-4 border-t border-slate-200 dark:border-slate-800 flex flex-col gap-2">
+  <div class="{$isSidebarCollapsed ? 'p-2' : 'p-4'} border-t border-app-border flex flex-col gap-2">
     <button 
-      class="flex items-center {$isSidebarCollapsed ? 'justify-center' : 'gap-2'} text-sm text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 transition-colors w-full px-2 py-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800"
+      class="flex items-center {$isSidebarCollapsed ? 'justify-center' : 'gap-2'} text-sm {$isRightSidebarOpen ? 'text-primary-600 dark:text-primary-400 bg-primary-50 dark:bg-primary-900/20' : 'text-app-text-secondary hover:text-app-text hover:bg-app-bg-hover'} transition-colors w-full px-2 py-1.5 rounded-lg"
+      on:click={() => isRightSidebarOpen.update(v => !v)}
+      title="文件浏览器"
+    >
+      <FolderIcon class="w-5 h-5" />
+      {#if !$isSidebarCollapsed}
+        <span>文件</span>
+      {/if}
+    </button>
+    
+    <button 
+      class="flex items-center {$isSidebarCollapsed ? 'justify-center' : 'gap-2'} text-sm text-app-text-secondary hover:text-app-text hover:bg-app-bg-hover transition-colors w-full px-2 py-1.5 rounded-lg"
       on:click={() => showSettings.set(true)}
       title="设置"
     >
-      <SettingsIcon class="w-4 h-4" />
+      <SettingsIcon class="w-5 h-5" />
       {#if !$isSidebarCollapsed}
         <span>设置</span>
       {/if}
     </button>
     
-    <button 
-      class="flex items-center {$isSidebarCollapsed ? 'justify-center' : 'gap-2'} text-sm text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 transition-colors w-full px-2 py-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 mt-1"
-      on:click={toggleSidebar}
-      title={$isSidebarCollapsed ? "展开侧边栏" : "折叠侧边栏"}
-    >
-      {#if $isSidebarCollapsed}
-        <ChevronRightIcon class="w-4 h-4" />
-      {:else}
-        <ChevronLeftIcon class="w-4 h-4" />
-        <span>折叠侧边栏</span>
+    <div class="text-xs text-app-text-secondary text-center mt-1 opacity-50">
+      {#if !$isSidebarCollapsed}
+        v0.1.0
       {/if}
-    </button>
+    </div>
   </div>
 </aside>
 

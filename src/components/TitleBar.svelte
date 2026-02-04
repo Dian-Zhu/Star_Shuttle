@@ -54,7 +54,7 @@
 <style>
   .titlebar {
     height: 30px;
-    background: var(--color-surface);
+    background: var(--color-bg);
     user-select: none;
     display: flex;
     align-items: center;
@@ -64,7 +64,7 @@
     left: 0;
     right: 0;
     z-index: 1000;
-    border-bottom: 1px solid var(--color-border);
+    border-bottom: 1px solid var(--color-sidebar-border);
     color: var(--color-text-secondary);
     -webkit-app-region: drag;
     pointer-events: none;

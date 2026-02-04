@@ -8,6 +8,7 @@
     connections, 
     editingConnection,
     isSidebarCollapsed,
+    isRightSidebarOpen,
     settings as appSettings
   } from '../lib/store';
   import { connectAndOpen } from '../lib/terminalService';
@@ -59,6 +60,16 @@
         isSidebarCollapsed.update(v => !v);
       },
       shortcut: $appSettings.shortcuts.toggleSidebar
+    },
+    {
+      id: 'toggle-file-browser',
+      title: '切换文件浏览器面板',
+      description: '显示或隐藏右侧文件浏览器面板',
+      category: 'General',
+      action: () => {
+        isRightSidebarOpen.update(v => !v);
+      },
+      shortcut: $appSettings.shortcuts.toggleFileBrowser
     },
     {
       id: 'open-settings',
@@ -153,10 +164,10 @@
     const alt = parts.includes('alt') || parts.includes('option');
     const meta = parts.includes('meta') || parts.includes('cmd') || parts.includes('command');
 
-    if (ctrl && !event.ctrlKey) return false;
-    if (shift && !event.shiftKey) return false;
-    if (alt && !event.altKey) return false;
-    if (meta && !event.metaKey) return false;
+    if (ctrl !== event.ctrlKey) return false;
+    if (shift !== event.shiftKey) return false;
+    if (alt !== event.altKey) return false;
+    if (meta !== event.metaKey) return false;
 
     const eventKey = event.key.toLowerCase();
     if (eventKey === key) return true;
@@ -193,6 +204,13 @@
       e.preventDefault();
       e.stopPropagation();
       executeCommand(allCommands.find(c => c.id === 'toggle-sidebar'));
+      return;
+    }
+
+    if (checkShortcut(e, shortcuts.toggleFileBrowser)) {
+      e.preventDefault();
+      e.stopPropagation();
+      executeCommand(allCommands.find(c => c.id === 'toggle-file-browser'));
       return;
     }
 
@@ -245,19 +263,19 @@
 
 <div 
   bind:this={container}
-  class="fixed inset-0 z-50 flex items-start justify-center pt-[15vh] bg-slate-900/20 dark:bg-black/50 backdrop-blur-sm transition-all"
+  class="fixed inset-0 z-50 flex items-start justify-center pt-[15vh] bg-black/20 dark:bg-black/50 backdrop-blur-sm transition-all"
   on:click={handleBackdropClick}
   on:keydown={() => {}} 
   role="presentation"
   transition:fade={{ duration: 150 }}
 >
   <div 
-    class="w-full max-w-2xl bg-white dark:bg-slate-900 rounded-xl shadow-2xl border border-slate-200 dark:border-slate-800 flex flex-col overflow-hidden max-h-[60vh]"
+    class="w-full max-w-2xl bg-app-surface rounded-xl shadow-2xl border border-app-border flex flex-col overflow-hidden max-h-[60vh]"
     transition:fly={{ y: -20, duration: 200 }}
   >
     <!-- Search Input -->
-    <div class="p-3 border-b border-slate-200 dark:border-slate-800 flex items-center gap-3">
-      <svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <div class="p-3 border-b border-app-border flex items-center gap-3">
+      <svg class="w-5 h-5 text-app-text-secondary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
       </svg>
       <input
@@ -266,34 +284,34 @@
         on:keydown={handleKeydown}
         type="text"
         placeholder="搜索命令或连接..."
-        class="flex-1 bg-transparent border-none outline-none text-slate-800 dark:text-slate-100 text-lg placeholder-slate-400"
+        class="flex-1 bg-transparent border-none outline-none text-app-text text-lg placeholder-app-text-secondary/50"
         autocomplete="off"
       />
       <div class="flex gap-1">
-        <kbd class="px-2 py-1 bg-slate-100 dark:bg-slate-800 rounded text-xs text-slate-500 border border-slate-200 dark:border-slate-700">ESC</kbd>
+        <kbd class="px-2 py-1 bg-app-bg rounded text-xs text-app-text-secondary border border-app-border">ESC</kbd>
       </div>
     </div>
 
     <!-- Command List -->
     <div 
       id="command-list"
-      class="flex-1 overflow-y-auto p-2 scrollbar-thin scrollbar-thumb-slate-300 dark:scrollbar-thumb-slate-700"
+      class="flex-1 overflow-y-auto p-2 scrollbar-thin scrollbar-thumb-app-border"
     >
       {#if filteredCommands.length === 0}
-        <div class="p-8 text-center text-slate-500 dark:text-slate-400">
+        <div class="p-8 text-center text-app-text-secondary">
           <p>未找到匹配的命令</p>
         </div>
       {:else}
         {#each filteredCommands as command, index}
           <button
             id="command-item-{index}"
-            class="w-full text-left px-4 py-3 rounded-lg flex items-center justify-between group transition-colors {index === selectedIndex ? 'bg-blue-50 dark:bg-blue-900/20' : 'hover:bg-slate-50 dark:hover:bg-slate-800/50'}"
+            class="w-full text-left px-4 py-3 rounded-lg flex items-center justify-between group transition-colors {index === selectedIndex ? 'bg-primary-50 dark:bg-primary-900/20' : 'hover:bg-app-bg-hover'}"
             on:click={() => executeCommand(command)}
             on:mousemove={() => selectedIndex = index}
           >
             <div class="flex items-center gap-3 overflow-hidden">
               {#if command.icon}
-                <div class="{index === selectedIndex ? 'text-blue-600 dark:text-blue-400' : 'text-slate-400 dark:text-slate-500'}">
+                <div class="{index === selectedIndex ? 'text-primary-600 dark:text-primary-400' : 'text-app-text-secondary'}">
                   <svelte:component this={command.icon} class="w-5 h-5" />
                 </div>
               {:else}
@@ -301,11 +319,11 @@
               {/if}
               
               <div class="flex flex-col overflow-hidden">
-                <span class="font-medium text-slate-800 dark:text-slate-200 truncate {index === selectedIndex ? 'text-blue-700 dark:text-blue-300' : ''}">
+                <span class="font-medium text-app-text truncate {index === selectedIndex ? 'text-primary-700 dark:text-primary-300' : ''}">
                   {command.title}
                 </span>
                 {#if command.description}
-                  <span class="text-xs text-slate-500 dark:text-slate-400 truncate">
+                  <span class="text-xs text-app-text-secondary truncate">
                     {command.description}
                   </span>
                 {/if}
@@ -314,12 +332,12 @@
 
             <div class="flex items-center gap-3">
               {#if command.category}
-                <span class="text-xs px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-slate-700">
+                <span class="text-xs px-2 py-0.5 rounded-full bg-app-bg text-app-text-secondary border border-app-border">
                   {command.category}
                 </span>
               {/if}
               {#if command.shortcut}
-                <span class="text-xs font-mono text-slate-400">
+                <span class="text-xs font-mono text-app-text-secondary">
                   {command.shortcut}
                 </span>
               {/if}
@@ -329,7 +347,7 @@
       {/if}
     </div>
     
-    <div class="px-4 py-2 bg-slate-50 dark:bg-slate-800/50 border-t border-slate-200 dark:border-slate-800 text-xs text-slate-400 flex justify-between">
+    <div class="px-4 py-2 bg-app-bg border-t border-app-border text-xs text-app-text-secondary flex justify-between">
       <div class="flex gap-4">
         <span><kbd>↑</kbd> <kbd>↓</kbd> 导航</span>
         <span><kbd>Enter</kbd> 选择</span>

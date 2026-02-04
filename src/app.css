@@ -3,20 +3,22 @@
 @tailwind utilities;
 
 :root {
-  --color-bg: #0f172a;
-  --color-surface: #1e293b;
-  --color-surface-light: #334155;
+  --color-bg: #ffffff;
+  --color-surface: #f1f5f9;
+  --color-status-bar: #f1f5f9;
+  --color-surface-light: #e2e8f0;
   --color-primary: #3b82f6;
   --color-primary-hover: #2563eb;
-  --color-text: #f8fafc;
-  --color-text-secondary: #94a3b8;
-  --color-border: #475569;
-  --color-border-light: #64748b;
+  --color-text: #0f172a;
+  --color-text-secondary: #64748b;
+  --color-border: #cbd5e1;
+  --color-border-light: #94a3b8;
+  --color-sidebar-border: #e2e8f0;
 
   /* Scrollbar colors */
-  --scrollbar-track: rgba(255, 255, 255, 0.05);
-  --scrollbar-thumb: rgba(255, 255, 255, 0.2);
-  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.3);
+  --scrollbar-track: rgba(0, 0, 0, 0.05);
+  --scrollbar-thumb: rgba(0, 0, 0, 0.15);
+  --scrollbar-thumb-hover: rgba(0, 0, 0, 0.25);
   --terminal-bg: #0f172a;
 
   font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Microsoft YaHei', 'PingFang SC', 'Hiragino Sans GB', sans-serif;
@@ -27,20 +29,24 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
-[data-theme="light"] {
-  --color-bg: #ffffff;
-  --color-surface: #f1f5f9;
-  --color-surface-light: #e2e8f0;
-  /* Primary colors can remain the same or be adjusted if needed */
-  --color-text: #0f172a;
-  --color-text-secondary: #64748b;
-  --color-border: #cbd5e1;
-  --color-border-light: #94a3b8;
+.dark {
+  --color-bg: #0f172a;
+  --color-surface: #1e293b;
+  --color-status-bar: #1e293b;
+  --color-surface-light: #334155;
+  --color-primary: #3b82f6;
+  --color-primary-hover: #2563eb;
+  --color-text: #f8fafc;
+  --color-text-secondary: #94a3b8;
+  --color-border: #475569;
+  --color-border-light: #64748b;
+  --color-sidebar-border: #1e293b;
 
-  /* Light theme scrollbar colors */
-  --scrollbar-track: rgba(0, 0, 0, 0.05);
-  --scrollbar-thumb: rgba(0, 0, 0, 0.15);
-  --scrollbar-thumb-hover: rgba(0, 0, 0, 0.25);
+  /* Scrollbar colors */
+  --scrollbar-track: rgba(255, 255, 255, 0.05);
+  --scrollbar-thumb: rgba(255, 255, 255, 0.2);
+  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.3);
+  --terminal-bg: #0f172a;
 }
 
 * {
@@ -106,6 +112,7 @@ body {
 .xterm-screen {
   width: 100% !important;
   height: 100% !important;
+  background-color: transparent !important;
 }
 
 .xterm-rows {

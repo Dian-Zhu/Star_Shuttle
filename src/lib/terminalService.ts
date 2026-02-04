@@ -108,13 +108,27 @@ export function markTerminalStopped(sessionId: string) {
 export function applyScrollbarColor(appSettings: AppSettings): void {
   log.info('Scrollbar', 'Updating scrollbar colors for terminal');
   const theme = getXtermTheme(appSettings);
-  const terminalBg = theme.background || '#0f172a';
+  let terminalBg = theme.background || '#0f172a';
+  
+  // If background image is present, force terminal background to be transparent
+  // This ensures the background image behind the terminal is visible
+  if (appSettings.appearance?.backgroundImage) {
+    terminalBg = 'rgba(0,0,0,0)';
+  }
 
   // Update terminal background color
   document.documentElement.style.setProperty('--terminal-bg', terminalBg);
 
   // Calculate scrollbar colors based on terminal background brightness
-  const brightness = calculateBrightness(terminalBg);
+  let brightness = 0;
+  
+  if (terminalBg === 'transparent') {
+    // For transparent background, assume dark background (light scrollbars)
+    // or we could try to analyze the image, but that's too complex.
+    brightness = 0; 
+  } else {
+    brightness = calculateBrightness(terminalBg);
+  }
 
   if (brightness < 128) {
     // Dark background
@@ -504,6 +518,7 @@ export async function initTerminal(container: HTMLElement, sessionId: string, co
       theme: getXtermTheme(appSettings),
       scrollback: appSettings.terminal.scrollback,
       allowProposedApi: true,
+      allowTransparency: true, // Enable transparency for background images
       convertEol: true, // Enable EOL conversion to fix line endings
       // xterm 6.0: Performance optimizations
       altClickMovesCursor: true, // Better UX
@@ -677,6 +692,7 @@ export async function initDetachedTerminal(container: HTMLElement, sessionId: st
       theme: getXtermTheme(appSettings),
       scrollback: appSettings.terminal.scrollback,
       allowProposedApi: true,
+      allowTransparency: true, // Enable transparency for background images
       convertEol: true,
       altClickMovesCursor: true,
       scrollSensitivity: 1,

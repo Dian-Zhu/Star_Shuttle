@@ -3,6 +3,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
   import Sidebar from './Sidebar.svelte';
+  import RightSidebar from './RightSidebar.svelte';
   import TitleBar from './TitleBar.svelte';
   import TerminalManager from './TerminalManager.svelte';
   import ConnectionModal from './ConnectionModal.svelte';
@@ -10,9 +11,10 @@
   import CommandPalette from './CommandPalette.svelte';
   import AppLockOverlay from './AppLockOverlay.svelte';
   import AdvancedModal from './AdvancedModal.svelte';
-  import { showConnectionForm, editingConnection, showSettings, successMessage, errorMessage, settings, isSidebarCollapsed, activeTerminals, selectedTerminalIndex, showCommandPalette, isLocked, showAdvancedModal } from '../lib/store';
+  import { showConnectionForm, editingConnection, showSettings, successMessage, errorMessage, settings, isSidebarCollapsed, isRightSidebarOpen, activeTerminals, selectedTerminalIndex, showCommandPalette, isLocked, showAdvancedModal } from '../lib/store';
   import { closeAllTerminals, closeTerminal, restoreActiveSessions } from '../lib/terminalService';
   import { loadConnections } from '../lib/connectionService';
+  import { themeColors, type ThemeColorKey } from '../lib/themeColors';
   import { fade, fly } from 'svelte/transition';
 
   let isCheckingLock = true;
@@ -75,13 +77,52 @@
   function updateTheme() {
     const theme = $settings.theme;
     const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    const root = document.documentElement;
+
+    // Clear custom properties
+    const customProps = [
+        '--color-bg', '--color-surface', '--color-surface-light', 
+        '--color-status-bar', '--color-text', '--color-text-secondary', 
+        '--color-border', '--color-border-light',
+        '--color-sidebar-border'
+    ];
+    customProps.forEach(p => root.style.removeProperty(p));
     
-    if (theme === 'dark' || (theme === 'system' && systemDark)) {
-      document.documentElement.classList.add('dark');
+    if (theme === 'custom') {
+       const custom = $settings.appearance.customUITheme;
+       if (custom) {
+           root.style.setProperty('--color-bg', custom.backgroundColor);
+           root.style.setProperty('--color-surface', custom.surfaceColor);
+           root.style.setProperty('--color-status-bar', custom.statusBarColor || custom.surfaceColor);
+           root.style.setProperty('--color-surface-light', custom.surfaceLightColor);
+           root.style.setProperty('--color-text', custom.textColor);
+           root.style.setProperty('--color-text-secondary', custom.secondaryTextColor);
+           root.style.setProperty('--color-border', custom.borderColor);
+           root.style.setProperty('--color-border-light', custom.borderLightColor);
+           root.style.setProperty('--color-sidebar-border', custom.borderColor);
+       }
+       // Default to dark mode base for custom theme
+       root.classList.add('dark');
+    } else if (theme === 'dark' || (theme === 'system' && systemDark)) {
+      root.classList.add('dark');
     } else {
-      document.documentElement.classList.remove('dark');
+      root.classList.remove('dark');
     }
   }
+
+  function updateAccentColor() {
+    const colorKey = ($settings.appearance.accentColor || 'blue') as ThemeColorKey;
+    const colors = themeColors[colorKey] || themeColors.blue;
+    
+    const root = document.documentElement;
+    Object.entries(colors).forEach(([shade, value]) => {
+      root.style.setProperty(`--color-primary-${shade}`, value);
+    });
+  }
+
+  // React to theme setting changes
+  $: $settings.theme, $settings.appearance.customUITheme, updateTheme();
+  $: $settings.appearance.accentColor, updateAccentColor();
 
   onMount(() => {
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
@@ -92,6 +133,8 @@
     };
     
     mediaQuery.addEventListener('change', handleSystemThemeChange);
+    
+    updateAccentColor(); // Initial accent color application
 
     (async () => {
       try {
@@ -150,9 +193,6 @@
     };
   });
 
-  // React to theme setting changes
-  $: $settings.theme, updateTheme();
-
   async function handleWindowBlur() {
     // Only lock if enabled and not already locked
     if ($settings.security.lockOnBlur && !$isLocked) {
@@ -208,10 +248,10 @@
     const alt = parts.includes('alt') || parts.includes('option');
     const meta = parts.includes('meta') || parts.includes('cmd') || parts.includes('command');
 
-    if (ctrl && !event.ctrlKey) return false;
-    if (shift && !event.shiftKey) return false;
-    if (alt && !event.altKey) return false;
-    if (meta && !event.metaKey) return false;
+    if (ctrl !== event.ctrlKey) return false;
+    if (shift !== event.shiftKey) return false;
+    if (alt !== event.altKey) return false;
+    if (meta !== event.metaKey) return false;
 
     // Check key
     // event.code is like 'KeyN', 'BracketLeft'. shortcut key usually is 'n', '[', etc.
@@ -239,6 +279,13 @@
     if (checkShortcut(event, shortcuts.toggleSidebar)) {
       event.preventDefault();
       isSidebarCollapsed.update(v => !v);
+      return;
+    }
+
+    // Toggle File Browser
+    if (checkShortcut(event, shortcuts.toggleFileBrowser)) {
+      event.preventDefault();
+      isRightSidebarOpen.update(v => !v);
       return;
     }
 
@@ -290,42 +337,50 @@
 <svelte:window on:keydown={handleKeydown} />
 
 {#if isCheckingLock}
-  <div class="h-screen w-screen flex items-center justify-center bg-slate-950 text-slate-400">
+  <div class="h-screen w-screen flex items-center justify-center bg-app-bg text-app-text-secondary">
     <div class="flex flex-col items-center gap-4">
-      <div class="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+      <div class="w-12 h-12 border-4 border-primary-600 border-t-transparent rounded-full animate-spin"></div>
       <p>Loading...</p>
     </div>
   </div>
 {:else}
-  <div class="h-screen w-screen flex bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-200 overflow-hidden font-sans antialiased selection:bg-blue-500/30 relative pt-[30px]">
+  <div class="h-screen w-screen flex bg-app-bg text-app-text overflow-hidden font-sans antialiased selection:bg-blue-500/30 relative pt-[30px]">
     <TitleBar />
     <Sidebar />
     
-    <main class="flex-1 flex flex-col min-w-0 relative">
-      <TerminalManager />
-      
-      <!-- Toast Messages -->
-      <div class="fixed top-12 right-4 z-[1000] flex flex-col gap-2 pointer-events-none">
-        {#if $successMessage}
-          <div 
-            transition:fly={{ y: -20, duration: 300 }}
-            class="bg-green-500/10 border border-green-500/20 text-green-400 px-4 py-3 rounded-lg shadow-xl backdrop-blur-md flex items-center gap-2 pointer-events-auto min-w-[300px]"
-          >
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
-            <span class="text-sm font-medium">{$successMessage}</span>
-          </div>
-        {/if}
+    <main class="flex-1 flex overflow-hidden relative">
+      <div class="flex-1 flex flex-col min-w-0 relative">
+        <TerminalManager />
         
-        {#if $errorMessage}
-          <div 
-            transition:fly={{ y: -20, duration: 300 }}
-            class="bg-red-500/10 border border-red-500/20 text-red-400 px-4 py-3 rounded-lg shadow-xl backdrop-blur-md flex items-center gap-2 pointer-events-auto min-w-[300px]"
-          >
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-            <span class="text-sm font-medium">{$errorMessage}</span>
-          </div>
-        {/if}
+        <!-- Toast Messages -->
+        <div class="fixed top-12 right-4 z-[1000] flex flex-col gap-2 pointer-events-none">
+          {#if $successMessage}
+            <div 
+              transition:fly={{ y: -20, duration: 300 }}
+              class="bg-green-500/10 border border-green-500/20 text-green-400 px-4 py-3 rounded-lg shadow-xl backdrop-blur-md flex items-center gap-2 pointer-events-auto min-w-[300px]"
+            >
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+              <span class="text-sm font-medium">{$successMessage}</span>
+            </div>
+          {/if}
+          
+          {#if $errorMessage}
+            <div 
+              transition:fly={{ y: -20, duration: 300 }}
+              class="bg-red-500/10 border border-red-500/20 text-red-400 px-4 py-3 rounded-lg shadow-xl backdrop-blur-md flex items-center gap-2 pointer-events-auto min-w-[300px]"
+            >
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+              <span class="text-sm font-medium">{$errorMessage}</span>
+            </div>
+          {/if}
+        </div>
       </div>
+
+      {#if $isRightSidebarOpen}
+        <div transition:fly={{ x: $settings.ui.rightSidebarWidth || 400, duration: 200 }} class="h-full flex-shrink-0 z-20 shadow-lg">
+          <RightSidebar />
+        </div>
+      {/if}
     </main>
   </div>
 {/if}
@@ -355,19 +410,19 @@
 {/if}
 
 {#if keyboardInteractiveActive}
-  <div class="fixed inset-0 z-[60] flex items-center justify-center bg-slate-500/50 dark:bg-slate-900/60 backdrop-blur-sm">
-    <div class="w-full max-w-lg rounded-xl border border-slate-200/50 dark:border-slate-800/50 bg-white dark:bg-slate-950 shadow-2xl p-6">
+  <div class="fixed inset-0 z-[60] flex items-center justify-center bg-app-backdrop backdrop-blur-sm">
+    <div class="w-full max-w-lg rounded-xl border border-app-border bg-app-surface shadow-2xl p-6">
       <div class="flex items-start justify-between gap-4">
         <div class="min-w-0">
-          <div class="text-sm font-medium text-slate-900 dark:text-slate-200">
+          <div class="text-sm font-medium text-app-text">
             交互式认证
           </div>
-          <div class="text-xs text-slate-500 dark:text-slate-400 mt-1">
+          <div class="text-xs text-app-text-secondary mt-1">
             {keyboardInteractiveActive.host}:{keyboardInteractiveActive.port} / {keyboardInteractiveActive.username}
           </div>
         </div>
         <button
-          class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors"
+          class="text-app-text-secondary hover:text-app-text transition-colors p-1 rounded-md hover:bg-app-bg-hover"
           aria-label="取消"
           on:click={cancelKeyboardInteractive}
           disabled={keyboardInteractiveSubmitting}
@@ -379,10 +434,10 @@
       {#if keyboardInteractiveActive.name || keyboardInteractiveActive.instructions}
         <div class="mt-4 space-y-1">
           {#if keyboardInteractiveActive.name}
-            <div class="text-sm text-slate-700 dark:text-slate-300">{keyboardInteractiveActive.name}</div>
+            <div class="text-sm text-app-text">{keyboardInteractiveActive.name}</div>
           {/if}
           {#if keyboardInteractiveActive.instructions}
-            <div class="text-xs text-slate-500 dark:text-slate-400 whitespace-pre-wrap">{keyboardInteractiveActive.instructions}</div>
+            <div class="text-xs text-app-text-secondary whitespace-pre-wrap">{keyboardInteractiveActive.instructions}</div>
           {/if}
         </div>
       {/if}
@@ -391,7 +446,7 @@
         {#each keyboardInteractiveActive.prompts as p, i (i)}
           <div>
             <label
-              class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5"
+              class="block text-xs font-medium text-app-text-secondary mb-1.5"
               for={`keyboard-interactive-${keyboardInteractiveActive.request_id}-${i}`}
             >
               {p.prompt}
@@ -400,7 +455,7 @@
               id={`keyboard-interactive-${keyboardInteractiveActive.request_id}-${i}`}
               type={p.echo ? 'text' : 'password'}
               bind:value={keyboardInteractiveResponses[i]}
-              class="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-200 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all"
+              class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all"
               autocomplete="off"
             />
           </div>
@@ -409,14 +464,14 @@
 
       <div class="mt-6 flex items-center justify-end gap-3">
         <button
-          class="px-4 py-2 rounded-lg border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-900 transition-colors disabled:opacity-50"
+          class="px-4 py-2 rounded-lg border border-app-border text-app-text-secondary hover:text-app-text bg-app-bg hover:bg-app-bg-hover transition-colors disabled:opacity-50"
           on:click={cancelKeyboardInteractive}
           disabled={keyboardInteractiveSubmitting}
         >
           取消
         </button>
         <button
-          class="px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-500 transition-colors disabled:opacity-50"
+          class="px-4 py-2 rounded-lg bg-primary-600 text-white hover:bg-primary-500 transition-colors disabled:opacity-50"
           on:click={submitKeyboardInteractive}
           disabled={keyboardInteractiveSubmitting}
         >

@@ -47,18 +47,17 @@
       dispatch('split', { ...e.detail, targetId: paneId });
   }
 
-  function handlePaneClose(e: CustomEvent, paneId: string) {
+  function handlePaneClose(_e: CustomEvent, paneId: string) {
       dispatch('closePane', { targetId: paneId });
   }
 
-  function handlePaneActive(e: CustomEvent, paneId: string) {
+  function handlePaneActive(_e: CustomEvent, paneId: string) {
       dispatch('activePane', { targetId: paneId });
   }
 </script>
 
 {#if node.type === 'pane'}
   <TerminalPane 
-    id={node.id}
     sessionId={node.sessionId}
     connection={node.connection}
     isRoot={node.isRoot}
@@ -70,7 +69,6 @@
     on:split={(e) => handlePaneSplit(e, node.id)}
     on:close={(e) => handlePaneClose(e, node.id)}
     on:active={(e) => handlePaneActive(e, node.id)}
-    on:rearrange
   />
 {:else}
   <div 
@@ -87,14 +85,14 @@
         on:split
         on:closePane
         on:activePane
-        on:rearrange
       />
     </div>
 
     <!-- Splitter Handle -->
     <button
       type="button"
-      class="bg-slate-200 dark:bg-slate-700 hover:bg-blue-500 dark:hover:bg-blue-500 transition-colors z-10 p-0 border-0 shrink-0"
+      aria-label="调整分割"
+      class="bg-app-border hover:bg-primary-500 transition-colors z-10 p-0 border-0 shrink-0"
       style:width={node.direction === 'vertical' ? '4px' : '100%'}
       style:height={node.direction === 'horizontal' ? '4px' : '100%'}
       style:cursor={node.direction === 'horizontal' ? 'row-resize' : 'col-resize'}

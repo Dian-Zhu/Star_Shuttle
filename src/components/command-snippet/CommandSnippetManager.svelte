@@ -114,15 +114,15 @@
   });
 </script>
 
-<div class="p-4 bg-white dark:bg-slate-900 text-slate-900 dark:text-white h-full transition-colors duration-200">
+<div class="p-4 bg-app-bg text-app-text h-full transition-colors duration-200">
   <!-- Header -->
   <div class="flex justify-between items-center mb-6">
     <div>
       <h2 class="text-2xl font-bold">快捷命令片段库</h2>
-      <p class="text-slate-500 dark:text-slate-400 text-sm mt-1">存储和管理常用命令模板，支持参数化</p>
+      <p class="text-app-text-secondary text-sm mt-1">存储和管理常用命令模板，支持参数化</p>
     </div>
     <button
-      class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded font-medium shadow-sm transition-colors"
+      class="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded font-medium shadow-sm transition-colors"
       on:click={startAdd}
     >
       添加新片段
@@ -132,61 +132,61 @@
   <!-- Form Modal -->
   {#if showForm}
     <div class="fixed inset-0 bg-slate-900/50 dark:bg-black/70 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
-      <div class="bg-white dark:bg-slate-800 rounded-lg shadow-xl w-full max-w-2xl border border-slate-200 dark:border-slate-700">
+      <div class="bg-app-surface rounded-lg shadow-xl w-full max-w-2xl border border-app-border">
         <div class="p-6">
-          <h3 class="text-xl font-bold mb-4 text-slate-900 dark:text-white">
+          <h3 class="text-xl font-bold mb-4 text-app-text">
             {editingSnippet ? '编辑命令片段' : '新建命令片段'}
           </h3>
           <div class="space-y-4">
             <div>
-              <label for="snippet-name" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">名称 *</label>
+              <label for="snippet-name" class="block text-sm font-medium text-app-text mb-1">名称 *</label>
               <input
                 id="snippet-name"
                 type="text"
-                class="w-full bg-slate-50 dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded px-3 py-2 text-slate-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
+                class="w-full bg-app-bg border border-app-border rounded px-3 py-2 text-app-text focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none transition-all"
                 bind:value={name}
                 placeholder="例如：重启 Nginx"
               />
             </div>
             <div>
-              <label for="snippet-command" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">命令 *</label>
+              <label for="snippet-command" class="block text-sm font-medium text-app-text mb-1">命令 *</label>
               <textarea
                 id="snippet-command"
-                class="w-full bg-slate-50 dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded px-3 py-2 text-slate-900 dark:text-white font-mono text-sm h-32 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
+                class="w-full bg-app-bg border border-app-border rounded px-3 py-2 text-app-text font-mono text-sm h-32 focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none transition-all"
                 bind:value={command}
                 placeholder="例如：sudo systemctl restart nginx"
               ></textarea>
-              <p class="text-slate-500 dark:text-slate-400 text-xs mt-1">
+              <p class="text-app-text-secondary text-xs mt-1">
                 使用 {'{{'}variable{'}}'} 作为参数占位符，例如：cd {'{{'}path{'}}'}
               </p>
             </div>
             <div class="grid grid-cols-2 gap-4">
               <div>
-                <label for="snippet-category" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">分类</label>
+                <label for="snippet-category" class="block text-sm font-medium text-app-text mb-1">分类</label>
                 <input
                   id="snippet-category"
                   type="text"
-                  class="w-full bg-slate-50 dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded px-3 py-2 text-slate-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
+                  class="w-full bg-app-bg border border-app-border rounded px-3 py-2 text-app-text focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none transition-all"
                   bind:value={category}
                   placeholder="例如：系统管理"
                 />
               </div>
               <div>
-                <label for="snippet-tags" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">标签</label>
+                <label for="snippet-tags" class="block text-sm font-medium text-app-text mb-1">标签</label>
                 <input
                   id="snippet-tags"
                   type="text"
-                  class="w-full bg-slate-50 dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded px-3 py-2 text-slate-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
+                  class="w-full bg-app-bg border border-app-border rounded px-3 py-2 text-app-text focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none transition-all"
                   bind:value={tags}
                   placeholder="逗号分隔，例如：nginx,重启,服务"
                 />
               </div>
             </div>
             <div>
-              <label for="snippet-description" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">描述</label>
+              <label for="snippet-description" class="block text-sm font-medium text-app-text mb-1">描述</label>
               <textarea
                 id="snippet-description"
-                class="w-full bg-slate-50 dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded px-3 py-2 text-slate-900 dark:text-white text-sm h-20 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
+                class="w-full bg-app-bg border border-app-border rounded px-3 py-2 text-app-text text-sm h-20 focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none transition-all"
                 bind:value={description}
                 placeholder="可选描述"
               ></textarea>
@@ -194,13 +194,13 @@
           </div>
           <div class="flex justify-end space-x-3 mt-8">
             <button
-              class="px-4 py-2 bg-slate-200 hover:bg-slate-300 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-white rounded transition-colors"
+              class="px-4 py-2 bg-app-bg hover:bg-app-bg-hover text-app-text rounded transition-colors"
               on:click={() => showForm = false}
             >
               取消
             </button>
             <button
-              class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors"
+              class="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded transition-colors"
               on:click={saveSnippet}
             >
               {editingSnippet ? '更新' : '保存'}
@@ -213,48 +213,48 @@
 
   <!-- Statistics -->
   <div class="grid grid-cols-4 gap-4 mb-6">
-    <div class="bg-slate-50 dark:bg-slate-800/50 rounded p-4 border border-slate-200 dark:border-slate-700/50">
-      <div class="text-2xl font-bold text-slate-900 dark:text-white">{snippets.length}</div>
-      <div class="text-slate-500 dark:text-slate-400 text-sm">总片段数</div>
+    <div class="bg-app-surface rounded-lg p-4 border border-app-border">
+      <div class="text-2xl font-bold text-app-text">{snippets.length}</div>
+      <div class="text-app-text-secondary text-sm">总片段数</div>
     </div>
-    <div class="bg-slate-50 dark:bg-slate-800/50 rounded p-4 border border-slate-200 dark:border-slate-700/50">
-      <div class="text-2xl font-bold text-slate-900 dark:text-white">
+    <div class="bg-app-surface rounded-lg p-4 border border-app-border">
+      <div class="text-2xl font-bold text-app-text">
         {snippets.reduce((sum, s) => sum + s.usage_count, 0)}
       </div>
-      <div class="text-slate-500 dark:text-slate-400 text-sm">总使用次数</div>
+      <div class="text-app-text-secondary text-sm">总使用次数</div>
     </div>
-    <div class="bg-slate-50 dark:bg-slate-800/50 rounded p-4 border border-slate-200 dark:border-slate-700/50">
-      <div class="text-2xl font-bold text-slate-900 dark:text-white">
+    <div class="bg-app-surface rounded-lg p-4 border border-app-border">
+      <div class="text-2xl font-bold text-app-text">
         {[...new Set(snippets.map(s => s.category).filter(Boolean))].length}
       </div>
-      <div class="text-slate-500 dark:text-slate-400 text-sm">分类数量</div>
+      <div class="text-app-text-secondary text-sm">分类数量</div>
     </div>
-    <div class="bg-slate-50 dark:bg-slate-800/50 rounded p-4 border border-slate-200 dark:border-slate-700/50">
-      <div class="text-2xl font-bold text-slate-900 dark:text-white">
+    <div class="bg-app-surface rounded-lg p-4 border border-app-border">
+      <div class="text-2xl font-bold text-app-text">
         {snippets.filter(s => s.usage_count > 0).length}
       </div>
-      <div class="text-slate-500 dark:text-slate-400 text-sm">已使用片段</div>
+      <div class="text-app-text-secondary text-sm">已使用片段</div>
     </div>
   </div>
 
   <!-- Snippets Table -->
-  <div class="bg-white dark:bg-slate-800 rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700 shadow-sm">
+  <div class="bg-app-surface rounded-lg overflow-hidden border border-app-border shadow-sm">
     {#if loading}
       <div class="p-8 text-center">
-        <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 mx-auto"></div>
-        <p class="mt-2 text-slate-500 dark:text-slate-400">加载中...</p>
+        <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500 mx-auto"></div>
+        <p class="mt-2 text-app-text-secondary">加载中...</p>
       </div>
     {:else if snippets.length === 0}
       <div class="p-8 text-center">
         <div class="text-4xl mb-4">📝</div>
-        <h3 class="text-lg font-medium mb-2 text-slate-900 dark:text-white">暂无命令片段</h3>
-        <p class="text-slate-500 dark:text-slate-400 max-w-sm mx-auto">
+        <h3 class="text-lg font-medium mb-2 text-app-text">暂无命令片段</h3>
+        <p class="text-app-text-secondary max-w-sm mx-auto">
           点击上方“添加新片段”按钮来创建你的第一个命令模板。
         </p>
       </div>
     {:else}
       <table class="w-full">
-        <thead class="bg-slate-100 dark:bg-slate-900 text-slate-500 dark:text-slate-400 text-sm font-semibold border-b border-slate-200 dark:border-slate-700">
+        <thead class="bg-app-bg text-app-text-secondary text-sm font-semibold border-b border-app-border">
           <tr>
             <th class="p-3 text-left">名称</th>
             <th class="p-3 text-left">命令</th>
@@ -263,32 +263,32 @@
             <th class="p-3 text-left">操作</th>
           </tr>
         </thead>
-        <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+        <tbody class="divide-y divide-app-border">
           {#each snippets as snippet (snippet.id)}
-            <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
+            <tr class="hover:bg-app-bg-hover transition-colors">
               <td class="p-3">
-                <div class="font-medium text-slate-900 dark:text-white">{snippet.name}</div>
+                <div class="font-medium text-app-text">{snippet.name}</div>
                 {#if snippet.description}
-                  <div class="text-slate-500 dark:text-slate-400 text-xs mt-1">{snippet.description}</div>
+                  <div class="text-app-text-secondary text-xs mt-1">{snippet.description}</div>
                 {/if}
               </td>
               <td class="p-3">
-                <code class="bg-slate-100 dark:bg-slate-900/50 text-slate-800 dark:text-slate-200 px-2 py-1 rounded text-sm font-mono break-all border border-slate-200 dark:border-slate-700/50">
+                <code class="bg-app-bg text-app-text px-2 py-1 rounded text-sm font-mono break-all border border-app-border">
                   {snippet.command}
                 </code>
               </td>
               <td class="p-3">
                 {#if snippet.category}
-                  <span class="px-2 py-1 bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 rounded text-xs font-medium">
+                  <span class="px-2 py-1 bg-primary-100 text-primary-700 dark:bg-primary-900/30 dark:text-primary-300 rounded text-xs font-medium">
                     {snippet.category}
                   </span>
                 {:else}
-                  <span class="text-slate-400 dark:text-slate-500 text-xs">未分类</span>
+                  <span class="text-app-text-secondary text-xs">未分类</span>
                 {/if}
               </td>
               <td class="p-3">
-                <div class="text-lg font-bold text-slate-900 dark:text-white">{snippet.usage_count}</div>
-                <div class="text-slate-500 dark:text-slate-500 text-xs">次</div>
+                <div class="text-lg font-bold text-app-text">{snippet.usage_count}</div>
+                <div class="text-app-text-secondary text-xs">次</div>
               </td>
               <td class="p-3">
                 <div class="flex space-x-2">
@@ -299,7 +299,7 @@
                     使用
                   </button>
                   <button
-                    class="px-3 py-1 bg-slate-200 hover:bg-slate-300 text-slate-700 dark:bg-slate-700 dark:hover:bg-slate-600 dark:text-white rounded text-sm transition-colors"
+                    class="px-3 py-1 bg-app-bg hover:bg-app-bg-hover text-app-text rounded text-sm transition-colors"
                     on:click={() => startEdit(snippet)}
                   >
                     编辑

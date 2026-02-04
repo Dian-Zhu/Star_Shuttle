@@ -1,42 +1,69 @@
 <script lang="ts">
-  import { onMount, onDestroy, tick } from 'svelte';
-  import { type ActiveTerminal, settings, terminalSessionMap, activePaneId as activePaneIdStore } from '../lib/store';
+  import { onDestroy } from 'svelte';
+  import { activeTerminals, type ActiveTerminal, terminalSessionMap } from '../lib/store';
   import { createTerminalSession, closeSplitSession } from '../lib/terminalService';
   import type { LayoutNode, TerminalPaneNode, SplitNode } from '../lib/layout';
   import { generateId, findNode, replaceNode, removeNode } from '../lib/layout';
   import SplitPane from './terminal/SplitPane.svelte';
-  import DualPaneFileExplorer from './file-transfer/DualPaneFileExplorer.svelte';
 
   export let terminalData: ActiveTerminal;
   export let isVisible: boolean = false;
 
-  let mode: 'terminal' | 'sftp' = 'terminal';
   let layoutRoot: LayoutNode | null = null;
   let initializedSessionId: string | null = null;
   let activePaneId: string | null = null;
 
-  // Sync activePaneId with store
-  $: activePaneIdStore.set(activePaneId);
-  $: if (layoutRoot && !activePaneId) {
-      // Initialize activePaneId with root pane if not set
-      if (layoutRoot.type === 'pane') {
-          activePaneId = layoutRoot.id;
+  // Helper to update terminal instance in the layout tree
+  function updateTerminalInTree(root: LayoutNode, paneId: string, term: any, fit: any, search: any): LayoutNode {
+      if (root.type === 'pane') {
+          if (root.id === paneId) {
+              return { ...root, existingTerminal: term, existingFitAddon: fit, existingSearchAddon: search };
+          }
+          return root;
       }
+      if (root.type === 'split') {
+          return {
+              ...root,
+              children: [
+                  updateTerminalInTree(root.children[0], paneId, term, fit, search),
+                  updateTerminalInTree(root.children[1], paneId, term, fit, search)
+              ] as [LayoutNode, LayoutNode]
+          };
+      }
+      return root;
   }
 
   // Initialize layout when terminalData changes or on mount
   $: if (terminalData && terminalData.sessionId !== initializedSessionId) {
       initializedSessionId = terminalData.sessionId;
       activePaneId = null; // Reset active pane
+      
+      const rootId = generateId();
       layoutRoot = {
         type: 'pane',
-        id: generateId(),
+        id: rootId,
         sessionId: terminalData.sessionId,
         connection: terminalData.connection,
         isRoot: true,
         existingTerminal: terminalData.terminal,
         existingFitAddon: terminalData.fitAddon,
-        existingSearchAddon: terminalData.searchAddon
+        existingSearchAddon: terminalData.searchAddon,
+        onInit: (term, fit, search) => {
+             // Update layout tree
+             if (layoutRoot) {
+                 layoutRoot = updateTerminalInTree(layoutRoot, rootId, term, fit, search);
+             }
+             
+             // Update activeTerminals store
+             activeTerminals.update(terminals => {
+                 return terminals.map(t => {
+                     if (t.sessionId === terminalData.sessionId) {
+                         return { ...t, terminal: term, fitAddon: fit, searchAddon: search };
+                     }
+                     return t;
+                 });
+             });
+        }
       };
       
       // Update session map
@@ -164,63 +191,6 @@
       activePaneId = e.detail.targetId;
   }
   
-  function handleRearrange(e: CustomEvent) {
-    const { sourceId, targetId, direction } = e.detail;
-    console.log('handleRearrange called', { sourceId, targetId, direction });
-    
-    if (!layoutRoot) return;
-    if (sourceId === targetId) return;
-
-    // 1. Find source node
-    const sourceNode = findNode(layoutRoot, sourceId);
-    console.log('Source node found:', sourceNode);
-    
-    if (!sourceNode || sourceNode.type !== 'pane') {
-        console.warn('Source node invalid or not found');
-        return;
-    }
-
-    // 2. Remove source node
-    const newRootAfterRemove = removeNode(layoutRoot, sourceId);
-    console.log('Root after remove:', newRootAfterRemove);
-    
-    if (!newRootAfterRemove) {
-        console.warn('Root became null after remove (should not happen if multiple panes exist)');
-        return;
-    }
-
-    // 3. Find target node in the new tree
-    const targetNode = findNode(newRootAfterRemove, targetId);
-    console.log('Target node found in new tree:', targetNode);
-    
-    if (!targetNode) {
-        console.warn('Target node not found after removal during rearrange');
-        return;
-    }
-
-    // 4. Create new Split
-    const children: [LayoutNode, LayoutNode] = (direction === 'top' || direction === 'left') 
-        ? [sourceNode, targetNode] 
-        : [targetNode, sourceNode];
-
-    const newSplit: SplitNode = {
-        type: 'split',
-        id: generateId(),
-        direction: (direction === 'top' || direction === 'bottom') ? 'vertical' : 'horizontal',
-        splitRatio: 0.5,
-        children
-    };
-    
-    console.log('New split node created:', newSplit);
-
-    // 5. Replace target with new Split
-    const finalRoot = replaceNode(newRootAfterRemove, targetId, newSplit);
-    console.log('Final root layout:', finalRoot);
-    
-    layoutRoot = finalRoot;
-    updateSessionMap();
-  }
-
   function handleKeydown(e: KeyboardEvent) {
       if (!isVisible) return;
       
@@ -233,8 +203,8 @@
               // Don't close if it's the root pane
               const node = findNode(layoutRoot, activePaneId);
               if (node && node.type === 'pane' && !node.isRoot) {
-                  handleClosePane({ detail: { targetId: activePaneId } });
-              }
+                handleClosePane(new CustomEvent('closePane', { detail: { targetId: activePaneId } }));
+            }
           }
       }
   }
@@ -243,47 +213,18 @@
 <svelte:window on:keydown={handleKeydown} />
 
 <div class="w-full h-full flex flex-col" style:display={isVisible ? 'flex' : 'none'}>
-  <!-- Mode Switcher Toolbar -->
-  <div class="flex items-center border-b border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-900 px-2 h-8 shrink-0 gap-1">
-    <button 
-      class="px-3 py-1 text-xs rounded-t transition-colors {mode === 'terminal' ? 'bg-white dark:bg-slate-950 text-blue-600 dark:text-blue-400 font-medium border-x border-t border-slate-200 dark:border-slate-800 -mb-[1px] relative z-10' : 'text-slate-500 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-800'}"
-      on:click={() => mode = 'terminal'}
-    >
-      Terminal
-    </button>
-    <button 
-      class="px-3 py-1 text-xs rounded-t transition-colors {mode === 'sftp' ? 'bg-white dark:bg-slate-950 text-blue-600 dark:text-blue-400 font-medium border-x border-t border-slate-200 dark:border-slate-800 -mb-[1px] relative z-10' : 'text-slate-500 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-800'}"
-      on:click={() => mode = 'sftp'}
-    >
-      File Browser
-    </button>
-  </div>
-
-  <div class="flex-1 relative overflow-hidden bg-white dark:bg-slate-950">
+  <div class="flex-1 relative overflow-hidden">
      <!-- Terminal Layout -->
-     <div
-       class="w-full h-full overflow-hidden"
-       style:display={mode === 'terminal' ? 'block' : 'none'}
-     >
+     <div class="w-full h-full overflow-hidden">
        {#if layoutRoot}
          <SplitPane 
            node={layoutRoot} 
-           isVisible={isVisible && mode === 'terminal'}
+           isVisible={isVisible}
            on:split={handleSplit}
            on:closePane={handleClosePane}
            on:activePane={handlePaneActive}
-           on:rearrange={handleRearrange}
          />
        {/if}
      </div>
-
-     <!-- SFTP View -->
-     {#if mode === 'sftp'}
-       <DualPaneFileExplorer 
-         sessionId={terminalData.sessionId}
-         connection={terminalData.connection}
-         isVisible={isVisible && mode === 'sftp'}
-       />
-     {/if}
   </div>
 </div>

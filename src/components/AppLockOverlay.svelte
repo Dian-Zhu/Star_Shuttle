@@ -35,16 +35,16 @@
   }
 </script>
 
-<div class="fixed inset-0 z-[100] bg-slate-100 dark:bg-slate-900 flex items-center justify-center" transition:fade>
-  <div class="w-full max-w-md p-8 bg-white dark:bg-slate-800 rounded-xl shadow-2xl border border-slate-200 dark:border-slate-700">
+<div class="fixed inset-0 z-[100] bg-app-bg flex items-center justify-center" transition:fade>
+  <div class="w-full max-w-md p-8 bg-app-surface rounded-xl shadow-2xl border border-app-border">
     <div class="text-center mb-8">
-      <div class="w-16 h-16 bg-blue-600 rounded-2xl mx-auto flex items-center justify-center mb-4 shadow-lg shadow-blue-900/30">
+      <div class="w-16 h-16 bg-primary-600 rounded-2xl mx-auto flex items-center justify-center mb-4 shadow-lg shadow-primary-900/30">
         <svg class="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path>
         </svg>
       </div>
-      <h2 class="text-2xl font-bold text-slate-800 dark:text-white mb-2">应用已锁定</h2>
-      <p class="text-slate-500 dark:text-slate-400">请输入密码解锁 Star Shuttle</p>
+      <h2 class="text-2xl font-bold text-app-text mb-2">应用已锁定</h2>
+      <p class="text-app-text-secondary">请输入密码解锁 Star Shuttle</p>
     </div>
 
     <div class="space-y-4">
@@ -54,7 +54,7 @@
           bind:value={password}
           on:keydown={handleKeydown}
           placeholder="输入密码"
-          class="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-3 text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all"
+          class="w-full bg-app-bg border border-app-border rounded-lg px-4 py-3 text-app-text placeholder-app-text-secondary/50 focus:outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500 transition-all"
         />
         {#if error}
           <p class="mt-2 text-sm text-red-500 dark:text-red-400">{error}</p>
@@ -62,7 +62,7 @@
       </div>
 
       <button
-        class="w-full bg-blue-600 hover:bg-blue-500 text-white font-medium py-3 rounded-lg transition-all shadow-lg shadow-blue-900/20 disabled:opacity-50 disabled:cursor-not-allowed"
+        class="w-full bg-primary-600 hover:bg-primary-500 text-white font-medium py-3 rounded-lg transition-all shadow-lg shadow-primary-900/20 disabled:opacity-50 disabled:cursor-not-allowed"
         on:click={handleUnlock}
         disabled={isLoading || !password}
       >
