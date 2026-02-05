@@ -2,11 +2,25 @@
   import { createEventDispatcher } from 'svelte';
   import type { LayoutNode } from '../../lib/layout';
   import TerminalPane from './TerminalPane.svelte';
+  import { terminalPool } from '../../lib/terminalPool';
 
   export let node: LayoutNode;
   export let isVisible: boolean = true;
 
   const dispatch = createEventDispatcher();
+
+  // 从终端池获取现有实例（用于分屏时保持原始终端）
+  function getExistingInstance(sessionId: string) {
+    const instance = terminalPool.retrieveInstance(sessionId);
+    if (instance && !instance.disposed) {
+      return {
+        terminal: instance.terminal,
+        fitAddon: instance.fitAddon,
+        searchAddon: instance.searchAddon
+      };
+    }
+    return null;
+  }
 
   // Resize logic
   let isResizing = false;
@@ -57,11 +71,15 @@
 </script>
 
 {#if node.type === 'pane'}
+  {@const existing = getExistingInstance(node.sessionId)}
   {#key node.id}
     <TerminalPane
       sessionId={node.sessionId}
       connection={node.connection}
       isRoot={node.isRoot}
+      existingTerminal={existing?.terminal ?? null}
+      existingFitAddon={existing?.fitAddon ?? null}
+      existingSearchAddon={existing?.searchAddon ?? null}
       onInit={node.onInit}
       isVisible={isVisible}
       on:split={(e) => handlePaneSplit(e, node.id)}

@@ -4,6 +4,9 @@
   import { FitAddon } from '@xterm/addon-fit';
   import { SearchAddon } from '@xterm/addon-search';
   import { settings, getXtermTheme, type Connection } from '../../lib/store';
+  import ContextMenu from '../ui/ContextMenu.svelte';
+  import ContextMenuItem from '../ui/ContextMenuItem.svelte';
+  import ContextMenuDivider from '../ui/ContextMenuDivider.svelte';
   import { 
     initDetachedTerminal, 
     handleTerminalInput, 
@@ -100,19 +103,19 @@
       terminal = existingTerminal;
       fitAddon = existingFitAddon;
       searchAddon = existingSearchAddon;
-      
-      // Ensure terminal is opened in the new container
-      if (terminal.element?.parentElement !== container) {
-          terminal.open(container);
+
+      // 将已存在的终端 DOM 元素移动到新容器
+      // 注意：不能调用 terminal.open()，因为 xterm.js 6.0 不允许重复打开
+      if (terminal.element && terminal.element.parentElement !== container) {
+        // 清空容器
+        container.innerHTML = '';
+        // 将终端元素移动到新容器
+        container.appendChild(terminal.element);
       }
-      
+
       fitAddon?.fit();
       attachTerminalKeybindings(terminal);
-      
-      // Re-bind onData listener if needed? 
-      // xterm onData listeners persist, but we might want to ensure our input handling is correct.
-      // Actually, since we don't dispose the terminal, the listeners attached in initDetachedTerminal or initTerminal are still valid.
-      
+
       if (terminal && fitAddon && searchAddon && onInit) {
         onInit(terminal, fitAddon, searchAddon);
       }
@@ -153,7 +156,6 @@
       container.addEventListener('paste', handlePaste, true);
     }
     
-    document.addEventListener('click', handleDocumentClick);
     isInitialized = true;
   });
 
@@ -161,7 +163,6 @@
     if (resizeObserver) {
       resizeObserver.disconnect();
     }
-    document.removeEventListener('click', handleDocumentClick);
     container?.removeEventListener('paste', handlePaste, true);
     
     // We NO LONGER dispose/disconnect here. 
@@ -208,12 +209,6 @@
 
   function closeContextMenu() {
     contextMenu.show = false;
-  }
-
-  function handleDocumentClick() {
-    if (contextMenu.show) {
-      closeContextMenu();
-    }
   }
 
   function handleMenuCopy() {
@@ -359,33 +354,36 @@
 
   <!-- Context Menu -->
   {#if contextMenu.show}
-    <div 
-      class="fixed z-50 w-48 bg-app-surface rounded-md shadow-xl border border-app-border py-1 text-sm overflow-hidden"
-      style="left: {contextMenu.x}px; top: {contextMenu.y}px;"
+    <ContextMenu 
+      x={contextMenu.x} 
+      y={contextMenu.y} 
+      on:close={closeContextMenu}
     >
-      <button class="w-full text-left px-4 py-2 hover:bg-app-bg-hover text-app-text" on:click|stopPropagation={handleMenuCopy}>复制</button>
-      <button class="w-full text-left px-4 py-2 hover:bg-app-bg-hover text-app-text" on:click|stopPropagation={handleMenuPaste}>粘贴</button>
-      <div class="border-t border-app-border my-1"></div>
-      <button class="w-full text-left px-4 py-2 hover:bg-app-bg-hover text-app-text" on:click|stopPropagation={handleClearScreen}>清屏</button>
-      <button class="w-full text-left px-4 py-2 hover:bg-app-bg-hover text-app-text" on:click|stopPropagation={handleSelectAll}>全选</button>
-      <button class="w-full text-left px-4 py-2 hover:bg-app-bg-hover text-app-text" on:click|stopPropagation={handleFind}>查找</button>
-      <div class="border-t border-app-border my-1"></div>
-      <button class="w-full text-left px-4 py-2 hover:bg-app-bg-hover text-app-text flex items-center gap-2" on:click|stopPropagation={handleSplitHorizontal}>
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path></svg>
-        上下分屏
-      </button>
-      <button class="w-full text-left px-4 py-2 hover:bg-app-bg-hover text-app-text flex items-center gap-2" on:click|stopPropagation={handleSplitVertical}>
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 4h13M8 20h13M3 4h.01M3 20h.01"></path></svg>
-        左右分屏
-      </button>
+      <ContextMenuItem on:click={handleMenuCopy} label="复制">
+         <span slot="right">Ctrl+Shift+C</span>
+      </ContextMenuItem>
+      <ContextMenuItem on:click={handleMenuPaste} label="粘贴">
+         <span slot="right">Ctrl+Shift+V</span>
+      </ContextMenuItem>
+      <ContextMenuDivider />
+      <ContextMenuItem on:click={handleClearScreen} label="清屏" />
+      <ContextMenuItem on:click={handleSelectAll} label="全选" />
+      <ContextMenuItem on:click={handleFind} label="查找">
+        <span slot="right">Ctrl+Shift+F</span>
+      </ContextMenuItem>
+      <ContextMenuDivider />
+      <ContextMenuItem on:click={handleSplitHorizontal} label="上下分屏">
+        <svg slot="icon" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path></svg>
+      </ContextMenuItem>
+      <ContextMenuItem on:click={handleSplitVertical} label="左右分屏">
+        <svg slot="icon" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 4h13M8 20h13M3 4h.01M3 20h.01"></path></svg>
+      </ContextMenuItem>
       {#if !isRoot}
-      <button class="w-full text-left px-4 py-2 hover:bg-app-bg-hover text-red-600 dark:text-red-400" on:click|stopPropagation={handleClosePane}>
-        关闭分屏
-      </button>
+        <ContextMenuItem on:click={handleClosePane} label="关闭分屏" danger />
       {/if}
-      <div class="border-t border-app-border my-1"></div>
-      <button class="w-full text-left px-4 py-2 hover:bg-app-bg-hover text-app-text" on:click|stopPropagation={handleClearScrollback}>清除滚动缓冲区</button>
-      <button class="w-full text-left px-4 py-2 hover:bg-app-bg-hover text-red-600 dark:text-red-400" on:click|stopPropagation={handleReset}>重置终端</button>
-    </div>
+      <ContextMenuDivider />
+      <ContextMenuItem on:click={handleClearScrollback} label="清除滚动缓冲区" />
+      <ContextMenuItem on:click={handleReset} label="重置终端" danger />
+    </ContextMenu>
   {/if}
 </div>

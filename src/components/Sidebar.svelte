@@ -4,6 +4,9 @@
   import { deleteConnection, updateConnectionConfig } from '../lib/connectionService';
   import { connectAndOpen, disconnectTerminal } from '../lib/terminalService';
   import SystemMonitorModal from './SystemMonitorModal.svelte';
+  import ContextMenu from './ui/ContextMenu.svelte';
+  import ContextMenuItem from './ui/ContextMenuItem.svelte';
+  import ContextMenuDivider from './ui/ContextMenuDivider.svelte';
   import PlusIcon from './icons/PlusIcon.svelte';
   import ServerIcon from './icons/ServerIcon.svelte';
   import TrashIcon from './icons/TrashIcon.svelte';
@@ -416,8 +419,8 @@
   }
 
   onMount(() => {
-    window.addEventListener('click', closeContextMenu);
-    return () => window.removeEventListener('click', closeContextMenu);
+    // window.addEventListener('click', closeContextMenu);
+    // return () => window.removeEventListener('click', closeContextMenu);
   });
 </script>
 
@@ -654,101 +657,85 @@
   </div>
 
   {#if contextMenu.show}
-    <div
-      class="fixed z-50 w-48 bg-app-surface border border-app-border rounded-lg shadow-xl py-1"
-      style="top: {contextMenu.y}px; left: {contextMenu.x}px"
+    <ContextMenu 
+      x={contextMenu.x} 
+      y={contextMenu.y} 
+      on:close={closeContextMenu}
     >
       {#if contextMenuConnectionRow}
-        <button
-          class="w-full text-left px-4 py-2 text-sm text-app-text hover:bg-app-bg-hover flex items-center gap-2"
+        <ContextMenuItem 
           on:click={() => {
             closeContextMenu();
             handleConnect(contextMenuConnectionRow.connection);
-          }}
-        >
-          <div class="w-4 h-4 flex items-center justify-center">
-             <ActivityIcon class="w-3.5 h-3.5" />
-          </div>
-          连接
-        </button>
+          }} 
+          label="连接" 
+          iconComponent={ActivityIcon} 
+        />
         {#if activeConnectionIds.has(contextMenuConnectionRow.connection.id)}
-          <button
-            class="w-full text-left px-4 py-2 text-sm text-app-text hover:bg-app-bg-hover flex items-center gap-2"
-            on:click|stopPropagation={() => { closeContextMenu(); handleDisconnect(contextMenuConnectionRow.connection); }}
-          >
-            <div class="w-4 h-4"></div>
-            断开连接
-          </button>
-          <button
-            class="w-full text-left px-4 py-2 text-sm text-app-text hover:bg-app-bg-hover flex items-center gap-2"
-            on:click|stopPropagation={(e) => { closeContextMenu(); openMonitor(contextMenuConnectionRow.connection, e as any); }}
-          >
-            <div class="w-4 h-4 flex items-center justify-center">
-               <ActivityIcon class="w-3.5 h-3.5" />
-            </div>
-            系统监控
-          </button>
+          <ContextMenuItem 
+            on:click={() => { 
+              closeContextMenu(); 
+              handleDisconnect(contextMenuConnectionRow.connection); 
+            }} 
+            label="断开连接" 
+          />
+          <ContextMenuItem 
+            on:click={(e) => { 
+              closeContextMenu(); 
+              openMonitor(contextMenuConnectionRow.connection, e); 
+            }} 
+            label="系统监控" 
+            iconComponent={ActivityIcon} 
+          />
         {/if}
-        <div class="my-1 border-t border-app-border"></div>
-        <button
-          class="w-full text-left px-4 py-2 text-sm text-app-text hover:bg-app-bg-hover flex items-center gap-2"
-          on:click|stopPropagation={(e) => { closeContextMenu(); handleEdit(contextMenuConnectionRow.connection, e as any); }}
-        >
-          <div class="w-4 h-4 flex items-center justify-center">
-            <SettingsIcon class="w-3.5 h-3.5" />
-          </div>
-          编辑
-        </button>
-        <button
-          class="w-full text-left px-4 py-2 text-sm text-red-500 hover:bg-app-bg-hover flex items-center gap-2"
-          on:click|stopPropagation={(e) => { closeContextMenu(); handleDelete(contextMenuConnectionRow.connection.id, e as any); }}
-        >
-          <div class="w-4 h-4 flex items-center justify-center">
-            <TrashIcon class="w-3.5 h-3.5" />
-          </div>
-          删除
-        </button>
+        <ContextMenuDivider />
+        <ContextMenuItem 
+          on:click={(e) => { 
+            closeContextMenu(); 
+            handleEdit(contextMenuConnectionRow.connection, e); 
+          }} 
+          label="编辑" 
+          iconComponent={SettingsIcon} 
+        />
+        <ContextMenuItem 
+          on:click={(e) => { 
+            closeContextMenu(); 
+            handleDelete(contextMenuConnectionRow.connection.id, e); 
+          }} 
+          label="删除" 
+          danger 
+          iconComponent={TrashIcon} 
+        />
       {:else if contextMenuFolderRow}
-         <button
-          class="w-full text-left px-4 py-2 text-sm text-red-500 hover:bg-app-bg-hover flex items-center gap-2"
+         <ContextMenuItem 
           on:click={() => {
             closeContextMenu();
             deleteGroup(contextMenuFolderRow.path);
-          }}
-        >
-          <div class="w-4 h-4 flex items-center justify-center">
-            <TrashIcon class="w-3.5 h-3.5" />
-          </div>
-          删除分组
-        </button>
+          }} 
+          label="删除分组" 
+          danger 
+          iconComponent={TrashIcon} 
+        />
       {:else}
-         <button
-          class="w-full text-left px-4 py-2 text-sm text-app-text hover:bg-app-bg-hover flex items-center gap-2"
+         <ContextMenuItem 
           on:click={() => {
             closeContextMenu();
             editingConnection.set(null);
             showConnectionForm.set(true);
-          }}
-        >
-          <div class="w-4 h-4 flex items-center justify-center">
-             <PlusIcon class="w-3.5 h-3.5" />
-          </div>
-          新建连接
-        </button>
-         <button
-          class="w-full text-left px-4 py-2 text-sm text-app-text hover:bg-app-bg-hover flex items-center gap-2"
+          }} 
+          label="新建连接" 
+          iconComponent={PlusIcon} 
+        />
+         <ContextMenuItem 
           on:click={() => {
             closeContextMenu();
             createNewGroup();
-          }}
-        >
-          <div class="w-4 h-4 flex items-center justify-center">
-             <FolderIcon class="w-3.5 h-3.5" />
-          </div>
-          新建分组
-        </button>
+          }} 
+          label="新建分组" 
+          iconComponent={FolderIcon} 
+        />
       {/if}
-    </div>
+    </ContextMenu>
   {/if}
 
   <!-- Sidebar Footer -->

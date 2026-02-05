@@ -6,6 +6,9 @@
   import { sftpService } from '../../lib/sftpService';
   import { localFsService } from '../../lib/localFsService';
   import { fileClipboard, settings } from '../../lib/store';
+  import ContextMenu from '../ui/ContextMenu.svelte';
+  import ContextMenuItem from '../ui/ContextMenuItem.svelte';
+  import ContextMenuDivider from '../ui/ContextMenuDivider.svelte';
   import FileIcon from './FileIcon.svelte';
   import type { FileEntry } from '../../types';
   
@@ -809,10 +812,10 @@
 
   onMount(() => {
     loadFiles(currentPath);
-    window.addEventListener('click', closeContextMenu);
+    // window.addEventListener('click', closeContextMenu);
     window.addEventListener('keydown', handleKeydown);
     return () => {
-      window.removeEventListener('click', closeContextMenu);
+      // window.removeEventListener('click', closeContextMenu);
       window.removeEventListener('keydown', handleKeydown);
     };
   });
@@ -1059,101 +1062,67 @@
   </div>
 
   {#if contextMenu.show}
-    <div
-      class="fixed bg-app-bg border border-app-border rounded shadow-lg py-1 z-50 text-sm min-w-[180px]"
-      style="top: {contextMenu.y}px; left: {contextMenu.x}px"
-      role="menu"
-      tabindex="-1"
+    <ContextMenu 
+      x={contextMenu.x} 
+      y={contextMenu.y} 
+      on:close={closeContextMenu}
     >
       {#if contextMenu.file}
         {@const fileIcon = getFileIcon(contextMenu.file.name, contextMenu.file.isDirectory)}
-        <div class="px-4 py-2 border-b border-app-border flex items-center space-x-2">
+        <div class="px-3 py-1.5 border-b border-app-border/50 flex items-center space-x-2 text-sm text-app-text-secondary">
           <FileIcon iconType={fileIcon} />
-          <span class="truncate font-medium text-app-text">
+          <span class="truncate font-medium">
             {selectedPaths.size > 1 ? `${selectedPaths.size} items selected` : contextMenu.file.name}
           </span>
         </div>
         {#if !contextMenu.file.isDirectory}
           {#if selectedPaths.size === 1}
-            <button
-              class="w-full text-left px-4 py-2 hover:bg-app-bg-hover text-app-text flex items-center space-x-2"
-              on:click|stopPropagation={handleDownload}
-            >
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <ContextMenuItem on:click={handleDownload} label="下载">
+              <svg slot="icon" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
               </svg>
-              <span>下载</span>
-            </button>
+            </ContextMenuItem>
           {/if}
-          <button
-            class="w-full text-left px-4 py-2 hover:bg-app-bg-hover text-app-text flex items-center space-x-2"
-            on:click|stopPropagation={handleCopy}
-          >
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <ContextMenuItem on:click={handleCopy} label="复制">
+            <svg slot="icon" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>
             </svg>
-            <span>复制</span>
-          </button>
+          </ContextMenuItem>
         {/if}
         {#if selectedPaths.size === 1}
-          <button
-            class="w-full text-left px-4 py-2 hover:bg-app-bg-hover text-app-text flex items-center space-x-2"
-            on:click|stopPropagation={handleRename}
-          >
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <ContextMenuItem on:click={handleRename} label="重命名">
+            <svg slot="icon" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
             </svg>
-            <span>重命名</span>
-          </button>
+          </ContextMenuItem>
         {/if}
-        <button
-          class="w-full text-left px-4 py-2 hover:bg-app-bg-hover text-red-600 dark:text-red-400 hover:text-red-500 dark:hover:text-red-300 flex items-center space-x-2"
-          on:click|stopPropagation={handleDelete}
-        >
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <ContextMenuItem on:click={handleDelete} label="删除" danger>
+          <svg slot="icon" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
           </svg>
-          <span>删除</span>
-        </button>
-        <div class="border-t border-app-border my-1"></div>
+        </ContextMenuItem>
+        <ContextMenuDivider />
       {/if}
-      <button
-        class="w-full text-left px-4 py-2 hover:bg-app-bg-hover text-app-text flex items-center space-x-2"
-        on:click|stopPropagation={handleCreateFolder}
-      >
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <ContextMenuItem on:click={handleCreateFolder} label="新建文件夹">
+        <svg slot="icon" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 13h6m-3-3v6m-9 1V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/>
         </svg>
-        <span>新建文件夹</span>
-      </button>
-      <button
-        class="w-full text-left px-4 py-2 hover:bg-app-bg-hover text-app-text flex items-center space-x-2"
-        on:click|stopPropagation={handleCreateFile}
-      >
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      </ContextMenuItem>
+      <ContextMenuItem on:click={handleCreateFile} label="新建文件">
+        <svg slot="icon" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/>
         </svg>
-        <span>新建文件</span>
-      </button>
-      <button
-        class="w-full text-left px-4 py-2 hover:bg-app-bg-hover text-app-text flex items-center space-x-2 disabled:opacity-60"
-        on:click|stopPropagation={handlePaste}
-        disabled={!$fileClipboard}
-      >
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      </ContextMenuItem>
+      <ContextMenuItem on:click={handlePaste} label="粘贴" disabled={!$fileClipboard}>
+        <svg slot="icon" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
         </svg>
-        <span>粘贴</span>
-      </button>
-      <button
-        class="w-full text-left px-4 py-2 hover:bg-app-bg-hover text-app-text flex items-center space-x-2"
-        on:click|stopPropagation={() => loadFiles(currentPath, { force: true })}
-      >
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      </ContextMenuItem>
+      <ContextMenuItem on:click={() => loadFiles(currentPath, { force: true })} label="刷新">
+        <svg slot="icon" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
         </svg>
-        <span>刷新</span>
-      </button>
-    </div>
+      </ContextMenuItem>
+    </ContextMenu>
   {/if}
 </div>
