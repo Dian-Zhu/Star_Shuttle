@@ -2,9 +2,12 @@
   import { onDestroy } from 'svelte';
   import { activeTerminals, type ActiveTerminal, terminalSessionMap } from '../lib/store';
   import { createTerminalSession, closeSplitSession } from '../lib/terminalService';
+  import { terminalPool } from '../lib/terminalPool';
   import type { LayoutNode, TerminalPaneNode, SplitNode } from '../lib/layout';
   import { generateId, findNode, replaceNode, removeNode } from '../lib/layout';
   import SplitPane from './terminal/SplitPane.svelte';
+  import type { TerminalProxy } from '../lib/terminalProxy';
+  import { TerminalInstance } from '../lib/terminalInstance';
 
   export let terminalData: ActiveTerminal;
   export let isVisible: boolean = false;
@@ -13,61 +16,57 @@
   let initializedSessionId: string | null = null;
   let activePaneId: string | null = null;
 
-  // Helper to update terminal instance in the layout tree
-  function updateTerminalInTree(root: LayoutNode, paneId: string, term: any, fit: any, search: any): LayoutNode {
-      if (root.type === 'pane') {
-          if (root.id === paneId) {
-              return { ...root, existingTerminal: term, existingFitAddon: fit, existingSearchAddon: search };
-          }
-          return root;
-      }
-      if (root.type === 'split') {
-          return {
-              ...root,
-              children: [
-                  updateTerminalInTree(root.children[0], paneId, term, fit, search),
-                  updateTerminalInTree(root.children[1], paneId, term, fit, search)
-              ] as [LayoutNode, LayoutNode]
-          };
-      }
-      return root;
-  }
-
   // Initialize layout when terminalData changes or on mount
   $: if (terminalData && terminalData.sessionId !== initializedSessionId) {
-      initializedSessionId = terminalData.sessionId;
-      activePaneId = null; // Reset active pane
-      
-      const rootId = generateId();
-      layoutRoot = {
-        type: 'pane',
-        id: rootId,
-        sessionId: terminalData.sessionId,
-        connection: terminalData.connection,
-        isRoot: true,
-        existingTerminal: terminalData.terminal,
-        existingFitAddon: terminalData.fitAddon,
-        existingSearchAddon: terminalData.searchAddon,
-        onInit: (term, fit, search) => {
-             // Update layout tree
-             if (layoutRoot) {
-                 layoutRoot = updateTerminalInTree(layoutRoot, rootId, term, fit, search);
-             }
-             
-             // Update activeTerminals store
-             activeTerminals.update(terminals => {
-                 return terminals.map(t => {
-                     if (t.sessionId === terminalData.sessionId) {
-                         return { ...t, terminal: term, fitAddon: fit, searchAddon: search };
-                     }
-                     return t;
-                 });
-             });
-        }
-      };
-      
-      // Update session map
-      updateSessionMap();
+    initializedSessionId = terminalData.sessionId;
+    activePaneId = null; // Reset active pane
+    
+    const rootId = generateId();
+    
+    // 如果终端已经初始化且不在池中，注册到池中
+    if (terminalData.terminal && terminalData.fitAddon && terminalData.searchAddon) {
+      if (!terminalPool.hasInstance(terminalData.sessionId)) {
+        const instance = TerminalInstance.fromInitialized(
+          terminalData.sessionId,
+          terminalData.terminal,
+          terminalData.fitAddon,
+          terminalData.searchAddon
+        );
+        
+        terminalPool.registerInstance(instance);
+        console.log(`[TerminalView] Registered initialized terminal instance for session ${terminalData.sessionId}`);
+      } else {
+        console.log(`[TerminalView] Terminal instance already exists for session ${terminalData.sessionId}`);
+      }
+    }
+    
+    layoutRoot = {
+      type: 'pane',
+      id: rootId,
+      sessionId: terminalData.sessionId,
+      connection: terminalData.connection,
+      isRoot: true,
+      onInit: (proxy: TerminalProxy) => {
+        // 更新 activeTerminals store
+        const instance = proxy.getInstance();
+        activeTerminals.update(terminals => {
+          return terminals.map(t => {
+            if (t.sessionId === terminalData.sessionId) {
+              return { 
+                ...t, 
+                terminal: instance.terminal, 
+                fitAddon: instance.fitAddon, 
+                searchAddon: instance.searchAddon 
+              };
+            }
+            return t;
+          });
+        });
+      }
+    };
+    
+    // Update session map
+    updateSessionMap();
   }
 
   function getAllSessionIds(node: LayoutNode): string[] {
@@ -91,10 +90,13 @@
       // Clean up all non-root sessions
       const cleanupNode = (node: LayoutNode) => {
         if (node.type === 'pane' && !node.isRoot) {
-           closeSplitSession(node.sessionId, node.existingTerminal);
+          // 关闭分屏会话
+          closeSplitSession(node.sessionId);
+          // 从池中销毁实例
+          terminalPool.destroyInstance(node.sessionId);
         } else if (node.type === 'split') {
-           cleanupNode(node.children[0]);
-           cleanupNode(node.children[1]);
+          cleanupNode(node.children[0]);
+          cleanupNode(node.children[1]);
         }
       };
       cleanupNode(layoutRoot);
@@ -116,41 +118,26 @@
 
     try {
       // Create new session
-      // Note: We use the connection from the target node, effectively cloning the session configuration
       const newSessionId = await createTerminalSession(targetNode.connection as any);
       
       const newPaneId = generateId();
+
+      // New pane for the new session
       const newPane: TerminalPaneNode = {
         type: 'pane',
         id: newPaneId,
         sessionId: newSessionId,
         connection: targetNode.connection as any,
         isRoot: false,
-        // Capture the terminal instance when it is initialized
-        onInit: (term, fit, search) => {
-             if (!layoutRoot) return;
-             // We need to find the node again because layoutRoot might have changed?
-             // Actually we can just update the layout tree immutably to include these instances
-             // However, finding the node by ID is safer.
-             
-             // Helper to update node in tree
-             const updateNode = (root: LayoutNode): LayoutNode => {
-                 if (root.type === 'pane' && root.id === newPaneId) {
-                     return { ...root, existingTerminal: term, existingFitAddon: fit, existingSearchAddon: search };
-                 }
-                 if (root.type === 'split') {
-                     return {
-                         ...root,
-                         children: [updateNode(root.children[0]), updateNode(root.children[1])]
-                     };
-                 }
-                 return root;
-             };
-             
-             layoutRoot = updateNode(layoutRoot);
+        onInit: (proxy: TerminalProxy) => {
+          // 新的终端实例已经在 onMount 中通过池化机制创建
+          // 这里可以执行额外的初始化逻辑
+          console.log(`[TerminalView] Split pane initialized: ${newSessionId}`);
         }
       };
-      
+
+      // Original pane - keep the same ID so {#key} preserves the component instance
+      // This ensures the original terminal is not recreated
       const splitNode: SplitNode = {
         type: 'split',
         id: generateId(),
@@ -173,8 +160,10 @@
     
     const targetNode = findNode(layoutRoot, targetId);
     if (targetNode && targetNode.type === 'pane' && !targetNode.isRoot) {
-         // Explicitly close the session
-         closeSplitSession(targetNode.sessionId, targetNode.existingTerminal);
+         // 关闭分屏会话
+         closeSplitSession(targetNode.sessionId);
+         // 从池中销毁实例
+         terminalPool.destroyInstance(targetNode.sessionId);
     }
     
     const newRoot = removeNode(layoutRoot, targetId);

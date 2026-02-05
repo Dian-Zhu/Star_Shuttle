@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { connections, showConnectionForm, editingConnection, isSidebarCollapsed, isRightSidebarOpen, showSettings, activeTerminals, connectionGroups, getGroupIdByPath } from '../lib/store';
+  import { connections, showConnectionForm, editingConnection, isSidebarCollapsed, isRightSidebarOpen, activeTerminals, connectionGroups, getGroupIdByPath } from '../lib/store';
   import { deleteConnection, updateConnectionConfig } from '../lib/connectionService';
   import { connectAndOpen, disconnectTerminal } from '../lib/terminalService';
   import SystemMonitorModal from './SystemMonitorModal.svelte';
@@ -86,7 +86,7 @@
       .filter(Boolean);
   }
 
-  function buildTagTree(items: any[]): TagNode {
+  function buildTagTree(items: any[], groups: any[]): TagNode {
     const root: TagNode = { name: '', path: '', children: new Map(), connections: [] };
 
     // Build tree from connections
@@ -111,7 +111,7 @@
     }
 
     // Add empty groups from connectionGroups that don't exist in the tree yet
-    const allGroups = $connectionGroups;
+    const allGroups = groups;
     const existingPaths = new Set<string>();
 
     // Collect all existing paths from the tree
@@ -191,7 +191,7 @@
     expandedPaths = next;
   }
 
-  $: tagTree = buildTagTree(filteredConnections);
+  $: tagTree = buildTagTree(filteredConnections, $connectionGroups);
   $: {
     if (!didInitExpanded) {
       didInitExpanded = true;
@@ -764,16 +764,7 @@
       {/if}
     </button>
     
-    <button 
-      class="flex items-center {$isSidebarCollapsed ? 'justify-center' : 'gap-2'} text-sm text-app-text-secondary hover:text-app-text hover:bg-app-bg-hover transition-colors w-full px-2 py-1.5 rounded-lg"
-      on:click={() => showSettings.set(true)}
-      title="设置"
-    >
-      <SettingsIcon class="w-5 h-5" />
-      {#if !$isSidebarCollapsed}
-        <span>设置</span>
-      {/if}
-    </button>
+    <!-- Settings button removed -->
     
     <div class="text-xs text-app-text-secondary text-center mt-1 opacity-50">
       {#if !$isSidebarCollapsed}

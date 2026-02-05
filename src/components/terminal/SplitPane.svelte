@@ -57,19 +57,18 @@
 </script>
 
 {#if node.type === 'pane'}
-  <TerminalPane 
-    sessionId={node.sessionId}
-    connection={node.connection}
-    isRoot={node.isRoot}
-    existingTerminal={node.existingTerminal}
-    existingFitAddon={node.existingFitAddon}
-    existingSearchAddon={node.existingSearchAddon}
-    onInit={node.onInit}
-    isVisible={isVisible}
-    on:split={(e) => handlePaneSplit(e, node.id)}
-    on:close={(e) => handlePaneClose(e, node.id)}
-    on:active={(e) => handlePaneActive(e, node.id)}
-  />
+  {#key node.id}
+    <TerminalPane
+      sessionId={node.sessionId}
+      connection={node.connection}
+      isRoot={node.isRoot}
+      onInit={node.onInit}
+      isVisible={isVisible}
+      on:split={(e) => handlePaneSplit(e, node.id)}
+      on:close={(e) => handlePaneClose(e, node.id)}
+      on:active={(e) => handlePaneActive(e, node.id)}
+    />
+  {/key}
 {:else}
   <div 
     bind:this={splitContainer}

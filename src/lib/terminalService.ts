@@ -7,6 +7,8 @@ import { WebglAddon } from '@xterm/addon-webgl';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { get } from 'svelte/store';
 import { activeTerminals, connections, selectedTerminalIndex, type Connection, type ActiveTerminal, type AppSettings, errorMessage, successMessage, settings, connectionHistory, broadcastInputEnabled, broadcastSessionIds, getStoredTerminalUiState, getXtermTheme, terminalSessionMap } from './store';
+import { terminalPool } from './terminalPool';
+import { TerminalInstance } from './terminalInstance';
 import '@xterm/xterm/css/xterm.css';
 
 const IS_DEV = import.meta.env.DEV;
@@ -545,6 +547,11 @@ export async function initTerminal(container: HTMLElement, sessionId: string, co
       })
     );
 
+    // 立即注册到池中，确保在组件挂载前可用
+    const terminalInstance = TerminalInstance.fromInitialized(sessionId, term, fitAddon, searchAddon);
+    terminalPool.registerInstance(terminalInstance);
+    log.info('TermInit', 'Terminal instance registered to pool', { sessionId });
+
     // Open terminal first
     term.open(container);
     log.info('TermInit', 'Terminal opened in container', {
@@ -714,6 +721,11 @@ export async function initDetachedTerminal(container: HTMLElement, sessionId: st
         }
       })
     );
+
+    // 立即注册到池中，确保在组件挂载前可用
+    const terminalInstance = TerminalInstance.fromInitialized(sessionId, term, fitAddon, searchAddon);
+    terminalPool.registerInstance(terminalInstance);
+    log.info('TermInit', 'Detached terminal instance registered to pool', { sessionId });
 
     term.open(container);
 
@@ -1019,16 +1031,8 @@ export async function monitorSessionStatus(sessionId: string) {
  * xterm 6.0: Enhanced terminal cleanup with better resource management
  */
 
-export async function closeSplitSession(sessionId: string, terminal?: any) {
+export async function closeSplitSession(sessionId: string) {
   try {
-    if (terminal) {
-      try {
-        terminal.dispose();
-      } catch (e) {
-        log.warn('TermCleanup', 'Failed to dispose split terminal', e);
-      }
-    }
-    
     await closeDetachedTerminal(sessionId);
     await invoke('disconnect', { sessionId });
     

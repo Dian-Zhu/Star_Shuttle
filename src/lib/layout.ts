@@ -1,4 +1,5 @@
 import { type Connection } from './store';
+import type { TerminalProxy } from './terminalProxy';
 
 export type PaneId = string;
 
@@ -8,11 +9,7 @@ export interface TerminalPaneNode {
   sessionId: string;
   connection: Connection;
   isRoot?: boolean;
-  // Runtime references to existing instances (for root pane)
-  existingTerminal?: any;
-  existingFitAddon?: any;
-  existingSearchAddon?: any;
-  onInit?: (term: any, fit: any, search: any) => void;
+  onInit?: (proxy: TerminalProxy) => void;
 }
 
 export interface SplitNode {
@@ -81,7 +78,7 @@ export function removeNode(root: LayoutNode, targetId: string): LayoutNode | nul
         // If the recursive call returned null, it means the child [0] was the target (handled above)
         // OR the child [0] was a subtree that collapsed to null (shouldn't happen with promotion logic usually, unless empty)
         // With promotion logic:
-        // If removeNode returns something different, it means the subtree changed.
+        // If removeNode returns something different, it means that subtree changed.
         return {
             ...root,
             children: [newLeft as LayoutNode, root.children[1]]

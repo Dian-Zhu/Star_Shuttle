@@ -1,6 +1,8 @@
 <script lang="ts">
   import { getCurrentWindow } from '@tauri-apps/api/window';
-  
+  import { showSettings } from '../lib/store';
+  import SettingsIcon from './icons/SettingsIcon.svelte';
+
   const appWindow = getCurrentWindow();
   
   function handleMinimize() {
@@ -33,6 +35,9 @@
   <div class="titlebar-drag-region" data-tauri-drag-region></div>
   
   <div class="titlebar-controls">
+    <button on:click={() => showSettings.set(true)} title="设置" class="settings-btn">
+      <SettingsIcon class="w-4 h-4" />
+    </button>
     <button on:click={handleMinimize} title="最小化" class="minimize-btn">
       <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
         <path fill="currentColor" d="M19 13H5v-2h14z" />
