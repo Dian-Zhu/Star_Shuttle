@@ -1,6 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
   import type { LayoutNode } from '../../lib/layout';
+  import { getPaneIndex } from '../../lib/layout';
   import TerminalPane from './TerminalPane.svelte';
   import { terminalPool } from '../../lib/terminalPool';
 
@@ -8,6 +9,9 @@
   export let isVisible: boolean = true;
 
   const dispatch = createEventDispatcher();
+
+  // Get root node for calculating pane indices
+  export let rootNode: LayoutNode | null = null;
 
   // 从终端池获取现有实例（用于分屏时保持原始终端）
   function getExistingInstance(sessionId: string) {
@@ -72,11 +76,13 @@
 
 {#if node.type === 'pane'}
   {@const existing = getExistingInstance(node.sessionId)}
+  {@const paneIndex = rootNode ? getPaneIndex(rootNode, node.id) : 1}
   {#key node.id}
     <TerminalPane
       sessionId={node.sessionId}
       connection={node.connection}
       isRoot={node.isRoot}
+      paneIndex={paneIndex}
       existingTerminal={existing?.terminal ?? null}
       existingFitAddon={existing?.fitAddon ?? null}
       existingSearchAddon={existing?.searchAddon ?? null}
@@ -92,13 +98,14 @@
     bind:this={splitContainer}
     class={`w-full h-full flex overflow-hidden ${node.direction === 'vertical' ? 'flex-row' : 'flex-col'}`}
   >
-    <div 
+    <div
       class="relative overflow-hidden"
       style:flex-basis={`${node.splitRatio * 100}%`}
     >
-      <svelte:self 
-        node={node.children[0]} 
-        isVisible={isVisible} 
+      <svelte:self
+        node={node.children[0]}
+        isVisible={isVisible}
+        rootNode={rootNode}
         on:split
         on:closePane
         on:activePane
@@ -116,12 +123,13 @@
       on:mousedown={handleSplitStart}
     ></button>
 
-    <div 
+    <div
       class="relative overflow-hidden flex-1"
     >
-      <svelte:self 
-        node={node.children[1]} 
-        isVisible={isVisible} 
+      <svelte:self
+        node={node.children[1]}
+        isVisible={isVisible}
+        rootNode={rootNode}
         on:split
         on:closePane
         on:activePane

@@ -344,7 +344,7 @@
     </div>
   </div>
 {:else}
-  <div class="h-screen w-screen flex bg-app-bg text-app-text overflow-hidden font-sans antialiased selection:bg-blue-500/30 relative pt-[30px]">
+  <div class="h-screen w-screen flex bg-app-bg text-app-text overflow-hidden font-sans antialiased selection:bg-blue-500/30 relative pt-[35px]">
     <TitleBar />
     <Sidebar />
     

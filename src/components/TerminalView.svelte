@@ -1,13 +1,15 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte';
-  import { activeTerminals, type ActiveTerminal, terminalSessionMap } from '../lib/store';
-  import { createTerminalSession, closeSplitSession } from '../lib/terminalService';
-  import { terminalPool } from '../lib/terminalPool';
-  import type { LayoutNode, TerminalPaneNode, SplitNode } from '../lib/layout';
-  import { generateId, findNode, replaceNode, removeNode } from '../lib/layout';
-  import SplitPane from './terminal/SplitPane.svelte';
-  import type { TerminalProxy } from '../lib/terminalProxy';
-  import { TerminalInstance } from '../lib/terminalInstance';
+import { onDestroy } from 'svelte';
+import { Terminal } from '@xterm/xterm';
+import { FitAddon } from '@xterm/addon-fit';
+import { SearchAddon } from '@xterm/addon-search';
+import { activeTerminals, type ActiveTerminal, terminalSessionMap, closeSplitRequest } from '../lib/store';
+import { createTerminalSession, closeSplitSession, closeTerminal } from '../lib/terminalService';
+import { terminalPool } from '../lib/terminalPool';
+import { TerminalInstance } from '../lib/terminalInstance';
+import type { LayoutNode, TerminalPaneNode, SplitNode } from '../lib/layout';
+import { generateId, findNode, replaceNode, removeNode, findNodeBySessionId } from '../lib/layout';
+import SplitPane from './terminal/SplitPane.svelte';
 
   export let terminalData: ActiveTerminal;
   export let isVisible: boolean = false;
@@ -46,17 +48,17 @@
       sessionId: terminalData.sessionId,
       connection: terminalData.connection,
       isRoot: true,
-      onInit: (proxy: TerminalProxy) => {
+      createdAt: Date.now(),
+      onInit: (terminal: Terminal, fitAddon: FitAddon, searchAddon: SearchAddon) => {
         // 更新 activeTerminals store
-        const instance = proxy.getInstance();
         activeTerminals.update(terminals => {
           return terminals.map(t => {
             if (t.sessionId === terminalData.sessionId) {
               return { 
                 ...t, 
-                terminal: instance.terminal, 
-                fitAddon: instance.fitAddon, 
-                searchAddon: instance.searchAddon 
+                terminal, 
+                fitAddon, 
+                searchAddon 
               };
             }
             return t;
@@ -66,7 +68,24 @@
     };
     
     // Update session map
-    updateSessionMap();
+  updateSessionMap();
+  }
+
+  // Monitor close split request
+  $: if ($closeSplitRequest && layoutRoot) {
+    const targetSessionId = $closeSplitRequest;
+    // Check if this TerminalView manages this session
+    const node = findNodeBySessionId(layoutRoot, targetSessionId);
+    if (node && node.type === 'pane') {
+      if (node.isRoot) {
+        // If it's the root session, close the whole terminal session
+        closeTerminal(targetSessionId);
+        closeSplitRequest.set(null);
+      } else {
+        handleClosePane({ detail: { targetId: node.id } } as CustomEvent);
+        closeSplitRequest.set(null);
+      }
+    }
   }
 
   function getAllSessionIds(node: LayoutNode): string[] {
@@ -101,6 +120,9 @@
       };
       cleanupNode(layoutRoot);
       
+      // Cleanup root session instance from pool
+      terminalPool.destroyInstance(terminalData.sessionId);
+      
       // Remove from session map
       terminalSessionMap.update(map => {
         map.delete(terminalData.sessionId);
@@ -120,6 +142,19 @@
       // Create new session
       const newSessionId = await createTerminalSession(targetNode.connection as any);
       
+      // Add to activeTerminals as a child of the current root session
+      activeTerminals.update(terms => [
+        ...terms,
+        {
+          sessionId: newSessionId,
+          connection: targetNode.connection as any,
+          terminal: null as any,
+          fitAddon: null as any,
+          searchAddon: null as any,
+          parentId: terminalData.sessionId // Link to root session
+        }
+      ]);
+
       const newPaneId = generateId();
 
       // New pane for the new session
@@ -129,9 +164,23 @@
         sessionId: newSessionId,
         connection: targetNode.connection as any,
         isRoot: false,
-        onInit: (proxy: TerminalProxy) => {
-          // 新的终端实例已经在 onMount 中通过池化机制创建
-          // 这里可以执行额外的初始化逻辑
+        createdAt: Date.now(),
+        onInit: (terminal: Terminal, fitAddon: FitAddon, searchAddon: SearchAddon) => {
+          // Update activeTerminals with initialized instance
+          activeTerminals.update(terminals => {
+            return terminals.map(t => {
+              if (t.sessionId === newSessionId) {
+                return { 
+                  ...t, 
+                  terminal, 
+                  fitAddon, 
+                  searchAddon 
+                };
+              }
+              return t;
+            });
+          });
+          
           console.log(`[TerminalView] Split pane initialized: ${newSessionId}`);
         }
       };
@@ -159,11 +208,20 @@
     if (!layoutRoot) return;
     
     const targetNode = findNode(layoutRoot, targetId);
+    
+    // If it's the root pane, close the entire session
+    if (targetNode && targetNode.type === 'pane' && targetNode.isRoot) {
+      closeTerminal(targetNode.sessionId);
+      return;
+    }
+
     if (targetNode && targetNode.type === 'pane' && !targetNode.isRoot) {
          // 关闭分屏会话
          closeSplitSession(targetNode.sessionId);
          // 从池中销毁实例
          terminalPool.destroyInstance(targetNode.sessionId);
+         // Remove from activeTerminals
+         activeTerminals.update(terms => terms.filter(t => t.sessionId !== targetNode.sessionId));
     }
     
     const newRoot = removeNode(layoutRoot, targetId);
@@ -206,8 +264,9 @@
      <!-- Terminal Layout -->
      <div class="w-full h-full overflow-hidden">
        {#if layoutRoot}
-         <SplitPane 
-           node={layoutRoot} 
+         <SplitPane
+           node={layoutRoot}
+           rootNode={layoutRoot}
            isVisible={isVisible}
            on:split={handleSplit}
            on:closePane={handleClosePane}

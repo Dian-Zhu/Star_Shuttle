@@ -6,7 +6,7 @@ import { SearchAddon } from '@xterm/addon-search';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { get } from 'svelte/store';
-import { activeTerminals, connections, selectedTerminalIndex, type Connection, type ActiveTerminal, type AppSettings, errorMessage, successMessage, settings, connectionHistory, broadcastInputEnabled, broadcastSessionIds, getStoredTerminalUiState, getXtermTheme, terminalSessionMap } from './store';
+import { activeTerminals, connections, selectedTerminalIndex, type Connection, type ActiveTerminal, type AppSettings, errorMessage, successMessage, settings, connectionHistory, broadcastInputEnabled, broadcastSessionIds, getStoredTerminalUiState, getXtermTheme, terminalSessionMap, connectingConnections } from './store';
 import { terminalPool } from './terminalPool';
 import { TerminalInstance } from './terminalInstance';
 import '@xterm/xterm/css/xterm.css';
@@ -227,9 +227,32 @@ function cancelScheduled(job: { id: number; kind: 'raf' | 'timeout' } | null) {
   clear(job.id as unknown as ReturnType<typeof setTimeout>);
 }
 
+
+async function invokeWithTimeout<T>(cmd: string, args: any, timeoutMs: number = 30000): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`连接超时 (${timeoutMs / 1000}秒)`));
+    }, timeoutMs);
+
+    invoke(cmd, args)
+      .then((res) => {
+        clearTimeout(timer);
+        resolve(res as T);
+      })
+      .catch((err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+  });
+}
+
 export async function connectAndOpen(connection: Connection, connectConfig?: any) {
   try {
     errorMessage.set(null);
+    connectingConnections.update(s => {
+      s.add(connection.id);
+      return s;
+    });
 
     const baseConfig = connectConfig ?? connection;
     const protocol = (baseConfig as any)?.protocol ?? 'Ssh';
@@ -247,16 +270,24 @@ export async function connectAndOpen(connection: Connection, connectConfig?: any
 
       successMessage.set(`已启动 RDP: ${connection.name}`);
       setTimeout(() => successMessage.set(null), 3000);
+      connectingConnections.update(s => {
+        s.delete(connection.id);
+        return s;
+      });
       return;
     }
 
     if (protocol === 'Telnet') {
-      const sessionId = await invoke('connect', { config: baseConfig }) as string;
+      const sessionId = await invokeWithTimeout<string>('connect', { config: baseConfig });
 
       const terminals = get(activeTerminals);
       const existingIndex = terminals.findIndex(t => t.sessionId === sessionId);
       if (existingIndex !== -1) {
         selectedTerminalIndex.set(existingIndex);
+        connectingConnections.update(s => {
+          s.delete(connection.id);
+          return s;
+        });
         return;
       }
 
@@ -284,6 +315,10 @@ export async function connectAndOpen(connection: Connection, connectConfig?: any
 
       successMessage.set(`连接成功: ${connection.name}`);
       setTimeout(() => successMessage.set(null), 3000);
+      connectingConnections.update(s => {
+        s.delete(connection.id);
+        return s;
+      });
       return;
     }
 
@@ -308,6 +343,10 @@ export async function connectAndOpen(connection: Connection, connectConfig?: any
     
     if (existingIndex !== -1) {
       selectedTerminalIndex.set(existingIndex);
+      connectingConnections.update(s => {
+        s.delete(connection.id);
+        return s;
+      });
       return;
     }
 
@@ -342,10 +381,19 @@ export async function connectAndOpen(connection: Connection, connectConfig?: any
 
     successMessage.set(`连接成功: ${connection.name}`);
     setTimeout(() => successMessage.set(null), 3000);
+    connectingConnections.update(s => {
+      s.delete(connection.id);
+      return s;
+    });
     
   } catch (error) {
+    connectingConnections.update(s => {
+      s.delete(connection.id);
+      return s;
+    });
     log.error('Connection', `Failed to connect to ${connection.name}`, error);
-    errorMessage.set(`连接失败：${error}`);
+    const msg = normalizeErrorMessage(error);
+    errorMessage.set(`连接失败：${msg}`);
     setTimeout(() => errorMessage.set(null), 5000);
   }
 }
@@ -450,7 +498,7 @@ function parseHostKeyPrompt(error: unknown): { type: HostKeyPromptType; payload:
 async function connectWithKnownHostsPrompt(connection: any): Promise<string> {
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const result = await invoke('connect', { config: connection });
+      const result = await invokeWithTimeout<string>('connect', { config: connection });
       return result as string;
     } catch (error) {
       const parsed = parseHostKeyPrompt(error);
@@ -492,7 +540,7 @@ async function connectWithKnownHostsPrompt(connection: any): Promise<string> {
     }
   }
 
-  const result = await invoke('connect', { config: connection });
+  const result = await invokeWithTimeout<string>('connect', { config: connection });
   return result as string;
 }
 
@@ -1625,7 +1673,7 @@ export async function reconnectTerminal(oldSessionId: string) {
 
   try {
       // Connect
-      const newSessionId = await invoke('connect', { config: terminalEntry.connection }) as string;
+      const newSessionId = await invokeWithTimeout<string>('connect', { config: terminalEntry.connection });
       
       // Start terminal
       const result = await invoke('start_terminal', {

@@ -9,6 +9,7 @@ export interface TerminalPaneNode {
   sessionId: string;
   connection: Connection;
   isRoot?: boolean;
+  createdAt: number;
   onInit?: (proxy: TerminalProxy) => void;
 }
 
@@ -32,6 +33,15 @@ export function findNode(root: LayoutNode, id: string): LayoutNode | null {
   if (root.id === id) return root;
   if (root.type === 'split') {
     return findNode(root.children[0], id) || findNode(root.children[1], id);
+  }
+  return null;
+}
+
+// Helper to find a node by Session ID
+export function findNodeBySessionId(root: LayoutNode, sessionId: string): LayoutNode | null {
+  if (root.type === 'pane' && root.sessionId === sessionId) return root;
+  if (root.type === 'split') {
+    return findNodeBySessionId(root.children[0], sessionId) || findNodeBySessionId(root.children[1], sessionId);
   }
   return null;
 }
@@ -92,6 +102,27 @@ export function removeNode(root: LayoutNode, targetId: string): LayoutNode | nul
         };
     }
   }
-  
+
   return root;
+}
+
+// Helper to get pane index (position among all panes in the same terminal view)
+export function getPaneIndex(root: LayoutNode, targetId: string): number {
+  const allPanes: { id: string; createdAt: number }[] = [];
+
+  function collectPanes(node: LayoutNode) {
+    if (node.type === 'pane') {
+      allPanes.push({ id: node.id, createdAt: node.createdAt });
+    } else if (node.type === 'split') {
+      collectPanes(node.children[0]);
+      collectPanes(node.children[1]);
+    }
+  }
+
+  collectPanes(root);
+  
+  // Sort by createdAt to ensure numbering follows creation order
+  allPanes.sort((a, b) => a.createdAt - b.createdAt);
+  
+  return allPanes.findIndex(p => p.id === targetId) + 1; // Return 1-based index
 }

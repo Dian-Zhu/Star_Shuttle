@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { connections, showConnectionForm, editingConnection, isSidebarCollapsed, isRightSidebarOpen, activeTerminals, connectionGroups, getGroupIdByPath } from '../lib/store';
+  import { connections, showConnectionForm, editingConnection, isSidebarCollapsed, isRightSidebarOpen, activeTerminals, connectionGroups, getGroupIdByPath, connectingConnections, connectionHistory } from '../lib/store';
   import { deleteConnection, updateConnectionConfig } from '../lib/connectionService';
   import { connectAndOpen, disconnectTerminal } from '../lib/terminalService';
   import SystemMonitorModal from './SystemMonitorModal.svelte';
@@ -18,7 +18,7 @@
   import DownloadIcon from './icons/DownloadIcon.svelte';
   import { importConnections, exportConnections } from '../lib/importExportService';
   import { confirm } from '@tauri-apps/plugin-dialog';
-  import { connectionHistory, successMessage } from '../lib/store';
+  import { successMessage } from '../lib/store';
   import { v4 as uuidv4 } from 'uuid';
 
   let searchTerm = '';
@@ -432,7 +432,7 @@
     />
 {/if}
 
-<aside class="flex flex-col bg-app-bg border-r border-app-border text-app-text-secondary transition-all duration-300 ease-in-out {$isSidebarCollapsed ? 'w-[47px]' : 'w-64'}">
+<aside class="flex flex-col bg-app-bg text-app-text-secondary transition-all duration-300 ease-in-out {$isSidebarCollapsed ? 'w-[47px]' : 'w-64'}">
   <!-- Sidebar Header -->
   <div class="{$isSidebarCollapsed ? 'p-2' : 'p-4'} border-b border-app-border flex flex-col gap-4">
     <div class="flex gap-2">
@@ -555,9 +555,15 @@
                   on:dragstart={(e) => handleDragStart(e, row.connection)}
                   on:dragend={handleDragEnd}
                 >
-                  <div class="text-app-text-secondary group-hover:text-primary-500 dark:group-hover:text-primary-400 transition-colors shrink-0">
-                    <ServerIcon class="w-4 h-4" />
-                  </div>
+                  {#if $connectingConnections.has(row.connection.id)}
+                    <div class="text-primary-500 animate-spin shrink-0">
+                      <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                    </div>
+                  {:else}
+                    <div class="text-app-text-secondary group-hover:text-primary-500 dark:group-hover:text-primary-400 transition-colors shrink-0">
+                      <ServerIcon class="w-4 h-4" />
+                    </div>
+                  {/if}
                   {#if !$isSidebarCollapsed}
                     <div class="flex-1 min-w-0">
                       <div class="font-medium text-app-text truncate group-hover:text-app-text transition-colors flex items-center gap-2">
@@ -622,9 +628,15 @@
                 on:click={() => handleConnect(item.connection)}
                 title={$isSidebarCollapsed ? `${item.connection.name} - ${formatTimeAgo(item.lastConnected)}` : ''}
               >
-                <div class="text-app-text-secondary group-hover:text-green-500 dark:group-hover:text-green-400 transition-colors shrink-0">
-                  <ClockIcon className="w-4 h-4" />
-                </div>
+                {#if $connectingConnections.has(item.connection.id)}
+                  <div class="text-green-500 animate-spin shrink-0">
+                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                  </div>
+                {:else}
+                  <div class="text-app-text-secondary group-hover:text-green-500 dark:group-hover:text-green-400 transition-colors shrink-0">
+                    <ClockIcon className="w-4 h-4" />
+                  </div>
+                {/if}
                 {#if !$isSidebarCollapsed}
                   <div class="flex-1 min-w-0">
                     <div class="flex justify-between items-center">

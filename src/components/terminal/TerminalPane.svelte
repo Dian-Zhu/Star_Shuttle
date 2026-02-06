@@ -7,15 +7,18 @@
   import ContextMenu from '../ui/ContextMenu.svelte';
   import ContextMenuItem from '../ui/ContextMenuItem.svelte';
   import ContextMenuDivider from '../ui/ContextMenuDivider.svelte';
-  import { 
-    initDetachedTerminal, 
-    handleTerminalInput, 
+  import {
+    initDetachedTerminal,
+    handleTerminalInput,
     sendTerminalResize
   } from '../../lib/terminalService';
+  import TerminalIcon from '../icons/TerminalIcon.svelte';
+  import XIcon from '../icons/XIcon.svelte';
 
   export let sessionId: string;
   export let connection: Connection;
   export let isRoot: boolean = false;
+  export let paneIndex: number = 1;
   // If provided, use existing instance (for root terminal that is already initialized)
   export let existingTerminal: Terminal | null = null;
   export let existingFitAddon: FitAddon | null = null;
@@ -309,27 +312,48 @@
   }
 </script>
 
-<div class="relative w-full h-full overflow-hidden group">
-  <!-- Background Image Layer -->
-  {#if $settings.appearance.backgroundImage}
-    <div 
-      class="absolute inset-0 z-0 bg-cover bg-center bg-no-repeat pointer-events-none"
-      style:background-image="url('{$settings.appearance.backgroundImage}')"
-      style:opacity={$settings.appearance.backgroundOpacity ?? 0.5}
-      style:filter="blur({$settings.appearance.backgroundBlur ?? 0}px)"
+<div class="flex flex-col w-full h-full overflow-hidden group relative" style="background-color: transparent;">
+  <!-- Terminal Header -->
+  <div class="flex items-center justify-start h-[24px] select-none flex-shrink-0 relative z-10 px-2" style="background-color: transparent;">
+    <div class="flex items-center gap-2 rounded-full px-2.5 py-0.5 border border-app-border/50 max-w-[90%]" style="background-color: transparent;">
+      <div class="flex items-center gap-2 min-w-0">
+        <TerminalIcon class="w-3.5 h-3.5 text-app-text-secondary flex-shrink-0" />
+        <span class="text-xs text-app-text truncate font-medium max-w-[200px]" title={connection.name}>
+          {#if paneIndex > 1}
+            {paneIndex}: {/if}{connection.name}
+        </span>
+      </div>
+      <button 
+        class="ml-1 p-0.5 rounded-full hover:bg-app-surface text-app-text-secondary hover:text-red-500 transition-colors flex items-center justify-center"
+        on:click={handleClosePane}
+        title="关闭"
+      >
+        <XIcon class="w-3.5 h-3.5" />
+      </button>
+    </div>
+  </div>
+
+  <div class="relative flex-1 w-full min-h-0 overflow-hidden">
+    <!-- Background Image Layer -->
+    {#if $settings.appearance.backgroundImage}
+      <div 
+        class="absolute inset-0 z-0 bg-cover bg-center bg-no-repeat pointer-events-none"
+        style:background-image="url('{$settings.appearance.backgroundImage}')"
+        style:opacity={$settings.appearance.backgroundOpacity ?? 0.5}
+        style:filter="blur({$settings.appearance.backgroundBlur ?? 0}px)"
+      ></div>
+    {/if}
+
+    <div
+      bind:this={container}
+      class="relative z-0 w-full h-full overflow-hidden"
+      on:contextmenu|preventDefault={openContextMenu}
+      role="button"
+      tabindex="0"
     ></div>
-  {/if}
 
-  <div
-    bind:this={container}
-    class="relative z-0 w-full h-full overflow-hidden"
-    on:contextmenu|preventDefault={openContextMenu}
-    role="button"
-    tabindex="0"
-  ></div>
-
-  <!-- Search Bar -->
-  {#if showSearch}
+    <!-- Search Bar -->
+    {#if showSearch}
     <div class="absolute top-2 right-2 z-10 bg-app-surface border border-app-border shadow-lg rounded-md p-1.5 flex items-center gap-1.5">
       <input 
         id={searchInputId}
@@ -386,4 +410,5 @@
       <ContextMenuItem on:click={handleReset} label="重置终端" danger />
     </ContextMenu>
   {/if}
+  </div>
 </div>

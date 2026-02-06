@@ -61,6 +61,7 @@ export interface ActiveTerminal {
   fitAddon: FitAddon;
   searchAddon: SearchAddon;
   fileExplorerPath?: string; // Add this line
+  parentId?: string; // ID of the root session if this is a split pane
 }
 
 export interface SplitConfig {
@@ -90,12 +91,14 @@ export const showCommandPalette = writable<boolean>(false);
 export const isLocked = writable<boolean>(false);
 export const hasAppLock = writable<boolean>(false);
 export const loading = writable<boolean>(false);
+export const connectingConnections = writable<Set<string>>(new Set());
 export const errorMessage = writable<string | null>(null);
 export const successMessage = writable<string | null>(null);
 export const fileClipboard = writable<FileClipboardItem | null>(null);
 export const terminalSplitConfigs = writable<Map<string, SplitConfig>>(new Map());
 // Map root sessionId -> Set of all child sessionIds (including root itself)
 export const terminalSessionMap = writable<Map<string, Set<string>>>(new Map());
+export const closeSplitRequest = writable<string | null>(null);
 
 // History Store
 const loadHistory = (): HistoryItem[] => {
@@ -633,10 +636,8 @@ function getBaseXtermTheme(appSettings: AppSettings): ITheme {
 
 export function getXtermTheme(appSettings: AppSettings): ITheme {
   const theme = getBaseXtermTheme(appSettings);
-  if (appSettings.appearance?.backgroundImage) {
-    return { ...theme, background: 'rgba(0,0,0,0)' };
-  }
-  return theme;
+  // Always use transparent background to allow parent container's background to show through
+  return { ...theme, background: 'rgba(0,0,0,0)' };
 }
 
 export const settings = writable<AppSettings>(loadSettings());

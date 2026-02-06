@@ -1,10 +1,43 @@
 <script lang="ts">
   import { getCurrentWindow } from '@tauri-apps/api/window';
-  import { showSettings } from '../lib/store';
+  import { showSettings, activeTerminals, selectedTerminalIndex, broadcastInputEnabled, broadcastSessionIds, terminalSessionMap, closeSplitRequest } from '../lib/store';
+  import { closeTerminal } from '../lib/terminalService';
   import SettingsIcon from './icons/SettingsIcon.svelte';
+  import BroadcastIcon from './icons/BroadcastIcon.svelte';
+  import TerminalIcon from './icons/TerminalIcon.svelte';
+  import XIcon from './icons/XIcon.svelte';
 
   const appWindow = getCurrentWindow();
   
+  $: selectedBroadcastSet = new Set($broadcastSessionIds);
+  $: rootSessions = $activeTerminals.filter(t => $terminalSessionMap.has(t.sessionId));
+
+  function getSessionTerminals(rootId: string) {
+    const group = $terminalSessionMap.get(rootId);
+    if (!group) return [];
+    // Filter activeTerminals to preserve order and object reference
+    return $activeTerminals.filter(t => group.has(t.sessionId));
+  }
+
+  $: currentActiveRootId = (() => {
+    const selected = $activeTerminals[$selectedTerminalIndex];
+    if (!selected) return null;
+    
+    for (const [rootId, group] of $terminalSessionMap) {
+      if (group.has(selected.sessionId)) {
+        return rootId;
+      }
+    }
+    return null;
+  })();
+
+  // Keep track of the last active terminal for each session group
+  const lastActiveChild = new Map<string, string>();
+
+  $: if ($activeTerminals[$selectedTerminalIndex] && currentActiveRootId) {
+    lastActiveChild.set(currentActiveRootId, $activeTerminals[$selectedTerminalIndex].sessionId);
+  }
+
   function handleMinimize() {
     console.log('Minimize button clicked');
     appWindow.minimize();
@@ -19,6 +52,69 @@
     console.log('Close button clicked');
     appWindow.close();
   }
+
+  function handleSessionClick(root: any, event: MouseEvent) {
+    if (!root) return;
+
+    // Check if we are already active in this session
+    const group = $terminalSessionMap.get(root.sessionId);
+    const currentActive = $activeTerminals[$selectedTerminalIndex];
+    
+    // If clicking on already active session, do nothing unless modifier keys
+    if (currentActive && group && group.has(currentActive.sessionId)) {
+       // already active
+    } else {
+       // Switch to last active terminal of this session, or root if none
+       let targetId = root.sessionId;
+       const lastChild = lastActiveChild.get(root.sessionId);
+       if (lastChild) {
+         // Verify it still exists
+         const exists = $activeTerminals.some(t => t.sessionId === lastChild);
+         if (exists) targetId = lastChild;
+       }
+
+       const index = $activeTerminals.findIndex(t => t.sessionId === targetId);
+       if (index !== -1) {
+         $selectedTerminalIndex = index;
+       }
+    }
+
+    if ($broadcastInputEnabled && (event.ctrlKey || event.metaKey)) {
+      const sessionId = root.sessionId;
+      if (selectedBroadcastSet.has(sessionId)) {
+        broadcastSessionIds.update(ids => ids.filter(id => id !== sessionId));
+      } else {
+        broadcastSessionIds.update(ids => [...ids, sessionId]);
+      }
+      return;
+    }
+  }
+
+  function handleCloseSession(rootId: string, event: MouseEvent) {
+    event.stopPropagation();
+    const group = $terminalSessionMap.get(rootId);
+    if (group) {
+      group.forEach(id => closeTerminal(id));
+    } else {
+      closeTerminal(rootId);
+    }
+  }
+
+  function toggleBroadcast() {
+    broadcastInputEnabled.update(v => {
+      const next = !v;
+      if (!next) {
+        broadcastSessionIds.set([]);
+        return next;
+      }
+
+      const current = $activeTerminals[$selectedTerminalIndex];
+      if (current) {
+        broadcastSessionIds.set([current.sessionId]);
+      }
+      return next;
+    });
+  }
 </script>
 
 <div class="titlebar">
@@ -32,9 +128,60 @@
     <div class="titlebar-app-name">Star Shuttle</div>
   </div>
   
+  <div class="titlebar-tabs no-scrollbar">
+    {#each rootSessions as root (root.sessionId)}
+      {@const isActive = root.sessionId === currentActiveRootId}
+      
+      <!-- Session Tab Container -->
+      <div 
+        class="flex items-center h-[calc(100%-2px)] mt-[2px] rounded-t-md transition-colors group/session
+        {isActive ? 'bg-transparent border-t border-x border-b-0 border-app-border' : 'border border-transparent hover:bg-app-surface-light/50'}"
+      >
+          <button
+            class="group/term flex items-center gap-1.5 px-2 py-0.5 max-w-[150px] text-xs transition-colors relative h-full rounded-md mx-0.5
+            {isActive 
+              ? 'text-primary-600 dark:text-primary-400 font-medium' 
+              : 'text-app-text-secondary hover:text-app-text'}"
+            on:click={(e) => handleSessionClick(root, e)}
+            title={root.connection.name}
+          >
+            {#if $broadcastInputEnabled && selectedBroadcastSet.has(root.sessionId)}
+              <div class="absolute inset-y-1 left-0.5 w-0.5 rounded bg-primary-500"></div>
+            {/if}
+            
+            <TerminalIcon class="w-3.5 h-3.5 opacity-70 flex-shrink-0" />
+            <span class="truncate">{root.connection.name}</span>
+          </button>
+
+        <!-- Session Close Button -->
+        <button
+          class="opacity-0 group-hover/session:opacity-100 ml-1 mr-1 p-1 rounded-md hover:bg-red-500 hover:text-white text-app-text-secondary transition-all"
+          on:click={(e) => handleCloseSession(root.sessionId, e)}
+          title="关闭会话"
+        >
+          <XIcon class="w-3.5 h-3.5" />
+        </button>
+      </div>
+    {/each}
+  </div>
+  
   <div class="titlebar-drag-region" data-tauri-drag-region></div>
   
   <div class="titlebar-controls">
+    <button
+      class="broadcast-btn {$broadcastInputEnabled ? 'text-primary-500' : ''}"
+      on:click={toggleBroadcast}
+      title="广播输入：Ctrl/⌘ 点击 Tab 选择多个会话{$broadcastInputEnabled ? `（当前: ${Math.max($broadcastSessionIds.length, 1)}）` : ''}"
+    >
+      <div class="relative">
+        <BroadcastIcon className="w-4 h-4" />
+        {#if $broadcastInputEnabled}
+           <span class="absolute -top-1 -right-1 flex h-3 w-3 items-center justify-center rounded-full bg-red-500 text-[8px] font-bold text-white shadow-sm">
+             {Math.max($broadcastSessionIds.length, 1)}
+           </span>
+        {/if}
+      </div>
+    </button>
     <button on:click={() => showSettings.set(true)} title="设置" class="settings-btn">
       <SettingsIcon class="w-4 h-4" />
     </button>
@@ -58,7 +205,7 @@
 
 <style>
   .titlebar {
-    height: 30px;
+    height: 35px;
     background: var(--color-bg);
     user-select: none;
     display: flex;
@@ -69,7 +216,6 @@
     left: 0;
     right: 0;
     z-index: 1000;
-    border-bottom: 1px solid var(--color-sidebar-border);
     color: var(--color-text-secondary);
     -webkit-app-region: drag;
     pointer-events: none;
@@ -99,6 +245,29 @@
     white-space: nowrap;
   }
   
+  .titlebar-tabs {
+    display: flex;
+    align-items: center;
+    overflow-x: auto;
+    height: 100%;
+    margin-left: 10px;
+    margin-right: 10px;
+    -webkit-app-region: no-drag;
+    pointer-events: auto;
+    flex: 0 1 auto;
+    max-width: 60%;
+    gap: 3px; /* Gap between session tabs */
+  }
+
+  .titlebar-tabs::-webkit-scrollbar {
+    display: none;
+  }
+  
+  .titlebar-tabs {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
   .titlebar-drag-region {
     flex: 1;
     height: 100%;

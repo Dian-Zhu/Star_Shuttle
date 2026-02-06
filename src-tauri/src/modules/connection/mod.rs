@@ -1027,6 +1027,42 @@ impl ConnectionManager for DefaultConnectionManager {
         effective_config.validate()?;
         info!("Connection configuration validated successfully");
 
+        // Pre-flight network connectivity check
+        // Check connectivity to the immediate next hop (target host or proxy)
+        let (check_host, check_port) = match &effective_config.proxy_type {
+            ProxyType::None => (effective_config.host.clone(), effective_config.port),
+            ProxyType::Socks5 { host, port, .. } => (host.clone(), *port),
+            ProxyType::Http { host, port, .. } => (host.clone(), *port),
+            ProxyType::JumpHost { host, port, .. } => (host.clone(), *port),
+        };
+        
+        info!("Checking network connectivity to {}:{} before connection...", check_host, check_port);
+        let addr = format!("{}:{}", check_host, check_port);
+        // Use a short timeout (3 seconds) for the connectivity check
+        let check_res = self.runtime.block_on(async {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(3),
+                TcpStream::connect(&addr),
+            )
+            .await
+        });
+
+        match check_res {
+            Ok(Ok(_)) => {
+                debug!("Network connectivity check passed for {}:{}", check_host, check_port);
+            }
+            Ok(Err(e)) => {
+                let msg = format!("网络不可达: 无法连接到 {}:{} ({})", check_host, check_port, e);
+                error!("{}", msg);
+                return Err(ConnectionError::ConnectionFailed(msg));
+            }
+            Err(_) => {
+                let msg = format!("网络不可达: 连接 {}:{} 超时 (3秒)", check_host, check_port);
+                error!("{}", msg);
+                return Err(ConnectionError::ConnectionFailed(msg));
+            }
+        }
+
         if effective_config.protocol == ConnectionProtocol::Telnet {
             let session_id = Uuid::new_v4();
             let mut session_info = SessionInfo {

@@ -81,7 +81,7 @@ body {
 /* xterm 6.0 fixes */
 .xterm-viewport {
   overflow-y: auto !important;
-  background-color: var(--terminal-bg) !important;
+  background-color: transparent !important;
 }
 
 /* Terminal scrollbar styles with theme-aware colors */

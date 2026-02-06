@@ -2,14 +2,10 @@
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { activeTerminals, selectedTerminalIndex, broadcastInputEnabled, broadcastSessionIds } from '../lib/store';
-  import { closeTerminal } from '../lib/terminalService';
   import TerminalView from './TerminalView.svelte';
-  import XIcon from './icons/XIcon.svelte';
   import TerminalIcon from './icons/TerminalIcon.svelte';
-  import BroadcastIcon from './icons/BroadcastIcon.svelte';
   import { formatSpeed } from '../lib/transferQueueService';
 
-  $: selectedBroadcastSet = new Set($broadcastSessionIds);
   let currentTime = '';
   let netSpeedBps = 0;
   let cpuUsage = 0;
@@ -42,8 +38,10 @@
     return true;
   }
 
+  $: rootTerminals = $activeTerminals.filter(t => !t.parentId);
+
   function updatePollingState(): boolean {
-    const hasTerminal = $activeTerminals.length > 0 && Boolean($activeTerminals[$selectedTerminalIndex]);
+    const hasTerminal = rootTerminals.length > 0;
     const visible = typeof document === 'undefined' ? true : document.hidden !== true;
     const focused = typeof document === 'undefined' ? true : (document.hasFocus?.() ?? true);
     const shouldEnable = hasTerminal && visible && focused;
@@ -196,104 +194,12 @@
       stopPolling();
     };
   });
-
-  function handleTabClick(index: number, event: MouseEvent) {
-    const terminal = $activeTerminals[index];
-    if (!terminal) return;
-
-    if ($broadcastInputEnabled && (event.ctrlKey || event.metaKey)) {
-      const sessionId = terminal.sessionId;
-      if (selectedBroadcastSet.has(sessionId)) {
-        broadcastSessionIds.update(ids => ids.filter(id => id !== sessionId));
-      } else {
-        broadcastSessionIds.update(ids => [...ids, sessionId]);
-      }
-      return;
-    }
-
-    $selectedTerminalIndex = index;
-  }
-
-  function handleClose(sessionId: string, event: MouseEvent) {
-    event.stopPropagation();
-    closeTerminal(sessionId);
-  }
-
-  function toggleBroadcast() {
-    broadcastInputEnabled.update(v => {
-      const next = !v;
-      if (!next) {
-        broadcastSessionIds.set([]);
-        return next;
-      }
-
-      const current = $activeTerminals[$selectedTerminalIndex];
-      if (current) {
-        broadcastSessionIds.set([current.sessionId]);
-      }
-      return next;
-    });
-  }
 </script>
 
 <div class="flex flex-col h-full w-full bg-app-bg">
-  <!-- Tabs Bar -->
-  {#if $activeTerminals.length > 0}
-    <div class="flex bg-app-surface border-b border-app-border overflow-x-auto no-scrollbar">
-      <div class="flex items-center px-2 gap-2 border-r border-app-border">
-        <button
-          class="p-1.5 rounded-md transition-colors border flex items-center justify-center relative
-          {$broadcastInputEnabled
-            ? 'bg-primary-600 border-primary-600 text-white'
-            : 'bg-app-bg border-app-border text-app-text-secondary hover:bg-app-bg-hover'}"
-          on:click={toggleBroadcast}
-          type="button"
-          title="广播输入：Ctrl/⌘ 点击 Tab 选择多个会话{$broadcastInputEnabled ? `（当前: ${Math.max($broadcastSessionIds.length, 1)}）` : ''}"
-        >
-          <BroadcastIcon className="w-4 h-4" />
-          {#if $broadcastInputEnabled}
-             <span class="absolute -top-1.5 -right-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[9px] font-bold text-white shadow-sm ring-1 ring-app-surface">
-               {Math.max($broadcastSessionIds.length, 1)}
-             </span>
-          {/if}
-        </button>
-      </div>
-      {#each $activeTerminals as terminal, index}
-        <button
-          class="group flex items-center gap-2 px-4 py-2.5 min-w-[160px] max-w-[240px] text-sm border-r border-app-border transition-colors relative
-          {index === $selectedTerminalIndex 
-            ? 'bg-app-bg text-primary-600 dark:text-primary-400 font-medium' 
-            : 'bg-app-surface text-app-text-secondary hover:bg-app-bg-hover hover:text-app-text'}"
-          on:click={(e) => handleTabClick(index, e)}
-        >
-          {#if index === $selectedTerminalIndex}
-            <div class="absolute top-0 left-0 right-0 h-0.5 bg-primary-500"></div>
-          {/if}
-
-          {#if $broadcastInputEnabled && selectedBroadcastSet.has(terminal.sessionId)}
-            <div class="absolute inset-y-1 left-1 w-1 rounded bg-primary-500"></div>
-          {/if}
-          
-          <TerminalIcon class="w-4 h-4 opacity-70" />
-          <span class="truncate flex-1 text-left">{terminal.connection.name}</span>
-          
-          <span
-            role="button"
-            tabindex="0"
-            class="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-app-bg-hover text-app-text-secondary hover:text-red-500 dark:hover:text-red-400 transition-all"
-            on:click={(e) => handleClose(terminal.sessionId, e)}
-            on:keydown={(e) => e.key === 'Enter' && handleClose(terminal.sessionId, e as any)}
-          >
-            <XIcon class="w-3.5 h-3.5" />
-          </span>
-        </button>
-      {/each}
-    </div>
-  {/if}
-
   <!-- Terminal Content Area -->
   <div class="flex-1 relative overflow-hidden">
-    {#if $activeTerminals.length === 0}
+    {#if rootTerminals.length === 0}
       <div class="absolute inset-0 flex flex-col items-center justify-center text-app-text-secondary bg-app-surface">
         <div class="w-16 h-16 mb-4 rounded-2xl bg-app-bg flex items-center justify-center border border-app-border shadow-sm">
           <TerminalIcon class="w-8 h-8 opacity-50" />
@@ -302,10 +208,10 @@
         <p class="text-sm mt-2 opacity-60">请从左侧列表选择连接以开始</p>
       </div>
     {:else}
-      {#each $activeTerminals as terminal, index (terminal.sessionId)}
+      {#each rootTerminals as terminal (terminal.sessionId)}
         <TerminalView 
           terminalData={terminal} 
-          isVisible={index === $selectedTerminalIndex} 
+          isVisible={terminal.sessionId === $activeTerminals[$selectedTerminalIndex]?.sessionId || terminal.sessionId === $activeTerminals[$selectedTerminalIndex]?.parentId} 
         />
       {/each}
     {/if}
