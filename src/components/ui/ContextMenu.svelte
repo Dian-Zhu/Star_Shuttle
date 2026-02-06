@@ -74,6 +74,8 @@
 
 <div 
   bind:this={menuEl}
+  role="menu"
+  tabindex="-1"
   class="fixed z-50 min-w-[180px] rounded-lg shadow-xl border border-app-border/50 py-1.5 text-sm overflow-hidden text-app-text select-none context-menu-glass"
   style="left: {posX}px; top: {posY}px;"
   transition:scale={{duration: 100, start: 0.95}}

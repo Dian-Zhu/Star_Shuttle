@@ -1,14 +1,12 @@
 <script lang="ts">
 import { onDestroy } from 'svelte';
-import { Terminal } from '@xterm/xterm';
-import { FitAddon } from '@xterm/addon-fit';
-import { SearchAddon } from '@xterm/addon-search';
 import { activeTerminals, type ActiveTerminal, terminalSessionMap, closeSplitRequest } from '../lib/store';
 import { createTerminalSession, closeSplitSession, closeTerminal } from '../lib/terminalService';
 import { terminalPool } from '../lib/terminalPool';
 import { TerminalInstance } from '../lib/terminalInstance';
 import type { LayoutNode, TerminalPaneNode, SplitNode } from '../lib/layout';
 import { generateId, findNode, replaceNode, removeNode, findNodeBySessionId } from '../lib/layout';
+import type { TerminalProxy } from '../lib/terminalProxy';
 import SplitPane from './terminal/SplitPane.svelte';
 
   export let terminalData: ActiveTerminal;
@@ -49,7 +47,9 @@ import SplitPane from './terminal/SplitPane.svelte';
       connection: terminalData.connection,
       isRoot: true,
       createdAt: Date.now(),
-      onInit: (terminal: Terminal, fitAddon: FitAddon, searchAddon: SearchAddon) => {
+      onInit: (proxy: TerminalProxy) => {
+        const instance = proxy.getInstance();
+        const { terminal, fitAddon, searchAddon } = instance;
         // 更新 activeTerminals store
         activeTerminals.update(terminals => {
           return terminals.map(t => {
@@ -165,7 +165,9 @@ import SplitPane from './terminal/SplitPane.svelte';
         connection: targetNode.connection as any,
         isRoot: false,
         createdAt: Date.now(),
-        onInit: (terminal: Terminal, fitAddon: FitAddon, searchAddon: SearchAddon) => {
+        onInit: (proxy: TerminalProxy) => {
+          const instance = proxy.getInstance();
+          const { terminal, fitAddon, searchAddon } = instance;
           // Update activeTerminals with initialized instance
           activeTerminals.update(terminals => {
             return terminals.map(t => {

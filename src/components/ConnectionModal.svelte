@@ -3,6 +3,9 @@
   import { saveConnection } from '../lib/connectionService';
   import { connectAndOpen } from '../lib/terminalService';
   import XIcon from './icons/XIcon.svelte';
+  import SettingsIcon from './icons/SettingsIcon.svelte';
+  import PlusIcon from './icons/PlusIcon.svelte';
+  import ActivityIcon from './icons/ActivityIcon.svelte';
   import { slide } from 'svelte/transition';
 
   // Form state
@@ -345,208 +348,85 @@
     <div class="flex-1 overflow-y-auto p-6 custom-scrollbar">
       <form id="connection-form" on:submit|preventDefault={handleSubmit} class="space-y-6">
         {#if activeTab === 'basic'}
-          <div in:slide={{ duration: 200 }} class="space-y-6">
-            <!-- Basic Info -->
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
-              <div class="md:col-span-2">
-                <label class="block text-sm font-medium text-app-text-secondary mb-1.5" for="name">连接名称</label>
-                <input
-                  type="text"
-                  id="name"
-                  bind:value={formData.name}
-                  class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all"
-                  placeholder="例如: 生产环境服务器"
-                  required
-                />
-              </div>
-
-              <div class="md:col-span-2">
-                <label class="block text-sm font-medium text-app-text-secondary mb-1.5" for="protocol">协议</label>
-                <select
-                  id="protocol"
-                  bind:value={formData.protocol}
-                  class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all"
-                >
-                  <option value="Ssh">SSH</option>
-                  <option value="Rdp">RDP</option>
-                  <option value="Telnet">Telnet</option>
-                </select>
-              </div>
-
-              <div class="md:col-span-2 grid grid-cols-12 gap-4">
+          <div in:slide={{ duration: 200 }} class="space-y-5 p-1">
+            
+            <!-- Connection Details (Compact) -->
+            <div class="space-y-4">
+              <!-- Row 1: Name & Protocol -->
+              <div class="grid grid-cols-12 gap-4">
                 <div class="col-span-8">
-                  <label class="block text-sm font-medium text-app-text-secondary mb-1.5" for="host">主机地址</label>
+                  <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="name">连接名称</label>
                   <input
                     type="text"
-                    id="host"
-                    bind:value={formData.host}
-                    on:blur={trimHost}
-                    class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all font-mono"
-                    placeholder="192.168.1.1 或 example.com"
+                    id="name"
+                    bind:value={formData.name}
+                    class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-sm text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all"
+                    placeholder="例如: 生产环境服务器"
                     required
                   />
                 </div>
                 <div class="col-span-4">
-                  <label class="block text-sm font-medium text-app-text-secondary mb-1.5" for="port">端口</label>
+                  <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="protocol">协议</label>
+                  <select
+                    id="protocol"
+                    bind:value={formData.protocol}
+                    class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-sm text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all"
+                  >
+                    <option value="Ssh">SSH</option>
+                    <option value="Rdp">RDP</option>
+                    <option value="Telnet">Telnet</option>
+                  </select>
+                </div>
+              </div>
+
+              <!-- Row 2: Host, Port, Username -->
+              <div class="grid grid-cols-12 gap-4">
+                <div class="col-span-6">
+                  <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="host">主机地址</label>
+                  <div class="relative">
+                    <input
+                      type="text"
+                      id="host"
+                      bind:value={formData.host}
+                      on:blur={trimHost}
+                      class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-sm text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all font-mono"
+                      placeholder="192.168.1.1"
+                      required
+                    />
+                  </div>
+                </div>
+                <div class="col-span-2">
+                  <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="port">端口</label>
                   <input
                     type="number"
                     id="port"
                     bind:value={formData.port}
-                    class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all font-mono"
+                    class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-sm text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all font-mono"
                     min="1"
                     max="65535"
                     required
                   />
                 </div>
+                <div class="col-span-4">
+                  <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="username">
+                    {formData.protocol === 'Ssh' ? '用户名' : '用户名 (可选)'}
+                  </label>
+                  <input
+                    type="text"
+                    id="username"
+                    bind:value={formData.username}
+                    class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-sm text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all font-mono"
+                    placeholder={formData.protocol === 'Ssh' ? 'root' : 'Administrator'}
+                  />
+                </div>
               </div>
 
-              <div class="md:col-span-2">
-                <label class="block text-sm font-medium text-app-text-secondary mb-1.5" for="username">
-                  {formData.protocol === 'Ssh' ? '用户名' : '用户名 (可选)'}
-                </label>
-                <input
-                  type="text"
-                  id="username"
-                  bind:value={formData.username}
-                  class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all font-mono"
-                  placeholder={formData.protocol === 'Ssh' ? 'root' : 'Administrator'}
-                />
-              </div>
-            </div>
-
-            <!-- Authentication -->
-            {#if formData.protocol === 'Ssh'}
-            <div class="border-t border-app-border pt-5">
-              <span class="block text-sm font-medium text-app-text-secondary mb-3">认证方式</span>
-              
-              <div class="flex space-x-4 mb-4">
-                <label class="flex items-center cursor-pointer">
-                  <input type="radio" bind:group={formData.authMethod} value="password" class="w-4 h-4 text-primary-600 bg-app-bg border-app-border focus:ring-primary-600 ring-offset-app-surface">
-                  <span class="ml-2 text-sm text-app-text">密码</span>
-                </label>
-                <label class="flex items-center cursor-pointer">
-                  <input type="radio" bind:group={formData.authMethod} value="keyboardInteractive" class="w-4 h-4 text-primary-600 bg-app-bg border-app-border focus:ring-primary-600 ring-offset-app-surface">
-                  <span class="ml-2 text-sm text-app-text">MFA</span>
-                </label>
-                <label class="flex items-center cursor-pointer">
-                  <input type="radio" bind:group={formData.authMethod} value="privateKey" class="w-4 h-4 text-primary-600 bg-app-bg border-app-border focus:ring-primary-600 ring-offset-app-surface">
-                  <span class="ml-2 text-sm text-app-text">私钥</span>
-                </label>
-                <label class="flex items-center cursor-pointer">
-                  <input type="radio" bind:group={formData.authMethod} value="agent" class="w-4 h-4 text-primary-600 bg-app-bg border-app-border focus:ring-primary-600 ring-offset-app-surface">
-                  <span class="ml-2 text-sm text-app-text">Agent</span>
-                </label>
-                <label class="flex items-center cursor-pointer">
-                  <input type="radio" bind:group={formData.authMethod} value="certificate" class="w-4 h-4 text-primary-600 bg-app-bg border-app-border focus:ring-primary-600 ring-offset-app-surface">
-                  <span class="ml-2 text-sm text-app-text">证书</span>
-                </label>
-              </div>
-
-              <div class="bg-app-surface rounded-lg p-4 border border-app-border">
-                {#if formData.authMethod === 'password'}
-                  <div>
-                    <label class="block text-sm font-medium text-app-text-secondary mb-1.5" for="password">密码</label>
-                    <input
-                      type="password"
-                      id="password"
-                      bind:value={formData.password}
-                      class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all"
-                    />
-                    <label class="flex items-center mt-2 cursor-pointer">
-                      <input type="checkbox" bind:checked={formData.savePassword} class="rounded border-app-border bg-app-bg text-primary-600 focus:ring-primary-600 ring-offset-app-surface">
-                      <span class="ml-2 text-xs text-app-text-secondary">保存密码</span>
-                    </label>
-                  </div>
-                {:else if formData.authMethod === 'keyboardInteractive'}
-                  <div class="text-sm text-app-text-secondary">
-                    连接时会弹出交互式认证提示（MFA），输入内容不会被保存。
-                  </div>
-                {:else if formData.authMethod === 'privateKey'}
-                  <div class="space-y-3">
-                    <div>
-                      <label class="block text-sm font-medium text-app-text-secondary mb-1.5" for="keyPath">私钥路径</label>
-                      <input
-                        type="text"
-                        id="keyPath"
-                        bind:value={formData.keyPath}
-                        class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all font-mono text-sm"
-                        placeholder="~/.ssh/id_rsa"
-                      />
-                    </div>
-                    <div>
-                      <label class="block text-sm font-medium text-app-text-secondary mb-1.5" for="passphrase">密码短语 (可选)</label>
-                      <input
-                        type="password"
-                        id="passphrase"
-                        bind:value={formData.passphrase}
-                        class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all"
-                      />
-                      <label class="flex items-center mt-2 cursor-pointer">
-                        <input type="checkbox" bind:checked={formData.savePassphrase} class="rounded border-app-border bg-app-bg text-primary-600 focus:ring-primary-600 ring-offset-app-surface">
-                        <span class="ml-2 text-xs text-app-text-secondary">保存密码短语</span>
-                      </label>
-                    </div>
-                  </div>
-                {:else if formData.authMethod === 'agent'}
-                  <div>
-                    <label class="block text-sm font-medium text-app-text-secondary mb-1.5" for="agentPath">Agent 路径 (可选)</label>
-                    <input
-                      type="text"
-                      id="agentPath"
-                      bind:value={formData.agentPath}
-                      class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all font-mono text-sm"
-                      placeholder="默认使用系统 SSH_AUTH_SOCK"
-                    />
-                  </div>
-                {:else if formData.authMethod === 'certificate'}
-                  <div class="space-y-3">
-                    <div>
-                      <label class="block text-sm font-medium text-app-text-secondary mb-1.5" for="certificatePath">证书路径</label>
-                      <input
-                        type="text"
-                        id="certificatePath"
-                        bind:value={formData.certificatePath}
-                        class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all font-mono text-sm"
-                        placeholder="~/.ssh/id_rsa-cert.pub"
-                      />
-                    </div>
-                    <div>
-                      <label class="block text-sm font-medium text-app-text-secondary mb-1.5" for="privateKeyPath">私钥路径</label>
-                      <input
-                        type="text"
-                        id="privateKeyPath"
-                        bind:value={formData.privateKeyPath}
-                        class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all font-mono text-sm"
-                        placeholder="~/.ssh/id_rsa"
-                      />
-                    </div>
-                    <div>
-                      <label class="block text-sm font-medium text-app-text-secondary mb-1.5" for="passphrase">密码短语 (可选)</label>
-                      <input
-                        type="password"
-                        id="passphrase"
-                        bind:value={formData.passphrase}
-                        class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all"
-                      />
-                      <label class="flex items-center mt-2 cursor-pointer">
-                        <input type="checkbox" bind:checked={formData.savePassphrase} class="rounded border-app-border bg-app-bg text-primary-600 focus:ring-primary-600 ring-offset-app-surface">
-                        <span class="ml-2 text-xs text-app-text-secondary">保存密码短语</span>
-                      </label>
-                    </div>
-                  </div>
-                {/if}
-              </div>
-            </div>
-            {/if}
-
-            <!-- Tags & Description -->
-            <div class="border-t border-app-border pt-5 space-y-4">
-               <!-- Tags -->
+              <!-- Row 3: Tags -->
                <div>
-                  <label class="block text-sm font-medium text-app-text-secondary mb-1.5" for="tags">标签</label>
-                  <div class="w-full bg-app-bg border border-app-border rounded-lg p-2 flex flex-wrap gap-2 min-h-[42px] focus-within:border-primary-500 focus-within:ring-1 focus-within:ring-primary-500 transition-all">
+                   <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="tags">标签</label>
+                   <div class="w-full bg-app-bg border border-app-border rounded-lg p-2 flex flex-wrap gap-2 min-h-[38px] focus-within:border-primary-500 focus-within:ring-1 focus-within:ring-primary-500 transition-all">
                     {#each currentTags as tag}
-                      <span class="bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 text-xs px-2 py-1 rounded-md flex items-center gap-1">
+                      <span class="bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 text-xs px-2 py-0.5 rounded-md flex items-center gap-1">
                         {tag}
                         <button type="button" on:click={() => removeTag(tag)} class="hover:text-primary-900 dark:hover:text-primary-100">
                           <XIcon class="w-3 h-3" />
@@ -558,18 +438,17 @@
                       bind:value={tagInput}
                       on:keydown={handleTagKeydown}
                       on:blur={commitPendingTag}
-                      class="bg-transparent border-none outline-none text-sm min-w-[80px] flex-1 text-app-text placeholder-app-text-secondary/50"
-                      placeholder={currentTags.length === 0 ? "输入标签并回车..." : ""}
+                      class="bg-transparent border-none outline-none text-sm min-w-[80px] flex-1 text-app-text placeholder-app-text-secondary/50 p-0"
+                      placeholder={currentTags.length === 0 ? "输入标签..." : ""}
                     />
                   </div>
-                  <!-- Suggestions -->
+                  <!-- Suggested Tags -->
                   {#if availableTags.length > 0}
                     <div class="flex flex-wrap gap-2 mt-2">
-                      <span class="text-xs text-app-text-secondary py-1">推荐:</span>
                       {#each availableTags as tag}
                          <button 
                            type="button" 
-                           class="text-xs px-2 py-1 rounded-md bg-app-surface text-app-text-secondary hover:bg-app-bg-hover transition-colors"
+                           class="text-[10px] px-1.5 py-0.5 rounded-md bg-app-surface border border-app-border text-app-text-secondary hover:bg-app-bg-hover transition-colors"
                            on:click={() => addTag(tag)}
                          >
                            {tag}
@@ -577,580 +456,523 @@
                       {/each}
                     </div>
                   {/if}
-               </div>
-
-               <!-- Description -->
-               <div>
-                  <label class="block text-sm font-medium text-app-text-secondary mb-1.5" for="description">描述</label>
-                  <textarea
-                    id="description"
-                    bind:value={formData.description}
-                    rows="3"
-                    class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all resize-none"
-                    placeholder="关于此服务器的备注信息..."
-                  ></textarea>
-               </div>
-            </div>
-            
-            <!-- Proxy Configuration -->
-            <div>
-              <span class="block text-sm font-medium text-app-text-secondary mb-3">代理跳板配置</span>
-              
-              <!-- Proxy Type Selection -->
-              <div class="mb-4">
-                <span class="block text-xs font-medium text-app-text-secondary mb-2">代理类型</span>
-                <div class="grid grid-cols-4 gap-2">
-                  <button
-                    type="button"
-                    class={`px-3 py-2 text-xs font-medium rounded-md transition-all ${formData.proxyType === 'none' ? 'bg-primary-600 text-white' : 'bg-app-bg text-app-text-secondary hover:bg-app-bg-hover'}`}
-                    on:click={() => formData.proxyType = 'none'}
-                  >
-                    无代理
-                  </button>
-                  <button
-                    type="button"
-                    class={`px-3 py-2 text-xs font-medium rounded-md transition-all ${formData.proxyType === 'socks5' ? 'bg-primary-600 text-white' : 'bg-app-bg text-app-text-secondary hover:bg-app-bg-hover'}`}
-                    on:click={() => formData.proxyType = 'socks5'}
-                  >
-                    SOCKS5
-                  </button>
-                  <button
-                    type="button"
-                    class={`px-3 py-2 text-xs font-medium rounded-md transition-all ${formData.proxyType === 'http' ? 'bg-primary-600 text-white' : 'bg-app-bg text-app-text-secondary hover:bg-app-bg-hover'}`}
-                    on:click={() => formData.proxyType = 'http'}
-                  >
-                    HTTP
-                  </button>
-                  <button
-                    type="button"
-                    class={`px-3 py-2 text-xs font-medium rounded-md transition-all ${formData.proxyType === 'jumpHost' ? 'bg-primary-600 text-white' : 'bg-app-bg text-app-text-secondary hover:bg-app-bg-hover'}`}
-                    on:click={() => formData.proxyType = 'jumpHost'}
-                  >
-                    Jump Host
-                  </button>
                 </div>
+            </div>
+
+            <div class="border-t border-app-border"></div>
+
+            <!-- Authentication -->
+            {#if formData.protocol === 'Ssh'}
+            <div class="space-y-3">
+              <div class="flex items-center justify-between">
+                 <h3 class="text-xs font-medium text-app-text-secondary uppercase tracking-wider">认证方式</h3>
               </div>
               
-              <!-- Proxy Details -->
-              {#if formData.proxyType !== 'none'}
-                <div class="space-y-4 p-4 bg-app-surface rounded-lg border border-app-border">
-                  {#if formData.proxyType === 'socks5' || formData.proxyType === 'http'}
-                    <!-- SOCKS5/HTTP Proxy Configuration -->
-                    <div class="grid grid-cols-12 gap-4">
-                      <div class="col-span-8">
-                        <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="proxyHost">代理主机</label>
-                        <input
-                          type="text"
-                          id="proxyHost"
-                          bind:value={formData.proxyHost}
-                          class="w-full bg-app-bg border border-app-border rounded px-3 py-2 text-sm text-app-text focus:border-primary-500 outline-none"
-                          placeholder="proxy.example.com"
-                        />
-                      </div>
-                      <div class="col-span-4">
-                        <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="proxyPort">代理端口</label>
-                        <input
-                          type="number"
-                          id="proxyPort"
-                          bind:value={formData.proxyPort}
-                          class="w-full bg-app-bg border border-app-border rounded px-3 py-2 text-sm text-app-text focus:border-primary-500 outline-none"
-                          placeholder="1080"
-                          min="1"
-                          max="65535"
-                        />
-                      </div>
-                    </div>
-                    
-                    <!-- Proxy Authentication -->
-                    <div>
-                      <span class="block text-xs font-medium text-app-text-secondary mb-2">代理认证 (可选)</span>
-                      <div class="grid grid-cols-12 gap-4">
-                        <div class="col-span-6">
-                          <input
-                            type="text"
-                            bind:value={formData.proxyUsername}
-                            class="w-full bg-app-bg border border-app-border rounded px-3 py-2 text-sm text-app-text focus:border-primary-500 outline-none"
-                            placeholder="用户名"
-                          />
-                        </div>
-                        <div class="col-span-6">
-                          <input
-                            type="password"
-                            bind:value={formData.proxyPassword}
-                            class="w-full bg-app-bg border border-app-border rounded px-3 py-2 text-sm text-app-text focus:border-primary-500 outline-none"
-                            placeholder="密码"
-                          />
-                        </div>
-                      </div>
-                    </div>
-                    
-                    <!-- SOCKS Proxy Port (Dynamic Port Forwarding) -->
-                    {#if formData.proxyType === 'socks5'}
-                      <div>
-                        <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="socksProxyPort">动态端口转发 (SOCKS 代理端口)</label>
-                        <div class="flex items-center gap-2">
-                          <input
-                            type="number"
-                            id="socksProxyPort"
-                            bind:value={formData.socksProxyPort}
-                            class="w-full bg-app-bg border border-app-border rounded px-3 py-2 text-sm text-app-text focus:border-primary-500 outline-none"
-                            placeholder="1080 (留空则不启用)"
-                            min="1024"
-                            max="65535"
-                          />
-                          <div class="text-xs text-app-text-secondary">
-                            使用 SSH -D 选项创建本地 SOCKS5 代理
-                          </div>
-                        </div>
-                      </div>
-                    {/if}
-                  {:else if formData.proxyType === 'jumpHost'}
-                    <!-- Jump Host Configuration -->
-                    <div class="space-y-4">
-                      <div class="grid grid-cols-12 gap-4">
-                        <div class="col-span-8">
-                          <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="proxyHost">跳板主机</label>
-                          <input
-                            type="text"
-                            id="proxyHost"
-                            bind:value={formData.proxyHost}
-                            class="w-full bg-app-bg border border-app-border rounded px-3 py-2 text-sm text-app-text focus:border-primary-500 outline-none"
-                            placeholder="bastion.example.com"
-                          />
-                        </div>
-                        <div class="col-span-4">
-                          <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="proxyPort">跳板端口</label>
-                          <input
-                            type="number"
-                            id="proxyPort"
-                            bind:value={formData.proxyPort}
-                            class="w-full bg-app-bg border border-app-border rounded px-3 py-2 text-sm text-app-text focus:border-primary-500 outline-none"
-                            placeholder="22"
-                            min="1"
-                            max="65535"
-                          />
-                        </div>
-                      </div>
-                      
-                      <div>
-                        <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="jumpHostUsername">跳板用户名</label>
-                        <input
-                          type="text"
-                          id="jumpHostUsername"
-                          bind:value={formData.jumpHostUsername}
-                          class="w-full bg-app-bg border border-app-border rounded px-3 py-2 text-sm text-app-text focus:border-primary-500 outline-none"
-                          placeholder="用户名"
-                        />
-                      </div>
-                      
-                      <!-- Jump Host Authentication Method -->
-                      <div>
-                        <label class="block text-xs font-medium text-app-text-secondary mb-2" for="jumpHostAuthMethod">跳板认证方式</label>
-                        <select
-                          id="jumpHostAuthMethod"
-                          bind:value={formData.jumpHostAuthMethod}
-                          class="w-full bg-app-bg border border-app-border rounded px-3 py-2 text-sm text-app-text focus:border-primary-500 outline-none"
-                        >
-                          <option value="password">密码认证</option>
-                          <option value="keyboardInteractive">MFA (键盘交互)</option>
-                          <option value="privateKey">私钥认证</option>
-                          <option value="agent">SSH Agent</option>
-                          <option value="certificate">证书认证</option>
-                        </select>
-                      </div>
+              <div class="flex p-1 bg-app-bg rounded-lg border border-app-border overflow-x-auto">
+                {#each [
+                  { id: 'password', label: '密码' },
+                  { id: 'privateKey', label: '私钥' },
+                  { id: 'keyboardInteractive', label: 'MFA' },
+                  { id: 'agent', label: 'Agent' },
+                  { id: 'certificate', label: '证书' }
+                ] as method}
+                  <button
+                    type="button"
+                    class="flex-1 whitespace-nowrap px-3 py-1.5 text-xs rounded-md transition-all {formData.authMethod === method.id ? 'bg-app-surface text-primary-600 shadow-sm font-medium' : 'text-app-text-secondary hover:text-app-text'}"
+                    on:click={() => formData.authMethod = method.id as any}
+                  >
+                    {method.label}
+                  </button>
+                {/each}
+              </div>
 
-                      <div class="bg-app-surface rounded-lg p-3 border border-app-border">
-                        {#if formData.jumpHostAuthMethod === 'password'}
-                          <div>
-                            <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="jumpHostPassword">跳板密码</label>
-                            <input
-                              type="password"
-                              id="jumpHostPassword"
-                              bind:value={formData.jumpHostPassword}
-                              class="w-full bg-app-bg border border-app-border rounded px-3 py-2 text-sm text-app-text focus:border-primary-500 outline-none"
-                              placeholder="密码"
-                            />
-                            <label class="flex items-center mt-2 cursor-pointer">
-                              <input type="checkbox" bind:checked={formData.jumpHostSavePassword} class="rounded border-app-border bg-app-bg text-primary-600 focus:ring-primary-600 ring-offset-app-surface">
-                              <span class="ml-2 text-xs text-app-text-secondary">保存密码</span>
-                            </label>
-                          </div>
-                        {:else if formData.jumpHostAuthMethod === 'keyboardInteractive'}
-                          <div class="text-xs text-app-text-secondary">
-                            连接跳板时会弹出交互式认证提示（MFA），输入内容不会被保存。
-                          </div>
-                        {:else if formData.jumpHostAuthMethod === 'privateKey'}
-                          <div class="space-y-3">
-                            <div>
-                              <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="jumpHostKeyPath">跳板私钥路径</label>
-                              <input
-                                type="text"
-                                id="jumpHostKeyPath"
-                                bind:value={formData.jumpHostKeyPath}
-                                class="w-full bg-app-bg border border-app-border rounded px-3 py-2 text-sm text-app-text focus:border-primary-500 outline-none font-mono"
-                                placeholder="~/.ssh/id_rsa"
-                              />
-                            </div>
-                            <div>
-                              <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="jumpHostPassphrase">密码短语 (可选)</label>
-                              <input
-                                type="password"
-                                id="jumpHostPassphrase"
-                                bind:value={formData.jumpHostPassphrase}
-                                class="w-full bg-app-bg border border-app-border rounded px-3 py-2 text-sm text-app-text focus:border-primary-500 outline-none"
-                              />
-                              <label class="flex items-center mt-2 cursor-pointer">
-                                <input type="checkbox" bind:checked={formData.jumpHostSavePassphrase} class="rounded border-app-border bg-app-bg text-primary-600 focus:ring-primary-600 ring-offset-app-surface">
-                                <span class="ml-2 text-xs text-app-text-secondary">保存密码短语</span>
-                              </label>
-                            </div>
-                          </div>
-                        {:else if formData.jumpHostAuthMethod === 'agent'}
-                          <div>
-                            <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="jumpHostAgentPath">Agent 路径 (可选)</label>
-                            <input
-                              type="text"
-                              id="jumpHostAgentPath"
-                              bind:value={formData.jumpHostAgentPath}
-                              class="w-full bg-app-bg border border-app-border rounded px-3 py-2 text-sm text-app-text focus:border-primary-500 outline-none font-mono"
-                              placeholder="默认使用系统 SSH_AUTH_SOCK"
-                            />
-                          </div>
-                        {:else if formData.jumpHostAuthMethod === 'certificate'}
-                          <div class="space-y-3">
-                            <div>
-                              <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="jumpHostCertificatePath">跳板证书路径</label>
-                              <input
-                                type="text"
-                                id="jumpHostCertificatePath"
-                                bind:value={formData.jumpHostCertificatePath}
-                                class="w-full bg-app-bg border border-app-border rounded px-3 py-2 text-sm text-app-text focus:border-primary-500 outline-none font-mono"
-                                placeholder="~/.ssh/id_rsa-cert.pub"
-                              />
-                            </div>
-                            <div>
-                              <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="jumpHostPrivateKeyPath">跳板私钥路径</label>
-                              <input
-                                type="text"
-                                id="jumpHostPrivateKeyPath"
-                                bind:value={formData.jumpHostPrivateKeyPath}
-                                class="w-full bg-app-bg border border-app-border rounded px-3 py-2 text-sm text-app-text focus:border-primary-500 outline-none font-mono"
-                                placeholder="~/.ssh/id_rsa"
-                              />
-                            </div>
-                            <div>
-                              <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="jumpHostPassphraseCert">密码短语 (可选)</label>
-                              <input
-                                type="password"
-                                id="jumpHostPassphraseCert"
-                                bind:value={formData.jumpHostPassphrase}
-                                class="w-full bg-app-bg border border-app-border rounded px-3 py-2 text-sm text-app-text focus:border-primary-500 outline-none"
-                              />
-                              <label class="flex items-center mt-2 cursor-pointer">
-                                <input type="checkbox" bind:checked={formData.jumpHostSavePassphrase} class="rounded border-app-border bg-app-bg text-primary-600 focus:ring-primary-600 ring-offset-app-surface">
-                                <span class="ml-2 text-xs text-app-text-secondary">保存密码短语</span>
-                              </label>
-                            </div>
-                          </div>
-                        {/if}
+              <div class="pt-1">
+                {#if formData.authMethod === 'password'}
+                  <div>
+                    <input
+                      type="password"
+                      id="password"
+                      bind:value={formData.password}
+                      class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-sm text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all"
+                      placeholder="请输入密码"
+                    />
+                    <label class="flex items-center mt-2 cursor-pointer">
+                      <input type="checkbox" bind:checked={formData.savePassword} class="rounded border-app-border bg-app-surface text-primary-600 focus:ring-primary-600 ring-offset-app-surface">
+                      <span class="ml-2 text-xs text-app-text-secondary">保存密码</span>
+                    </label>
+                  </div>
+                {:else if formData.authMethod === 'keyboardInteractive'}
+                  <div class="text-sm text-app-text-secondary flex items-center gap-2 p-2 bg-app-bg rounded-lg border border-app-border border-dashed">
+                    <ActivityIcon class="w-4 h-4" />
+                    连接时会弹出交互式认证提示（MFA），输入内容不会被保存。
+                  </div>
+                {:else if formData.authMethod === 'privateKey'}
+                  <div class="space-y-3">
+                    <div class="grid grid-cols-12 gap-3">
+                      <div class="col-span-12">
+                         <input
+                          type="text"
+                          bind:value={formData.keyPath}
+                          class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-sm text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all font-mono"
+                          placeholder="私钥路径 (~/.ssh/id_rsa)"
+                        />
+                      </div>
+                      <div class="col-span-12">
+                        <input
+                          type="password"
+                          bind:value={formData.passphrase}
+                          class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-sm text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all"
+                          placeholder="密码短语 (可选)"
+                        />
+                        <label class="flex items-center mt-2 cursor-pointer">
+                          <input type="checkbox" bind:checked={formData.savePassphrase} class="rounded border-app-border bg-app-surface text-primary-600 focus:ring-primary-600 ring-offset-app-surface">
+                          <span class="ml-2 text-xs text-app-text-secondary">保存密码短语</span>
+                        </label>
                       </div>
                     </div>
-                  {/if}
-                </div>
-              {/if}
+                  </div>
+                {:else if formData.authMethod === 'agent'}
+                  <div>
+                    <input
+                      type="text"
+                      bind:value={formData.agentPath}
+                      class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-sm text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all font-mono"
+                      placeholder="Agent 路径 (可选，默认系统 SSH_AUTH_SOCK)"
+                    />
+                  </div>
+                {:else if formData.authMethod === 'certificate'}
+                  <div class="space-y-3">
+                    <input
+                        type="text"
+                        bind:value={formData.certificatePath}
+                        class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-sm text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all font-mono"
+                        placeholder="证书路径 (~/.ssh/id_rsa-cert.pub)"
+                    />
+                    <input
+                        type="text"
+                        bind:value={formData.privateKeyPath}
+                        class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-sm text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all font-mono"
+                        placeholder="私钥路径 (~/.ssh/id_rsa)"
+                    />
+                    <div>
+                        <input
+                          type="password"
+                          bind:value={formData.passphrase}
+                          class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-sm text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all"
+                          placeholder="密码短语 (可选)"
+                        />
+                        <label class="flex items-center mt-2 cursor-pointer">
+                          <input type="checkbox" bind:checked={formData.savePassphrase} class="rounded border-app-border bg-app-surface text-primary-600 focus:ring-primary-600 ring-offset-app-surface">
+                          <span class="ml-2 text-xs text-app-text-secondary">保存密码短语</span>
+                        </label>
+                    </div>
+                  </div>
+                {/if}
+              </div>
             </div>
+            {/if}
+
+            <div class="border-t border-app-border"></div>
+
+            <!-- Description -->
+            <div>
+               <textarea
+                 bind:value={formData.description}
+                 rows="2"
+                 class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-sm text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all resize-none"
+                 placeholder="备注信息 (可选)..."
+               ></textarea>
+            </div>
+            
           </div>
         {:else if activeTab === 'advanced'}
-          <div in:slide={{ duration: 200 }} class="space-y-6">
+          <div in:slide={{ duration: 200 }} class="space-y-5">
             <!-- Port Forwarding -->
             <div>
-              <span class="block text-sm font-medium text-app-text-secondary mb-3">端口转发 (SSH Tunnel)</span>
+              <h3 class="text-xs font-medium text-app-text-secondary uppercase tracking-wider mb-3">端口转发 (SSH Tunnel)</h3>
               
-              <!-- Local Forwarding -->
-              <div class="mb-6">
-                <div class="flex items-center justify-between mb-2">
-                  <span class="text-xs font-medium text-app-text-secondary">本地转发 (Local) - 将本地端口转发到远程服务器</span>
-                </div>
-                
-                <div class="space-y-2 mb-3">
-                  {#each formData.localForwards as forward, i}
-                    <div class="flex items-center gap-2 bg-app-surface p-2 rounded border border-app-border">
-                      <div class="flex-1 text-xs font-mono text-app-text-secondary">
-                        <span class="text-green-500">Local:{forward.local_port}</span> <span class="text-app-text-secondary">-></span> <span class="text-primary-500">{forward.remote_host}:{forward.remote_port}</span>
-                      </div>
-                      <button type="button" on:click={() => removeLocalForward(i)} class="text-app-text-secondary hover:text-red-500">
-                        <XIcon class="w-3 h-3" />
+              <div class="space-y-4">
+                <!-- Local Forwarding -->
+                <div>
+                  <div class="flex items-center justify-between mb-2">
+                    <span class="text-xs font-medium text-app-text-secondary">本地转发 (Local) - 将本地端口转发到远程服务器</span>
+                  </div>
+                  
+                  {#if formData.localForwards.length > 0}
+                    <div class="space-y-2 mb-3">
+                      {#each formData.localForwards as forward, i}
+                        <div class="flex items-center gap-2 bg-app-bg p-2 rounded-lg border border-app-border group/item hover:border-primary-500/50 transition-colors">
+                          <div class="flex-1 text-xs font-mono text-app-text-secondary flex items-center gap-2">
+                            <span class="bg-green-500/10 text-green-600 dark:text-green-400 px-1.5 py-0.5 rounded">Local:{forward.local_port}</span>
+                            <span class="text-app-text-secondary opacity-50">→</span>
+                            <span class="bg-primary-500/10 text-primary-600 dark:text-primary-400 px-1.5 py-0.5 rounded">{forward.remote_host}:{forward.remote_port}</span>
+                          </div>
+                          <button type="button" on:click={() => removeLocalForward(i)} class="text-app-text-secondary hover:text-red-500 p-1 rounded-md hover:bg-app-surface transition-colors opacity-0 group-hover/item:opacity-100">
+                            <XIcon class="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      {/each}
+                    </div>
+                  {/if}
+
+                  <div class="grid grid-cols-12 gap-2">
+                    <div class="col-span-3">
+                      <input
+                        type="number"
+                        bind:value={newLocalForward.local_port}
+                        placeholder="本地端口"
+                        class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-xs text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all"
+                      />
+                    </div>
+                    <div class="col-span-4">
+                      <input
+                        type="text"
+                        bind:value={newLocalForward.remote_host}
+                        placeholder="目标主机"
+                        class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-xs text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all"
+                      />
+                    </div>
+                    <div class="col-span-3">
+                      <input
+                        type="number"
+                        bind:value={newLocalForward.remote_port}
+                        placeholder="目标端口"
+                        class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-xs text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all"
+                      />
+                    </div>
+                    <div class="col-span-2">
+                      <button
+                        type="button"
+                        on:click={addLocalForward}
+                        class="w-full h-full flex items-center justify-center bg-primary-600 hover:bg-primary-500 text-white rounded-lg text-xs font-medium transition-colors shadow-sm"
+                      >
+                        <PlusIcon class="w-4 h-4" />
                       </button>
                     </div>
-                  {/each}
-                </div>
-
-                <div class="grid grid-cols-12 gap-2">
-                  <div class="col-span-3">
-                    <input
-                      type="number"
-                      bind:value={newLocalForward.local_port}
-                      placeholder="本地端口"
-                      class="w-full bg-app-bg border border-app-border rounded px-2 py-1.5 text-xs text-app-text focus:border-primary-500 outline-none"
-                    />
-                  </div>
-                  <div class="col-span-4">
-                    <input
-                      type="text"
-                      bind:value={newLocalForward.remote_host}
-                      placeholder="目标主机 (如: localhost)"
-                      class="w-full bg-app-bg border border-app-border rounded px-2 py-1.5 text-xs text-app-text focus:border-primary-500 outline-none"
-                    />
-                  </div>
-                  <div class="col-span-3">
-                    <input
-                      type="number"
-                      bind:value={newLocalForward.remote_port}
-                      placeholder="目标端口"
-                      class="w-full bg-app-bg border border-app-border rounded px-2 py-1.5 text-xs text-app-text focus:border-primary-500 outline-none"
-                    />
-                  </div>
-                  <div class="col-span-2">
-                    <button
-                      type="button"
-                      on:click={addLocalForward}
-                      class="w-full h-full flex items-center justify-center bg-primary-600 hover:bg-primary-500 text-white rounded text-xs transition-colors"
-                    >
-                      添加
-                    </button>
                   </div>
                 </div>
-              </div>
 
-              <!-- Remote Forwarding -->
-              <div>
-                <div class="flex items-center justify-between mb-2">
-                  <span class="text-xs font-medium text-app-text-secondary">远程转发 (Remote) - 将远程端口转发到本地</span>
-                </div>
+                <!-- Remote Forwarding -->
+                <div>
+                  <div class="flex items-center justify-between mb-2">
+                    <span class="text-xs font-medium text-app-text-secondary">远程转发 (Remote) - 将远程端口转发到本地</span>
+                  </div>
 
-                <div class="space-y-2 mb-3">
-                  {#each formData.remoteForwards as forward, i}
-                    <div class="flex items-center gap-2 bg-app-surface p-2 rounded border border-app-border">
-                      <div class="flex-1 text-xs font-mono text-app-text">
-                        <span class="text-primary-500">Remote:{forward.remote_port}</span> <span class="text-app-text-secondary">-></span> <span class="text-green-500">{forward.local_host}:{forward.local_port}</span>
-                      </div>
-                      <button type="button" on:click={() => removeRemoteForward(i)} class="text-app-text-secondary hover:text-red-500">
-                        <XIcon class="w-3 h-3" />
+                  {#if formData.remoteForwards.length > 0}
+                    <div class="space-y-2 mb-3">
+                      {#each formData.remoteForwards as forward, i}
+                        <div class="flex items-center gap-2 bg-app-bg p-2 rounded-lg border border-app-border group/item hover:border-primary-500/50 transition-colors">
+                          <div class="flex-1 text-xs font-mono text-app-text flex items-center gap-2">
+                            <span class="bg-primary-500/10 text-primary-600 dark:text-primary-400 px-1.5 py-0.5 rounded">Remote:{forward.remote_port}</span>
+                            <span class="text-app-text-secondary opacity-50">→</span>
+                            <span class="bg-green-500/10 text-green-600 dark:text-green-400 px-1.5 py-0.5 rounded">{forward.local_host}:{forward.local_port}</span>
+                          </div>
+                          <button type="button" on:click={() => removeRemoteForward(i)} class="text-app-text-secondary hover:text-red-500 p-1 rounded-md hover:bg-app-surface transition-colors opacity-0 group-hover/item:opacity-100">
+                            <XIcon class="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      {/each}
+                    </div>
+                  {/if}
+
+                  <div class="grid grid-cols-12 gap-2">
+                    <div class="col-span-3">
+                      <input
+                        type="number"
+                        bind:value={newRemoteForward.remote_port}
+                        placeholder="远程端口"
+                        class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-xs text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all"
+                      />
+                    </div>
+                    <div class="col-span-4">
+                      <input
+                        type="text"
+                        bind:value={newRemoteForward.local_host}
+                        placeholder="本地主机"
+                        class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-xs text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all"
+                      />
+                    </div>
+                    <div class="col-span-3">
+                      <input
+                        type="number"
+                        bind:value={newRemoteForward.local_port}
+                        placeholder="本地端口"
+                        class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-xs text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all"
+                      />
+                    </div>
+                    <div class="col-span-2">
+                      <button
+                        type="button"
+                        on:click={addRemoteForward}
+                        class="w-full h-full flex items-center justify-center bg-primary-600 hover:bg-primary-500 text-white rounded-lg text-xs font-medium transition-colors shadow-sm"
+                      >
+                         <PlusIcon class="w-4 h-4" />
                       </button>
                     </div>
-                  {/each}
-                </div>
-
-                <div class="grid grid-cols-12 gap-2">
-                  <div class="col-span-3">
-                    <input
-                      type="number"
-                      bind:value={newRemoteForward.remote_port}
-                      placeholder="远程端口"
-                      class="w-full bg-app-bg border border-app-border rounded px-2 py-1.5 text-xs text-app-text focus:border-primary-500 outline-none"
-                    />
-                  </div>
-                  <div class="col-span-4">
-                    <input
-                      type="text"
-                      bind:value={newRemoteForward.local_host}
-                      placeholder="本地主机 (如: localhost)"
-                      class="w-full bg-app-bg border border-app-border rounded px-2 py-1.5 text-xs text-app-text focus:border-primary-500 outline-none"
-                    />
-                  </div>
-                  <div class="col-span-3">
-                    <input
-                      type="number"
-                      bind:value={newRemoteForward.local_port}
-                      placeholder="本地端口"
-                      class="w-full bg-app-bg border border-app-border rounded px-2 py-1.5 text-xs text-app-text focus:border-primary-500 outline-none"
-                    />
-                  </div>
-                  <div class="col-span-2">
-                    <button
-                      type="button"
-                      on:click={addRemoteForward}
-                      class="w-full h-full flex items-center justify-center bg-primary-600 hover:bg-primary-500 text-white rounded text-xs transition-colors"
-                    >
-                      添加
-                    </button>
                   </div>
                 </div>
               </div>
             </div>
             
+            <div class="border-t border-app-border"></div>
+
             <!-- Proxy Configuration -->
             <div>
-              <span class="block text-sm font-medium text-app-text-secondary mb-3">代理跳板配置</span>
+              <h3 class="text-xs font-medium text-app-text-secondary uppercase tracking-wider mb-3">代理跳板配置</h3>
               
-              <!-- Proxy Type Selection -->
-              <div class="mb-4">
-                <span class="block text-xs font-medium text-app-text-secondary mb-2">代理类型</span>
-                <div class="grid grid-cols-4 gap-2">
-                  <button
-                    type="button"
-                    class={`px-3 py-2 text-xs font-medium rounded-md transition-all ${formData.proxyType === 'none' ? 'bg-primary-600 text-white' : 'bg-app-surface text-app-text hover:bg-app-bg-hover'}`}
-                    on:click={() => formData.proxyType = 'none'}
-                  >
-                    无代理
-                  </button>
-                  <button
-                    type="button"
-                    class={`px-3 py-2 text-xs font-medium rounded-md transition-all ${formData.proxyType === 'socks5' ? 'bg-primary-600 text-white' : 'bg-app-surface text-app-text hover:bg-app-bg-hover'}`}
-                    on:click={() => formData.proxyType = 'socks5'}
-                  >
-                    SOCKS5
-                  </button>
-                  <button
-                    type="button"
-                    class={`px-3 py-2 text-xs font-medium rounded-md transition-all ${formData.proxyType === 'http' ? 'bg-primary-600 text-white' : 'bg-app-surface text-app-text hover:bg-app-bg-hover'}`}
-                    on:click={() => formData.proxyType = 'http'}
-                  >
-                    HTTP
-                  </button>
-                  <button
-                    type="button"
-                    class={`px-3 py-2 text-xs font-medium rounded-md transition-all ${formData.proxyType === 'jumpHost' ? 'bg-primary-600 text-white' : 'bg-app-surface text-app-text hover:bg-app-bg-hover'}`}
-                    on:click={() => formData.proxyType = 'jumpHost'}
-                  >
-                    Jump Host
-                  </button>
+              <div class="space-y-4">
+                <!-- Proxy Type Selection -->
+                <div>
+                  <label class="block text-xs font-medium text-app-text-secondary mb-1.5">代理类型</label>
+                  <div class="flex p-1 bg-app-bg rounded-lg border border-app-border overflow-x-auto">
+                    {#each [
+                      { id: 'none', label: '无代理' },
+                      { id: 'socks5', label: 'SOCKS5' },
+                      { id: 'http', label: 'HTTP' },
+                      { id: 'jumpHost', label: 'Jump Host' }
+                    ] as type}
+                      <button
+                        type="button"
+                        class="flex-1 whitespace-nowrap px-3 py-1.5 text-xs rounded-md transition-all {formData.proxyType === type.id ? 'bg-app-surface text-primary-600 shadow-sm font-medium' : 'text-app-text-secondary hover:text-app-text'}"
+                        on:click={() => formData.proxyType = type.id as any}
+                      >
+                        {type.label}
+                      </button>
+                    {/each}
+                  </div>
                 </div>
-              </div>
-              
-              <!-- Proxy Details -->
-              {#if formData.proxyType !== 'none'}
-                <div class="space-y-4 p-4 bg-app-surface rounded-lg border border-app-border">
-                  {#if formData.proxyType === 'socks5' || formData.proxyType === 'http'}
-                    <!-- SOCKS5/HTTP Proxy Configuration -->
-                    <div class="grid grid-cols-12 gap-4">
-                      <div class="col-span-8">
-                        <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="proxyHost">代理主机</label>
-                        <input
-                          type="text"
-                          id="proxyHost"
-                          bind:value={formData.proxyHost}
-                          class="w-full bg-app-bg border border-app-border rounded px-3 py-2 text-sm text-app-text focus:border-primary-500 outline-none"
-                          placeholder="proxy.example.com"
-                        />
-                      </div>
-                      <div class="col-span-4">
-                        <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="proxyPort">代理端口</label>
-                        <input
-                          type="number"
-                          id="proxyPort"
-                          bind:value={formData.proxyPort}
-                          class="w-full bg-app-bg border border-app-border rounded px-3 py-2 text-sm text-app-text focus:border-primary-500 outline-none"
-                          placeholder="1080"
-                          min="1"
-                          max="65535"
-                        />
-                      </div>
-                    </div>
-                    
-                    <!-- Proxy Authentication -->
-                    <div>
-                      <span class="block text-xs font-medium text-app-text-secondary mb-2">代理认证 (可选)</span>
-                      <div class="grid grid-cols-12 gap-4">
-                        <div class="col-span-6">
-                          <input
-                            type="text"
-                            bind:value={formData.proxyUsername}
-                            class="w-full bg-app-bg border border-app-border rounded px-3 py-2 text-sm text-app-text focus:border-primary-500 outline-none"
-                            placeholder="用户名"
-                          />
-                        </div>
-                        <div class="col-span-6">
-                          <input
-                            type="password"
-                            bind:value={formData.proxyPassword}
-                            class="w-full bg-app-bg border border-app-border rounded px-3 py-2 text-sm text-app-text focus:border-primary-500 outline-none"
-                            placeholder="密码"
-                          />
-                        </div>
-                      </div>
-                    </div>
-                    
-                    <!-- SOCKS Proxy Port (Dynamic Port Forwarding) -->
-                    {#if formData.proxyType === 'socks5'}
-                      <div>
-                        <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="socksProxyPort">动态端口转发 (SOCKS 代理端口)</label>
-                        <div class="flex items-center gap-2">
-                          <input
-                            type="number"
-                            id="socksProxyPort"
-                            bind:value={formData.socksProxyPort}
-                            class="w-full bg-app-bg border border-app-border rounded px-3 py-2 text-sm text-app-text focus:border-primary-500 outline-none"
-                            placeholder="1080 (留空则不启用)"
-                            min="1024"
-                            max="65535"
-                          />
-                          <div class="text-xs text-app-text-secondary">
-                            使用 SSH -D 选项创建本地 SOCKS5 代理
-                          </div>
-                        </div>
-                      </div>
-                    {/if}
-                  {:else if formData.proxyType === 'jumpHost'}
-                    <!-- Jump Host Configuration -->
-                    <div class="space-y-4">
-                      <div class="grid grid-cols-12 gap-4">
+                
+                <!-- Proxy Details -->
+                {#if formData.proxyType !== 'none'}
+                  <div in:slide={{ duration: 200 }} class="space-y-4 pt-2">
+                    {#if formData.proxyType === 'socks5' || formData.proxyType === 'http'}
+                      <!-- SOCKS5/HTTP Proxy Configuration -->
+                      <div class="grid grid-cols-12 gap-3">
                         <div class="col-span-8">
-                          <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="proxyHost">跳板主机</label>
+                          <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="proxyHost">代理主机</label>
                           <input
                             type="text"
                             id="proxyHost"
                             bind:value={formData.proxyHost}
-                            class="w-full bg-app-bg border border-app-border rounded px-3 py-2 text-sm text-app-text focus:border-primary-500 outline-none"
-                            placeholder="bastion.example.com"
+                            class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-sm text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all"
+                            placeholder="proxy.example.com"
                           />
                         </div>
                         <div class="col-span-4">
-                          <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="proxyPort">跳板端口</label>
+                          <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="proxyPort">代理端口</label>
                           <input
                             type="number"
                             id="proxyPort"
                             bind:value={formData.proxyPort}
-                            class="w-full bg-app-bg border border-app-border rounded px-3 py-2 text-sm text-app-text focus:border-primary-500 outline-none"
-                            placeholder="22"
+                            class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-sm text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all"
+                            placeholder="1080"
                             min="1"
                             max="65535"
                           />
                         </div>
                       </div>
                       
-                      <div>
-                        <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="jumpHostUsername">跳板用户名</label>
-                        <input
-                          type="text"
-                          id="jumpHostUsername"
-                          bind:value={formData.jumpHostUsername}
-                          class="w-full bg-app-bg border border-app-border rounded px-3 py-2 text-sm text-app-text focus:border-primary-500 outline-none"
-                          placeholder="用户名"
-                        />
-                      </div>
-                      
-                      <!-- Jump Host Authentication Method -->
-                      <div>
-                        <label class="block text-xs font-medium text-app-text-secondary mb-2" for="jumpHostAuthMethod">跳板认证方式</label>
-                        <select
-                          id="jumpHostAuthMethod"
-                          bind:value={formData.jumpHostAuthMethod}
-                          class="w-full bg-app-bg border border-app-border rounded px-3 py-2 text-sm text-app-text focus:border-primary-500 outline-none"
-                        >
-                          <option value="password">密码认证</option>
-                          <option value="privateKey">私钥认证</option>
-                          <option value="agent">SSH Agent</option>
-                          <option value="certificate">证书认证</option>
-                        </select>
-                        <div class="text-xs text-app-text-secondary mt-1">
-                          注意：跳板主机的认证需要单独配置
+                      <!-- Proxy Authentication -->
+                      <div class="bg-app-bg/50 rounded-lg p-3 border border-app-border border-dashed">
+                        <span class="block text-xs font-medium text-app-text-secondary mb-2">代理认证 (可选)</span>
+                        <div class="grid grid-cols-2 gap-3">
+                          <input
+                            type="text"
+                            bind:value={formData.proxyUsername}
+                            class="w-full bg-app-surface border border-app-border rounded-lg px-3 py-2 text-sm text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all"
+                            placeholder="用户名"
+                          />
+                          <input
+                            type="password"
+                            bind:value={formData.proxyPassword}
+                            class="w-full bg-app-surface border border-app-border rounded-lg px-3 py-2 text-sm text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all"
+                            placeholder="密码"
+                          />
                         </div>
                       </div>
-                    </div>
-                  {/if}
-                </div>
-              {/if}
+                      
+                      <!-- SOCKS Proxy Port (Dynamic Port Forwarding) -->
+                      {#if formData.proxyType === 'socks5'}
+                        <div class="bg-app-bg/50 rounded-lg p-3 border border-app-border border-dashed">
+                          <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="socksProxyPort">动态端口转发 (SOCKS 代理端口)</label>
+                          <div class="flex items-center gap-2">
+                            <input
+                              type="number"
+                              id="socksProxyPort"
+                              bind:value={formData.socksProxyPort}
+                              class="w-full bg-app-surface border border-app-border rounded-lg px-3 py-2 text-sm text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all"
+                              placeholder="1080 (留空则不启用)"
+                              min="1024"
+                              max="65535"
+                            />
+                            <div class="text-xs text-app-text-secondary whitespace-nowrap">
+                              SSH -D 本地 SOCKS5
+                            </div>
+                          </div>
+                        </div>
+                      {/if}
+                    {:else if formData.proxyType === 'jumpHost'}
+                      <!-- Jump Host Configuration -->
+                      <div class="space-y-4">
+                        <div class="grid grid-cols-12 gap-3">
+                          <div class="col-span-8">
+                            <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="jumpHost">跳板主机</label>
+                            <input
+                              type="text"
+                              id="jumpHost"
+                              bind:value={formData.proxyHost}
+                              class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-sm text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all"
+                              placeholder="bastion.example.com"
+                            />
+                          </div>
+                          <div class="col-span-4">
+                            <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="jumpPort">跳板端口</label>
+                            <input
+                              type="number"
+                              id="jumpPort"
+                              bind:value={formData.proxyPort}
+                              class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-sm text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all"
+                              placeholder="22"
+                              min="1"
+                              max="65535"
+                            />
+                          </div>
+                        </div>
+                        
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="jumpHostUsername">跳板用户名</label>
+                                <input
+                                type="text"
+                                id="jumpHostUsername"
+                                bind:value={formData.jumpHostUsername}
+                                class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-sm text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all"
+                                placeholder="用户名"
+                                />
+                            </div>
+                            
+                            <!-- Jump Host Authentication Method -->
+                            <div>
+                                <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="jumpHostAuthMethod">跳板认证方式</label>
+                                <div class="relative">
+                                    <select
+                                    id="jumpHostAuthMethod"
+                                    bind:value={formData.jumpHostAuthMethod}
+                                    class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-sm text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all appearance-none"
+                                    >
+                                    <option value="password">密码认证</option>
+                                    <option value="keyboardInteractive">MFA (键盘交互)</option>
+                                    <option value="privateKey">私钥认证</option>
+                                    <option value="agent">SSH Agent</option>
+                                    <option value="certificate">证书认证</option>
+                                    </select>
+                                    <div class="absolute inset-y-0 right-0 flex items-center px-2 pointer-events-none text-app-text-secondary">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="bg-app-bg/50 rounded-lg p-4 border border-app-border border-dashed">
+                          {#if formData.jumpHostAuthMethod === 'password'}
+                            <div>
+                              <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="jumpHostPassword">跳板密码</label>
+                              <input
+                                type="password"
+                                id="jumpHostPassword"
+                                bind:value={formData.jumpHostPassword}
+                                class="w-full bg-app-surface border border-app-border rounded-lg px-3 py-2 text-sm text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all"
+                                placeholder="密码"
+                              />
+                              <label class="flex items-center mt-2 cursor-pointer">
+                                <input type="checkbox" bind:checked={formData.jumpHostSavePassword} class="rounded border-app-border bg-app-surface text-primary-600 focus:ring-primary-600 ring-offset-app-surface">
+                                <span class="ml-2 text-xs text-app-text-secondary">保存密码</span>
+                              </label>
+                            </div>
+                          {:else if formData.jumpHostAuthMethod === 'keyboardInteractive'}
+                            <div class="text-xs text-app-text-secondary">
+                              连接跳板时会弹出交互式认证提示（MFA），输入内容不会被保存。
+                            </div>
+                          {:else if formData.jumpHostAuthMethod === 'privateKey'}
+                            <div class="space-y-3">
+                              <div>
+                                <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="jumpHostKeyPath">跳板私钥路径</label>
+                                <input
+                                  type="text"
+                                  id="jumpHostKeyPath"
+                                  bind:value={formData.jumpHostKeyPath}
+                                  class="w-full bg-app-surface border border-app-border rounded-lg px-3 py-2 text-sm text-app-text focus:border-primary-500 outline-none font-mono"
+                                  placeholder="~/.ssh/id_rsa"
+                                />
+                              </div>
+                              <div>
+                                <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="jumpHostPassphrase">密码短语 (可选)</label>
+                                <input
+                                  type="password"
+                                  id="jumpHostPassphrase"
+                                  bind:value={formData.jumpHostPassphrase}
+                                  class="w-full bg-app-surface border border-app-border rounded-lg px-3 py-2 text-sm text-app-text focus:border-primary-500 outline-none"
+                                />
+                                <label class="flex items-center mt-2 cursor-pointer">
+                                  <input type="checkbox" bind:checked={formData.jumpHostSavePassphrase} class="rounded border-app-border bg-app-surface text-primary-600 focus:ring-primary-600 ring-offset-app-surface">
+                                  <span class="ml-2 text-xs text-app-text-secondary">保存密码短语</span>
+                                </label>
+                              </div>
+                            </div>
+                          {:else if formData.jumpHostAuthMethod === 'agent'}
+                            <div>
+                              <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="jumpHostAgentPath">Agent 路径 (可选)</label>
+                              <input
+                                type="text"
+                                id="jumpHostAgentPath"
+                                bind:value={formData.jumpHostAgentPath}
+                                class="w-full bg-app-surface border border-app-border rounded-lg px-3 py-2 text-sm text-app-text focus:border-primary-500 outline-none font-mono"
+                                placeholder="默认使用系统 SSH_AUTH_SOCK"
+                              />
+                            </div>
+                          {:else if formData.jumpHostAuthMethod === 'certificate'}
+                            <div class="space-y-3">
+                              <div>
+                                <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="jumpHostCertificatePath">跳板证书路径</label>
+                                <input
+                                  type="text"
+                                  id="jumpHostCertificatePath"
+                                  bind:value={formData.jumpHostCertificatePath}
+                                  class="w-full bg-app-surface border border-app-border rounded-lg px-3 py-2 text-sm text-app-text focus:border-primary-500 outline-none font-mono"
+                                  placeholder="~/.ssh/id_rsa-cert.pub"
+                                />
+                              </div>
+                              <div>
+                                <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="jumpHostPrivateKeyPath">跳板私钥路径</label>
+                                <input
+                                  type="text"
+                                  id="jumpHostPrivateKeyPath"
+                                  bind:value={formData.jumpHostPrivateKeyPath}
+                                  class="w-full bg-app-surface border border-app-border rounded-lg px-3 py-2 text-sm text-app-text focus:border-primary-500 outline-none font-mono"
+                                  placeholder="~/.ssh/id_rsa"
+                                />
+                              </div>
+                              <div>
+                                <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="jumpHostPassphraseCert">密码短语 (可选)</label>
+                                <input
+                                  type="password"
+                                  id="jumpHostPassphraseCert"
+                                  bind:value={formData.jumpHostPassphrase}
+                                  class="w-full bg-app-surface border border-app-border rounded-lg px-3 py-2 text-sm text-app-text focus:border-primary-500 outline-none"
+                                />
+                                <label class="flex items-center mt-2 cursor-pointer">
+                                  <input type="checkbox" bind:checked={formData.jumpHostSavePassphrase} class="rounded border-app-border bg-app-surface text-primary-600 focus:ring-primary-600 ring-offset-app-surface">
+                                  <span class="ml-2 text-xs text-app-text-secondary">保存密码短语</span>
+                                </label>
+                              </div>
+                            </div>
+                          {/if}
+                        </div>
+                      </div>
+                    {/if}
+                  </div>
+                {/if}
+              </div>
             </div>
           </div>
         {/if}

@@ -496,10 +496,10 @@
               <span>服务器列表</span>
               <div class="flex gap-1">
                  <button class="p-1 hover:text-app-text transition-colors" title="导入配置" on:click={importConnections}>
-                    <UploadIcon className="w-3 h-3" />
+                    <UploadIcon class="w-3 h-3" />
                  </button>
                  <button class="p-1 hover:text-app-text transition-colors" title="导出配置" on:click={() => exportConnections()}>
-                    <DownloadIcon className="w-3 h-3" />
+                    <DownloadIcon class="w-3 h-3" />
                  </button>
               </div>
             </div>
@@ -694,7 +694,7 @@
           <ContextMenuItem 
             on:click={(e) => { 
               closeContextMenu(); 
-              openMonitor(contextMenuConnectionRow.connection, e); 
+              openMonitor(contextMenuConnectionRow.connection, e.detail); 
             }} 
             label="系统监控" 
             iconComponent={ActivityIcon} 
@@ -704,7 +704,7 @@
         <ContextMenuItem 
           on:click={(e) => { 
             closeContextMenu(); 
-            handleEdit(contextMenuConnectionRow.connection, e); 
+            handleEdit(contextMenuConnectionRow.connection, e.detail); 
           }} 
           label="编辑" 
           iconComponent={SettingsIcon} 
@@ -712,7 +712,7 @@
         <ContextMenuItem 
           on:click={(e) => { 
             closeContextMenu(); 
-            handleDelete(contextMenuConnectionRow.connection.id, e); 
+            handleDelete(contextMenuConnectionRow.connection.id, e.detail); 
           }} 
           label="删除" 
           danger 

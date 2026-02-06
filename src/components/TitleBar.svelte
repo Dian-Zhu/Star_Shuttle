@@ -1,6 +1,6 @@
 <script lang="ts">
   import { getCurrentWindow } from '@tauri-apps/api/window';
-  import { showSettings, activeTerminals, selectedTerminalIndex, broadcastInputEnabled, broadcastSessionIds, terminalSessionMap, closeSplitRequest } from '../lib/store';
+  import { showSettings, activeTerminals, selectedTerminalIndex, broadcastInputEnabled, broadcastSessionIds, terminalSessionMap } from '../lib/store';
   import { closeTerminal } from '../lib/terminalService';
   import SettingsIcon from './icons/SettingsIcon.svelte';
   import BroadcastIcon from './icons/BroadcastIcon.svelte';
@@ -12,11 +12,10 @@
   $: selectedBroadcastSet = new Set($broadcastSessionIds);
   $: rootSessions = $activeTerminals.filter(t => $terminalSessionMap.has(t.sessionId));
 
-  function getSessionTerminals(rootId: string) {
-    const group = $terminalSessionMap.get(rootId);
-    if (!group) return [];
-    // Filter activeTerminals to preserve order and object reference
-    return $activeTerminals.filter(t => group.has(t.sessionId));
+  function handleMouseDown(e: MouseEvent) {
+    if (e.target === e.currentTarget) {
+      getCurrentWindow().startDragging();
+    }
   }
 
   $: currentActiveRootId = (() => {
@@ -117,7 +116,7 @@
   }
 </script>
 
-<div class="titlebar">
+<div class="titlebar" on:mousedown={handleMouseDown} role="button" tabindex="-1">
   <div class="titlebar-app-section">
     <div class="titlebar-icon">
       <svg class="w-5 h-5" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">

@@ -4,6 +4,8 @@
   import { FitAddon } from '@xterm/addon-fit';
   import { SearchAddon } from '@xterm/addon-search';
   import { settings, getXtermTheme, type Connection } from '../../lib/store';
+  import { terminalPool } from '../../lib/terminalPool';
+  import { TerminalProxy } from '../../lib/terminalProxy';
   import ContextMenu from '../ui/ContextMenu.svelte';
   import ContextMenuItem from '../ui/ContextMenuItem.svelte';
   import ContextMenuDivider from '../ui/ContextMenuDivider.svelte';
@@ -23,7 +25,7 @@
   export let existingTerminal: Terminal | null = null;
   export let existingFitAddon: FitAddon | null = null;
   export let existingSearchAddon: SearchAddon | null = null;
-  export let onInit: ((term: Terminal, fit: FitAddon, search: SearchAddon) => void) | undefined = undefined;
+  export let onInit: ((proxy: TerminalProxy) => void) | undefined = undefined;
   export let onFocus: (() => void) | undefined = undefined;
   
   export let isVisible: boolean = true;
@@ -120,7 +122,10 @@
       attachTerminalKeybindings(terminal);
 
       if (terminal && fitAddon && searchAddon && onInit) {
-        onInit(terminal, fitAddon, searchAddon);
+        const instance = terminalPool.getInstance(sessionId);
+        if (instance) {
+          onInit(new TerminalProxy(instance));
+        }
       }
     } else {
       // Initialize new detached terminal
@@ -132,7 +137,10 @@
         attachTerminalKeybindings(terminal);
         
         if (onInit) {
-          onInit(terminal, fitAddon, searchAddon);
+          const instance = terminalPool.getInstance(sessionId);
+          if (instance) {
+            onInit(new TerminalProxy(instance));
+          }
         }
       }
     }

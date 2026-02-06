@@ -1464,7 +1464,7 @@
                   <!-- Controls -->
                   <div class="flex-1 space-y-3">
                     <div>
-                      <label class="block text-xs text-slate-500 mb-1">上传图片</label>
+                      <div class="block text-xs text-slate-500 mb-1">上传图片</div>
                       <label class="inline-flex items-center gap-2 px-3 py-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded text-xs font-medium cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors text-slate-700 dark:text-slate-300">
                         <UploadIcon class="w-4 h-4" />
                         <span>选择文件...</span>
@@ -1474,43 +1474,50 @@
                   </div>
                 </div>
 
-                {#if $settings.appearance.backgroundImage}
-                  <div class="grid grid-cols-2 gap-4 pt-2 border-t border-slate-200 dark:border-slate-700">
-                    <div>
-                      <div class="flex justify-between mb-1">
-                        <label class="text-xs text-slate-500">不透明度</label>
-                        <span class="text-xs text-slate-500">{Math.round(($settings.appearance.backgroundOpacity ?? 0.5) * 100)}%</span>
-                      </div>
-                      <input
-                        type="range"
-                        min="0"
-                        max="1"
-                        step="0.05"
-                        value={$settings.appearance.backgroundOpacity ?? 0.5}
-                        on:input={(e) => updateAppearanceSetting('backgroundOpacity', Number(e.currentTarget.value))}
-                        class="w-full h-1 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer"
-                      />
+                <div class="pt-4 border-t border-slate-200 dark:border-slate-700 space-y-4">
+                  <!-- Opacity Control (Global) -->
+                  <div>
+                    <div class="flex justify-between mb-1">
+                      <label for="bg-opacity-slider" class="text-xs text-slate-500">背景不透明度</label>
+                      <span class="text-xs text-slate-500">{Math.round(($settings.appearance.backgroundOpacity ?? ($settings.appearance.backgroundImage ? 0.5 : 1)) * 100)}%</span>
                     </div>
-                    <div>
-                      <div class="flex justify-between mb-1">
-                        <label class="text-xs text-slate-500">模糊度</label>
-                        <span class="text-xs text-slate-500">{$settings.appearance.backgroundBlur ?? 0}px</span>
-                      </div>
-                      <input
-                        type="range"
-                        min="0"
-                        max="20"
-                        step="1"
-                        value={$settings.appearance.backgroundBlur ?? 0}
-                        on:input={(e) => updateAppearanceSetting('backgroundBlur', Number(e.currentTarget.value))}
-                        class="w-full h-1 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer"
-                      />
-                    </div>
+                    <input
+                      id="bg-opacity-slider"
+                      type="range"
+                      min="0"
+                      max="1"
+                      step="0.05"
+                      value={$settings.appearance.backgroundOpacity ?? ($settings.appearance.backgroundImage ? 0.5 : 1)}
+                      on:input={(e) => updateAppearanceSetting('backgroundOpacity', Number(e.currentTarget.value))}
+                      class="w-full h-1 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer"
+                    />
                   </div>
-                {/if}
+
+                  {#if $settings.appearance.backgroundImage}
+                    <div class="grid grid-cols-2 gap-4">
+                      <!-- Blur Control (Image only) -->
+                      <div>
+                        <div class="flex justify-between mb-1">
+                          <label for="bg-blur-slider" class="text-xs text-slate-500">模糊度</label>
+                          <span class="text-xs text-slate-500">{$settings.appearance.backgroundBlur ?? 0}px</span>
+                        </div>
+                        <input
+                          id="bg-blur-slider"
+                          type="range"
+                          min="0"
+                          max="20"
+                          step="1"
+                          value={$settings.appearance.backgroundBlur ?? 0}
+                          on:input={(e) => updateAppearanceSetting('backgroundBlur', Number(e.currentTarget.value))}
+                          class="w-full h-1 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer"
+                        />
+                      </div>
+                    </div>
+                  {/if}
               </div>
             </div>
           </div>
+        </div>
         {:else if activeTab === 'security'}
            <div class="space-y-6" in:slide={{ duration: 200 }}>
              <h3 class="text-lg font-medium text-app-text">应用安全锁</h3>

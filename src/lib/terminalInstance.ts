@@ -464,7 +464,7 @@ export class TerminalInstance {
 
     // 清理所有 xterm.js 6.x disposables
     this.disposables.forEach((disposableMap, event) => {
-      disposableMap.forEach((disposable, handler) => {
+      disposableMap.forEach((disposable, _handler) => {
         try {
           if (disposable && typeof disposable.dispose === 'function') {
             disposable.dispose();

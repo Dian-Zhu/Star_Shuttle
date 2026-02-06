@@ -1,5 +1,6 @@
 <script>
-  export let className = "w-6 h-6";
+  let className = "w-6 h-6";
+  export { className as class };
 </script>
 
 <svg class={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">

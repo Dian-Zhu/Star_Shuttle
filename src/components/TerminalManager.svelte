@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import { activeTerminals, selectedTerminalIndex, broadcastInputEnabled, broadcastSessionIds } from '../lib/store';
+  import { activeTerminals, selectedTerminalIndex } from '../lib/store';
   import TerminalView from './TerminalView.svelte';
   import TerminalIcon from './icons/TerminalIcon.svelte';
   import { formatSpeed } from '../lib/transferQueueService';
@@ -243,11 +243,5 @@
 </div>
 
 <style>
-  .no-scrollbar::-webkit-scrollbar {
-    display: none;
-  }
-  .no-scrollbar {
-    -ms-overflow-style: none;
-    scrollbar-width: none;
-  }
+  /* Custom scrollbar for terminal list */
 </style>

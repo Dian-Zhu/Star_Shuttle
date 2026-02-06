@@ -73,41 +73,62 @@
     }
   }
 
+  // Helper to convert hex to rgba
+  function hexToRgba(hex: string, alpha: number) {
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+
   // Apply theme class to document element
   function updateTheme() {
     const theme = $settings.theme;
     const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    const isDark = theme === 'dark' || (theme === 'system' && systemDark);
     const root = document.documentElement;
 
-    // Clear custom properties
+    // Get Opacity
+    // Default to 1 (opaque) if not set. 
+    // If background image is present, SettingsModal defaults to 0.5, but here we just read the value.
+    // If value is undefined, we use 1 for no-image, and 0.5 for image (matching SettingsModal logic)
+    const opacity = $settings.appearance.backgroundOpacity ?? ($settings.appearance.backgroundImage ? 0.5 : 1);
+
+    // 1. Determine Base Background Color
+    let bgHex = isDark ? '#0f172a' : '#ffffff';
+
+    // Clear custom properties first (except --color-bg which we will overwrite)
     const customProps = [
-        '--color-bg', '--color-surface', '--color-surface-light', 
+        '--color-surface', '--color-surface-light', 
         '--color-status-bar', '--color-text', '--color-text-secondary', 
         '--color-border', '--color-border-light',
         '--color-sidebar-border'
     ];
     customProps.forEach(p => root.style.removeProperty(p));
     
-    if (theme === 'custom') {
+    if (theme === 'custom' && $settings.appearance.customUITheme) {
        const custom = $settings.appearance.customUITheme;
-       if (custom) {
-           root.style.setProperty('--color-bg', custom.backgroundColor);
-           root.style.setProperty('--color-surface', custom.surfaceColor);
-           root.style.setProperty('--color-status-bar', custom.statusBarColor || custom.surfaceColor);
-           root.style.setProperty('--color-surface-light', custom.surfaceLightColor);
-           root.style.setProperty('--color-text', custom.textColor);
-           root.style.setProperty('--color-text-secondary', custom.secondaryTextColor);
-           root.style.setProperty('--color-border', custom.borderColor);
-           root.style.setProperty('--color-border-light', custom.borderLightColor);
-           root.style.setProperty('--color-sidebar-border', custom.borderColor);
-       }
+       bgHex = custom.backgroundColor;
+       
+       root.style.setProperty('--color-surface', custom.surfaceColor);
+       root.style.setProperty('--color-status-bar', custom.statusBarColor || custom.surfaceColor);
+       root.style.setProperty('--color-surface-light', custom.surfaceLightColor);
+       root.style.setProperty('--color-text', custom.textColor);
+       root.style.setProperty('--color-text-secondary', custom.secondaryTextColor);
+       root.style.setProperty('--color-border', custom.borderColor);
+       root.style.setProperty('--color-border-light', custom.borderLightColor);
+       root.style.setProperty('--color-sidebar-border', custom.borderColor);
+       
        // Default to dark mode base for custom theme
        root.classList.add('dark');
-    } else if (theme === 'dark' || (theme === 'system' && systemDark)) {
+    } else if (isDark) {
       root.classList.add('dark');
     } else {
       root.classList.remove('dark');
     }
+
+    // 2. Apply --color-bg with transparency
+    root.style.setProperty('--color-bg', hexToRgba(bgHex, opacity));
   }
 
   function updateAccentColor() {
