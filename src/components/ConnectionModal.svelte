@@ -1,12 +1,12 @@
 <script lang="ts">
-  import { showConnectionForm, editingConnection, connections, type Connection } from '../lib/store';
-  import { saveConnection } from '../lib/connectionService';
+  import { showConnectionForm, editingConnection, connections, type Connection, errorMessage, successMessage } from '../lib/store';
+  import { saveConnection, createBackendConfig } from '../lib/connectionService';
   import { connectAndOpen } from '../lib/terminalService';
+  import { invoke } from '@tauri-apps/api/core';
   import XIcon from './icons/XIcon.svelte';
-  import SettingsIcon from './icons/SettingsIcon.svelte';
   import PlusIcon from './icons/PlusIcon.svelte';
   import ActivityIcon from './icons/ActivityIcon.svelte';
-  import { slide } from 'svelte/transition';
+  import { slide, fade } from 'svelte/transition';
 
   // Form state
   let formData = {
@@ -258,9 +258,90 @@
   let newRemoteForward = { remote_host: 'localhost', remote_port: 0, local_host: 'localhost', local_port: 0 };
 
   let isSaving = false;
+  let isTesting = false;
+  
+  let hostKeyVerification: { 
+    host: string; 
+    port: number; 
+    keyType: string; 
+    keyBase64: string; 
+    fingerprint: string; 
+  } | null = null;
 
   $: if ($editingConnection) {
     hydrateFromConnection($editingConnection);
+  }
+
+  async function acceptHostKey() {
+    if (!hostKeyVerification) return;
+    
+    try {
+      await invoke('known_hosts_save_host_key', {
+        host: hostKeyVerification.host,
+        port: hostKeyVerification.port,
+        keyType: hostKeyVerification.keyType,
+        keyBase64: hostKeyVerification.keyBase64,
+        replace: false
+      });
+      
+      hostKeyVerification = null;
+      successMessage.set('主机密钥已保存');
+      setTimeout(() => successMessage.set(null), 3000);
+      
+      // Retry connection test
+      handleTestConnection();
+    } catch (error) {
+      console.error('Failed to save host key:', error);
+      errorMessage.set(`保存主机密钥失败: ${error}`);
+      setTimeout(() => errorMessage.set(null), 5000);
+    }
+  }
+
+  async function handleTestConnection() {
+    commitPendingTag();
+    trimHost();
+    if (!formData.host || !formData.port) {
+      errorMessage.set('请填写主机地址和端口');
+      setTimeout(() => errorMessage.set(null), 3000);
+      return;
+    }
+    
+    isTesting = true;
+    try {
+      const config = await createBackendConfig({
+        ...formData,
+        local_forwards: formData.localForwards,
+        remote_forwards: formData.remoteForwards,
+      });
+      
+      await invoke('test_connection', { config });
+      successMessage.set('连接测试成功！');
+      setTimeout(() => successMessage.set(null), 3000);
+    } catch (error: any) {
+      const errStr = String(error);
+      if (errStr.includes('HOST_KEY_UNKNOWN|')) {
+        try {
+          const jsonStr = errStr.split('HOST_KEY_UNKNOWN|')[1];
+          const keyData = JSON.parse(jsonStr);
+          hostKeyVerification = {
+            host: keyData.host,
+            port: keyData.port,
+            keyType: keyData.key_type,
+            keyBase64: keyData.key_base64,
+            fingerprint: keyData.fingerprint
+          };
+          return;
+        } catch (e) {
+          console.error('Failed to parse host key data', e);
+        }
+      }
+
+      console.error('Connection test failed:', error);
+      errorMessage.set(`连接测试失败: ${error}`);
+      setTimeout(() => errorMessage.set(null), 5000);
+    } finally {
+      isTesting = false;
+    }
   }
 
   async function handleSubmit() {
@@ -314,7 +395,38 @@
 </script>
 
 <div class="fixed inset-0 z-50 flex items-center justify-center bg-app-backdrop backdrop-blur-sm p-4" role="button" tabindex="0" on:click|self={handleClose} on:keydown={(e) => e.key === 'Escape' && handleClose()}>
-  <div class="bg-app-surface border border-app-border rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden">
+  <div class="relative bg-app-surface border border-app-border rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden">
+    <!-- Host Key Verification Overlay -->
+    {#if hostKeyVerification}
+      <div class="absolute inset-0 z-50 bg-app-surface flex flex-col items-center justify-center p-8 text-center" transition:fade={{ duration: 200 }}>
+        <div class="w-16 h-16 bg-yellow-100 dark:bg-yellow-900/30 text-yellow-600 dark:text-yellow-400 rounded-full flex items-center justify-center mb-4">
+          <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+        </div>
+        <h3 class="text-xl font-semibold text-app-text mb-2">未知的主机密钥</h3>
+        <p class="text-sm text-app-text-secondary mb-6 max-w-md">
+          服务器 <strong>{hostKeyVerification.host}:{hostKeyVerification.port}</strong> 的身份无法验证。
+          <br>
+          指纹: <code class="bg-app-bg px-1 py-0.5 rounded text-xs font-mono select-all mt-2 inline-block">{hostKeyVerification.fingerprint}</code>
+        </p>
+        <div class="flex items-center gap-3">
+          <button
+            type="button"
+            class="px-4 py-2 text-sm font-medium text-app-text-secondary hover:text-app-text bg-app-bg hover:bg-app-bg-hover rounded-lg transition-colors"
+            on:click={() => hostKeyVerification = null}
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            class="px-4 py-2 text-sm font-medium text-white bg-primary-600 hover:bg-primary-500 rounded-lg transition-colors shadow-lg shadow-primary-900/20"
+            on:click={acceptHostKey}
+          >
+            接受并保存
+          </button>
+        </div>
+      </div>
+    {/if}
+
     <!-- Header -->
     <div class="flex items-center justify-between px-6 py-4 border-b border-app-border bg-app-bg">
       <div class="flex items-center gap-4">
@@ -352,10 +464,32 @@
             
             <!-- Connection Details (Compact) -->
             <div class="space-y-4">
-              <!-- Row 1: Name & Protocol -->
+              <!-- Row 0: Protocol (Radio Buttons) -->
+              <div class="mb-4">
+                <span class="block text-xs font-medium text-app-text-secondary mb-2">协议类型</span>
+                <div class="flex items-center gap-4">
+                  {#each ['Ssh', 'Rdp', 'Telnet'] as proto}
+                    <label class="flex items-center gap-2 cursor-pointer group">
+                      <div class="relative flex items-center justify-center w-4 h-4">
+                        <input 
+                          type="radio" 
+                          name="protocol" 
+                          value={proto} 
+                          bind:group={formData.protocol} 
+                          class="peer appearance-none w-4 h-4 rounded-full border border-app-border checked:border-primary-500 checked:bg-primary-500 transition-all"
+                        />
+                        <div class="absolute w-1.5 h-1.5 rounded-full bg-white scale-0 peer-checked:scale-100 transition-transform"></div>
+                      </div>
+                      <span class="text-sm text-app-text group-hover:text-primary-500 transition-colors">{proto.toUpperCase()}</span>
+                    </label>
+                  {/each}
+                </div>
+              </div>
+
+              <!-- Row 1: Name & Tags -->
               <div class="grid grid-cols-12 gap-4">
-                <div class="col-span-8">
-                  <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="name">连接名称</label>
+                <div class="col-span-6">
+                  <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="name">连接名称 <span class="text-red-500">*</span></label>
                   <input
                     type="text"
                     id="name"
@@ -365,24 +499,47 @@
                     required
                   />
                 </div>
-                <div class="col-span-4">
-                  <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="protocol">协议</label>
-                  <select
-                    id="protocol"
-                    bind:value={formData.protocol}
-                    class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-sm text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all"
-                  >
-                    <option value="Ssh">SSH</option>
-                    <option value="Rdp">RDP</option>
-                    <option value="Telnet">Telnet</option>
-                  </select>
+                <div class="col-span-6">
+                   <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="tags">标签</label>
+                   <div class="w-full bg-app-bg border border-app-border rounded-lg px-2 py-1.5 flex flex-wrap gap-2 min-h-[38px] focus-within:border-primary-500 focus-within:ring-1 focus-within:ring-primary-500 transition-all">
+                    {#each currentTags as tag}
+                      <span class="bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 text-xs px-2 py-0.5 rounded-md flex items-center gap-1">
+                        {tag}
+                        <button type="button" on:click={() => removeTag(tag)} class="hover:text-primary-900 dark:hover:text-primary-100">
+                          <XIcon class="w-3 h-3" />
+                        </button>
+                      </span>
+                    {/each}
+                    <input
+                      type="text"
+                      bind:value={tagInput}
+                      on:keydown={handleTagKeydown}
+                      on:blur={commitPendingTag}
+                      class="bg-transparent border-none outline-none text-sm min-w-[60px] flex-1 text-app-text placeholder-app-text-secondary/50 p-0"
+                      placeholder={currentTags.length === 0 ? "标签..." : ""}
+                    />
+                  </div>
+                  <!-- Suggested Tags -->
+                  {#if availableTags.length > 0}
+                    <div class="flex flex-wrap gap-2 mt-2">
+                      {#each availableTags as tag}
+                         <button 
+                           type="button" 
+                           class="text-[10px] px-1.5 py-0.5 rounded-md bg-app-surface border border-app-border text-app-text-secondary hover:bg-app-bg-hover transition-colors"
+                           on:click={() => addTag(tag)}
+                         >
+                           {tag}
+                         </button>
+                      {/each}
+                    </div>
+                  {/if}
                 </div>
               </div>
 
               <!-- Row 2: Host, Port, Username -->
               <div class="grid grid-cols-12 gap-4">
                 <div class="col-span-6">
-                  <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="host">主机地址</label>
+                  <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="host">主机地址 <span class="text-red-500">*</span></label>
                   <div class="relative">
                     <input
                       type="text"
@@ -396,7 +553,7 @@
                   </div>
                 </div>
                 <div class="col-span-2">
-                  <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="port">端口</label>
+                  <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="port">端口 <span class="text-red-500">*</span></label>
                   <input
                     type="number"
                     id="port"
@@ -421,42 +578,7 @@
                 </div>
               </div>
 
-              <!-- Row 3: Tags -->
-               <div>
-                   <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="tags">标签</label>
-                   <div class="w-full bg-app-bg border border-app-border rounded-lg p-2 flex flex-wrap gap-2 min-h-[38px] focus-within:border-primary-500 focus-within:ring-1 focus-within:ring-primary-500 transition-all">
-                    {#each currentTags as tag}
-                      <span class="bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 text-xs px-2 py-0.5 rounded-md flex items-center gap-1">
-                        {tag}
-                        <button type="button" on:click={() => removeTag(tag)} class="hover:text-primary-900 dark:hover:text-primary-100">
-                          <XIcon class="w-3 h-3" />
-                        </button>
-                      </span>
-                    {/each}
-                    <input
-                      type="text"
-                      bind:value={tagInput}
-                      on:keydown={handleTagKeydown}
-                      on:blur={commitPendingTag}
-                      class="bg-transparent border-none outline-none text-sm min-w-[80px] flex-1 text-app-text placeholder-app-text-secondary/50 p-0"
-                      placeholder={currentTags.length === 0 ? "输入标签..." : ""}
-                    />
-                  </div>
-                  <!-- Suggested Tags -->
-                  {#if availableTags.length > 0}
-                    <div class="flex flex-wrap gap-2 mt-2">
-                      {#each availableTags as tag}
-                         <button 
-                           type="button" 
-                           class="text-[10px] px-1.5 py-0.5 rounded-md bg-app-surface border border-app-border text-app-text-secondary hover:bg-app-bg-hover transition-colors"
-                           on:click={() => addTag(tag)}
-                         >
-                           {tag}
-                         </button>
-                      {/each}
-                    </div>
-                  {/if}
-                </div>
+              <!-- Tags moved up -->
             </div>
 
             <div class="border-t border-app-border"></div>
@@ -723,7 +845,7 @@
               <div class="space-y-4">
                 <!-- Proxy Type Selection -->
                 <div>
-                  <label class="block text-xs font-medium text-app-text-secondary mb-1.5">代理类型</label>
+                  <span class="block text-xs font-medium text-app-text-secondary mb-1.5">代理类型</span>
                   <div class="flex p-1 bg-app-bg rounded-lg border border-app-border overflow-x-auto">
                     {#each [
                       { id: 'none', label: '无代理' },
@@ -980,7 +1102,22 @@
     </div>
 
     <!-- Footer -->
-    <div class="px-6 py-4 border-t border-app-border bg-app-surface flex justify-end gap-3">
+    <div class="px-6 py-4 border-t border-app-border bg-app-surface flex items-center justify-end gap-3">
+      <button
+        type="button"
+        class="mr-auto px-4 py-2 text-sm font-medium text-app-text-secondary hover:text-primary-500 bg-app-bg hover:bg-app-bg-hover rounded-lg transition-colors flex items-center gap-2"
+        disabled={isTesting}
+        on:click={handleTestConnection}
+      >
+        {#if isTesting}
+          <div class="w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
+          <span>测试中...</span>
+        {:else}
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+          <span>测试连接</span>
+        {/if}
+      </button>
+
       <button
         type="button"
         class="px-4 py-2 text-sm font-medium text-app-text-secondary hover:text-app-text bg-app-bg hover:bg-app-bg-hover rounded-lg transition-colors"

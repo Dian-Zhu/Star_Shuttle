@@ -77,246 +77,250 @@ export async function updateConnectionConfig(connection: Connection) {
   await invoke('save_connection_config', { config: toBackendConnectionConfig(connection) });
 }
 
+export async function createBackendConfig(connectionData: any) {
+  const isEditing = Boolean(connectionData.id);
+  const protocol =
+    connectionData.protocol === 'Rdp'
+      ? 'Rdp'
+      : connectionData.protocol === 'Telnet'
+        ? 'Telnet'
+        : 'Ssh';
+  
+  // Validate form data
+  if (!connectionData.name.trim()) throw new Error('连接名称不能为空');
+  const trimmedHost = String(connectionData.host || '').trim();
+  if (!trimmedHost) throw new Error('主机地址不能为空');
+  if (connectionData.port < 1 || connectionData.port > 65535) throw new Error('端口号必须在1-65535之间');
+  const effectiveUsername = protocol === 'Ssh'
+    ? (String(connectionData.username || '').trim() || 'root')
+    : String(connectionData.username || '').trim();
+  
+  // Construct auth method
+  let backendAuthMethod;
+  if (protocol === 'Rdp' || protocol === 'Telnet') {
+    backendAuthMethod = {
+      Password: {
+        password: '',
+        save_password: false,
+      },
+    };
+  } else {
+    switch (connectionData.authMethod) {
+    case 'password':
+      if (!connectionData.password) {
+        if (connectionData.savePassword) {
+          if (!isEditing) throw new Error('新建连接时，勾选保存密码需要先输入密码');
+        } else {
+          throw new Error('密码不能为空');
+        }
+      }
+      backendAuthMethod = {
+        Password: {
+          password: connectionData.password,
+          save_password: connectionData.savePassword,
+        },
+      };
+      break;
+    case 'keyboardInteractive':
+      backendAuthMethod = {
+        KeyboardInteractive: {},
+      };
+      break;
+    case 'privateKey':
+      if (!connectionData.keyPath) throw new Error('私钥路径不能为空');
+      backendAuthMethod = {
+        PrivateKey: {
+          key_path: connectionData.keyPath,
+          passphrase: connectionData.passphrase || undefined,
+          save_passphrase: connectionData.savePassphrase,
+        },
+      };
+      break;
+    case 'agent':
+      backendAuthMethod = {
+        Agent: {
+          agent_path: connectionData.agentPath || undefined,
+        },
+      };
+      break;
+    case 'certificate':
+      if (!connectionData.certificatePath) throw new Error('证书路径不能为空');
+      if (!connectionData.privateKeyPath) throw new Error('证书对应的私钥路径不能为空');
+      backendAuthMethod = {
+        Certificate: {
+          certificate_path: connectionData.certificatePath,
+          private_key_path: connectionData.privateKeyPath,
+          passphrase: connectionData.passphrase || undefined,
+          save_passphrase: connectionData.savePassphrase,
+        },
+      };
+      break;
+    default:
+      throw new Error('不支持的认证方式');
+    }
+  }
+
+  const tagsArray = parseTags(connectionData.tags);
+
+  // Load groups to find the corresponding group_id based on tags[0]
+  const { connectionGroups } = await import('./store');
+  const groups = get(connectionGroups);
+  const folderTag = tagsArray[0] || '未分组';
+
+  // Auto-create group if it doesn't exist in connectionGroups
+  // This ensures groups created through tag input don't disappear when connections are moved
+  let finalGroups = groups;
+  if (folderTag !== '未分组' && !groups.some(g => g.name === folderTag)) {
+    const newGroup = {
+      id: uuidv4(),
+      name: folderTag,
+      createdAt: Date.now()
+    };
+    connectionGroups.update(groupList => [...groupList, newGroup]);
+    finalGroups = [...groups, newGroup];
+  }
+
+  const groupId = getGroupIdByPath(finalGroups, folderTag);
+
+  const connectionId = connectionData.id || uuidv4();
+
+  // Construct proxy configuration
+  let backendProxyType;
+  switch (connectionData.proxyType) {
+    case 'none':
+      backendProxyType = 'None';
+      break;
+    case 'socks5':
+      if (!connectionData.proxyHost.trim()) throw new Error('SOCKS5代理主机不能为空');
+      backendProxyType = {
+        Socks5: {
+          host: connectionData.proxyHost,
+          port: Number(connectionData.proxyPort || 1080),
+          username: connectionData.proxyUsername?.trim() || null,
+          password: connectionData.proxyPassword?.trim() || null,
+        },
+      };
+      break;
+    case 'http':
+      if (!connectionData.proxyHost.trim()) throw new Error('HTTP代理主机不能为空');
+      backendProxyType = {
+        Http: {
+          host: connectionData.proxyHost,
+          port: Number(connectionData.proxyPort || 8080),
+          username: connectionData.proxyUsername?.trim() || null,
+          password: connectionData.proxyPassword?.trim() || null,
+        },
+      };
+      break;
+    case 'jumpHost': {
+      if (!connectionData.proxyHost.trim()) throw new Error('跳板主机不能为空');
+      if (!connectionData.jumpHostUsername.trim()) throw new Error('跳板用户名不能为空');
+      let jumpAuthMethod;
+      switch (connectionData.jumpHostAuthMethod) {
+        case 'password':
+          if (!connectionData.jumpHostPassword) {
+            if (connectionData.jumpHostSavePassword) {
+              if (!isEditing) throw new Error('新建连接时，勾选保存跳板密码需要先输入跳板密码');
+            } else {
+              throw new Error('跳板密码不能为空');
+            }
+          }
+          jumpAuthMethod = {
+            Password: {
+              password: connectionData.jumpHostPassword,
+              save_password: connectionData.jumpHostSavePassword,
+            },
+          };
+          break;
+        case 'keyboardInteractive':
+          jumpAuthMethod = {
+            KeyboardInteractive: {},
+          };
+          break;
+        case 'privateKey':
+          if (!connectionData.jumpHostKeyPath) throw new Error('跳板私钥路径不能为空');
+          jumpAuthMethod = {
+            PrivateKey: {
+              key_path: connectionData.jumpHostKeyPath,
+              passphrase: connectionData.jumpHostPassphrase || undefined,
+              save_passphrase: connectionData.jumpHostSavePassphrase,
+            },
+          };
+          break;
+        case 'agent':
+          jumpAuthMethod = {
+            Agent: {
+              agent_path: connectionData.jumpHostAgentPath || undefined,
+            },
+          };
+          break;
+        case 'certificate':
+          if (!connectionData.jumpHostCertificatePath) throw new Error('跳板证书路径不能为空');
+          if (!connectionData.jumpHostPrivateKeyPath) throw new Error('跳板证书对应的私钥路径不能为空');
+          jumpAuthMethod = {
+            Certificate: {
+              certificate_path: connectionData.jumpHostCertificatePath,
+              private_key_path: connectionData.jumpHostPrivateKeyPath,
+              passphrase: connectionData.jumpHostPassphrase || undefined,
+              save_passphrase: connectionData.jumpHostSavePassphrase,
+            },
+          };
+          break;
+        default:
+          throw new Error('不支持的跳板认证方式');
+      }
+      backendProxyType = {
+        JumpHost: {
+          host: connectionData.proxyHost,
+          port: Number(connectionData.proxyPort || 22),
+          username: connectionData.jumpHostUsername,
+          auth_method: jumpAuthMethod,
+        },
+      };
+      break;
+    }
+    default:
+      backendProxyType = 'None';
+      break;
+  }
+
+  const nonSsh = protocol !== 'Ssh';
+  const effectiveProxyType = nonSsh ? 'None' : backendProxyType;
+  const effectiveLocalForwards = nonSsh ? [] : (connectionData.local_forwards || []);
+  const effectiveRemoteForwards = nonSsh ? [] : (connectionData.remote_forwards || []);
+  const effectiveSocksProxyPort = nonSsh ? null : (connectionData.socksProxyPort || null);
+
+  return {
+    id: connectionId,
+    name: connectionData.name,
+    protocol,
+    host: trimmedHost,
+    port: Number(connectionData.port),
+    username: effectiveUsername,
+    auth_method: backendAuthMethod,
+    description: connectionData.description || null,
+    tags: tagsArray,
+    group_id: groupId,
+    local_forwards: effectiveLocalForwards,
+    remote_forwards: effectiveRemoteForwards,
+    proxy_type: effectiveProxyType,
+    socks_proxy_port: effectiveSocksProxyPort,
+    created_at: connectionData.created_at || new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+}
+
 export async function saveConnection(connectionData: any): Promise<{ connectionId: string; connectConfig: any } | null> {
   try {
     errorMessage.set(null);
-    const isEditing = Boolean(connectionData.id);
-    const protocol =
-      connectionData.protocol === 'Rdp'
-        ? 'Rdp'
-        : connectionData.protocol === 'Telnet'
-          ? 'Telnet'
-          : 'Ssh';
+    const connectConfig = await createBackendConfig(connectionData);
     
-    // Validate form data
-    if (!connectionData.name.trim()) throw new Error('连接名称不能为空');
-    const trimmedHost = String(connectionData.host || '').trim();
-    if (!trimmedHost) throw new Error('主机地址不能为空');
-    if (connectionData.port < 1 || connectionData.port > 65535) throw new Error('端口号必须在1-65535之间');
-    const effectiveUsername = protocol === 'Ssh'
-      ? (String(connectionData.username || '').trim() || 'root')
-      : String(connectionData.username || '').trim();
-    
-    // Construct auth method
-    let backendAuthMethod;
-    if (protocol === 'Rdp' || protocol === 'Telnet') {
-      backendAuthMethod = {
-        Password: {
-          password: '',
-          save_password: false,
-        },
-      };
-    } else {
-      switch (connectionData.authMethod) {
-      case 'password':
-        if (!connectionData.password) {
-          if (connectionData.savePassword) {
-            if (!isEditing) throw new Error('新建连接时，勾选保存密码需要先输入密码');
-          } else {
-            throw new Error('密码不能为空');
-          }
-        }
-        backendAuthMethod = {
-          Password: {
-            password: connectionData.password,
-            save_password: connectionData.savePassword,
-          },
-        };
-        break;
-      case 'keyboardInteractive':
-        backendAuthMethod = {
-          KeyboardInteractive: {},
-        };
-        break;
-      case 'privateKey':
-        if (!connectionData.keyPath) throw new Error('私钥路径不能为空');
-        backendAuthMethod = {
-          PrivateKey: {
-            key_path: connectionData.keyPath,
-            passphrase: connectionData.passphrase || undefined,
-            save_passphrase: connectionData.savePassphrase,
-          },
-        };
-        break;
-      case 'agent':
-        backendAuthMethod = {
-          Agent: {
-            agent_path: connectionData.agentPath || undefined,
-          },
-        };
-        break;
-      case 'certificate':
-        if (!connectionData.certificatePath) throw new Error('证书路径不能为空');
-        if (!connectionData.privateKeyPath) throw new Error('证书对应的私钥路径不能为空');
-        backendAuthMethod = {
-          Certificate: {
-            certificate_path: connectionData.certificatePath,
-            private_key_path: connectionData.privateKeyPath,
-            passphrase: connectionData.passphrase || undefined,
-            save_passphrase: connectionData.savePassphrase,
-          },
-        };
-        break;
-      default:
-        throw new Error('不支持的认证方式');
-      }
-    }
-
-    const tagsArray = parseTags(connectionData.tags);
-
-    // Load groups to find the corresponding group_id based on tags[0]
-    const { connectionGroups } = await import('./store');
-    const groups = get(connectionGroups);
-    const folderTag = tagsArray[0] || '未分组';
-
-    // Auto-create group if it doesn't exist in connectionGroups
-    // This ensures groups created through tag input don't disappear when connections are moved
-    let finalGroups = groups;
-    if (folderTag !== '未分组' && !groups.some(g => g.name === folderTag)) {
-      const newGroup = {
-        id: uuidv4(),
-        name: folderTag,
-        createdAt: Date.now()
-      };
-      connectionGroups.update(groupList => [...groupList, newGroup]);
-      finalGroups = [...groups, newGroup];
-    }
-
-    const groupId = getGroupIdByPath(finalGroups, folderTag);
-
-    const connectionId = connectionData.id || uuidv4();
-
-    // Construct proxy configuration
-    let backendProxyType;
-    switch (connectionData.proxyType) {
-      case 'none':
-        backendProxyType = 'None';
-        break;
-      case 'socks5':
-        if (!connectionData.proxyHost.trim()) throw new Error('SOCKS5代理主机不能为空');
-        backendProxyType = {
-          Socks5: {
-            host: connectionData.proxyHost,
-            port: Number(connectionData.proxyPort || 1080),
-            username: connectionData.proxyUsername?.trim() || null,
-            password: connectionData.proxyPassword?.trim() || null,
-          },
-        };
-        break;
-      case 'http':
-        if (!connectionData.proxyHost.trim()) throw new Error('HTTP代理主机不能为空');
-        backendProxyType = {
-          Http: {
-            host: connectionData.proxyHost,
-            port: Number(connectionData.proxyPort || 8080),
-            username: connectionData.proxyUsername?.trim() || null,
-            password: connectionData.proxyPassword?.trim() || null,
-          },
-        };
-        break;
-      case 'jumpHost': {
-        if (!connectionData.proxyHost.trim()) throw new Error('跳板主机不能为空');
-        if (!connectionData.jumpHostUsername.trim()) throw new Error('跳板用户名不能为空');
-        let jumpAuthMethod;
-        switch (connectionData.jumpHostAuthMethod) {
-          case 'password':
-            if (!connectionData.jumpHostPassword) {
-              if (connectionData.jumpHostSavePassword) {
-                if (!isEditing) throw new Error('新建连接时，勾选保存跳板密码需要先输入跳板密码');
-              } else {
-                throw new Error('跳板密码不能为空');
-              }
-            }
-            jumpAuthMethod = {
-              Password: {
-                password: connectionData.jumpHostPassword,
-                save_password: connectionData.jumpHostSavePassword,
-              },
-            };
-            break;
-          case 'keyboardInteractive':
-            jumpAuthMethod = {
-              KeyboardInteractive: {},
-            };
-            break;
-          case 'privateKey':
-            if (!connectionData.jumpHostKeyPath) throw new Error('跳板私钥路径不能为空');
-            jumpAuthMethod = {
-              PrivateKey: {
-                key_path: connectionData.jumpHostKeyPath,
-                passphrase: connectionData.jumpHostPassphrase || undefined,
-                save_passphrase: connectionData.jumpHostSavePassphrase,
-              },
-            };
-            break;
-          case 'agent':
-            jumpAuthMethod = {
-              Agent: {
-                agent_path: connectionData.jumpHostAgentPath || undefined,
-              },
-            };
-            break;
-          case 'certificate':
-            if (!connectionData.jumpHostCertificatePath) throw new Error('跳板证书路径不能为空');
-            if (!connectionData.jumpHostPrivateKeyPath) throw new Error('跳板证书对应的私钥路径不能为空');
-            jumpAuthMethod = {
-              Certificate: {
-                certificate_path: connectionData.jumpHostCertificatePath,
-                private_key_path: connectionData.jumpHostPrivateKeyPath,
-                passphrase: connectionData.jumpHostPassphrase || undefined,
-                save_passphrase: connectionData.jumpHostSavePassphrase,
-              },
-            };
-            break;
-          default:
-            throw new Error('不支持的跳板认证方式');
-        }
-        backendProxyType = {
-          JumpHost: {
-            host: connectionData.proxyHost,
-            port: Number(connectionData.proxyPort || 22),
-            username: connectionData.jumpHostUsername,
-            auth_method: jumpAuthMethod,
-          },
-        };
-        break;
-      }
-      default:
-        backendProxyType = 'None';
-        break;
-    }
-
-    const nonSsh = protocol !== 'Ssh';
-    const effectiveProxyType = nonSsh ? 'None' : backendProxyType;
-    const effectiveLocalForwards = nonSsh ? [] : (connectionData.local_forwards || []);
-    const effectiveRemoteForwards = nonSsh ? [] : (connectionData.remote_forwards || []);
-    const effectiveSocksProxyPort = nonSsh ? null : (connectionData.socksProxyPort || null);
-
-    const connectConfig = {
-      id: connectionId,
-      name: connectionData.name,
-      protocol,
-      host: trimmedHost,
-      port: Number(connectionData.port),
-      username: effectiveUsername,
-      auth_method: backendAuthMethod,
-      description: connectionData.description || null,
-      tags: tagsArray,
-      group_id: groupId,
-      local_forwards: effectiveLocalForwards,
-      remote_forwards: effectiveRemoteForwards,
-      proxy_type: effectiveProxyType,
-      socks_proxy_port: effectiveSocksProxyPort,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    };
-
     await invoke('save_connection_config', { config: connectConfig });
-
+    
     successMessage.set('连接保存成功！');
     await loadConnections();
     setTimeout(() => successMessage.set(null), 5000);
-    return { connectionId, connectConfig };
+    return { connectionId: connectConfig.id, connectConfig };
   } catch (error) {
     console.error('Error saving connection:', error);
     errorMessage.set(`保存连接失败：${error instanceof Error ? error.message : error}`);

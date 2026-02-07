@@ -607,6 +607,270 @@
     }
   }
 
+  // ANSI Color Presets
+  type AnsiColorPreset = AppSettings['appearance']['ansiColorPreset'];
+
+  const defaultCustomAnsiColors = {
+    foreground: '#e0e0e0',
+    red: '#ff4444',
+    green: '#44ff44',
+    yellow: '#ffff44',
+    blue: '#4444ff',
+    magenta: '#ff44ff',
+  };
+
+  const ansiColorPresets: Array<{
+    id: AnsiColorPreset;
+    name: string;
+    description: string;
+    previewColors: {
+      black: string;
+      red: string;
+      green: string;
+      yellow: string;
+      blue: string;
+      magenta: string;
+      cyan: string;
+      white: string;
+    };
+  }> = [
+    {
+      id: 'classic',
+      name: '经典ANSI',
+      description: '标准的16色终端配色',
+      previewColors: {
+        black: '#000000',
+        red: '#cd0000',
+        green: '#00cd00',
+        yellow: '#cdcd00',
+        blue: '#0000ee',
+        magenta: '#cd00cd',
+        cyan: '#00cdcd',
+        white: '#e5e5e5',
+      }
+    },
+    {
+      id: 'solarized',
+      name: 'Solarized',
+      description: '精确设计的配色方案,视觉舒适',
+      previewColors: {
+        black: '#073642',
+        red: '#dc322f',
+        green: '#859900',
+        yellow: '#b58900',
+        blue: '#268bd2',
+        magenta: '#d33682',
+        cyan: '#2aa198',
+        white: '#eee8d5',
+      }
+    },
+    {
+      id: 'nord-light',
+      name: 'Nord Light',
+      description: '北极光主题,清新淡雅',
+      previewColors: {
+        black: '#3b4252',
+        red: '#bf616a',
+        green: '#a3be8c',
+        yellow: '#ebcb8b',
+        blue: '#81a1c1',
+        magenta: '#b48ead',
+        cyan: '#88c0d0',
+        white: '#e5e9f0',
+      }
+    },
+    {
+      id: 'monokai',
+      name: 'Monokai',
+      description: '流行的深色主题,高对比度',
+      previewColors: {
+        black: '#1e1f1c',
+        red: '#f92672',
+        green: '#a6e22e',
+        yellow: '#f4bf75',
+        blue: '#66d9ef',
+        magenta: '#ae81ff',
+        cyan: '#a1efe4',
+        white: '#f8f8f2',
+      }
+    },
+    {
+      id: 'gruvbox',
+      name: 'Gruvbox',
+      description: '复古风格,温暖舒适',
+      previewColors: {
+        black: '#282828',
+        red: '#cc241d',
+        green: '#98971a',
+        yellow: '#d79921',
+        blue: '#458588',
+        magenta: '#b16286',
+        cyan: '#689d6a',
+        white: '#a89984',
+      }
+    },
+    {
+      id: 'high-contrast',
+      name: '高对比度',
+      description: '深色背景,适合图片背景使用',
+      previewColors: {
+        black: '#1a1a1a',
+        red: '#ff4444',
+        green: '#44ff44',
+        yellow: '#ffff44',
+        blue: '#4444ff',
+        magenta: '#ff44ff',
+        cyan: '#44ffff',
+        white: '#ffffff',
+      }
+    },
+    {
+      id: 'image-optimized',
+      name: '图片优化',
+      description: '优化后的深色方案,专为图片背景设计',
+      previewColors: {
+        black: '#0a0a14',
+        red: '#ff5252',
+        green: '#69f0ae',
+        yellow: '#ffd740',
+        blue: '#448aff',
+        magenta: '#e040fb',
+        cyan: '#18ffff',
+        white: '#ffffff',
+      }
+    },
+    {
+      id: 'night-owl',
+      name: '夜猫子',
+      description: '深蓝灰色调,优雅护眼',
+      previewColors: {
+        black: '#011627',
+        red: '#d3423e',
+        green: '#7b9726',
+        yellow: '#e5c07b',
+        blue: '#61afef',
+        magenta: '#c678dd',
+        cyan: '#56b6c2',
+        white: '#ffffff',
+      }
+    },
+    {
+      id: 'neon-dark',
+      name: '霓虹深色',
+      description: '高饱和度霓虹色彩,炫酷风格',
+      previewColors: {
+        black: '#1d1f21',
+        red: '#ff0055',
+        green: '#00ff00',
+        yellow: '#ffcc00',
+        blue: '#00ccff',
+        magenta: '#ff00ff',
+        cyan: '#00ffff',
+        white: '#ffffff',
+      }
+    },
+    {
+      id: 'matrix-green',
+      name: '矩阵绿',
+      description: '黑客帝国风格,绿色主题',
+      previewColors: {
+        black: '#000000',
+        red: '#ff3333',
+        green: '#00ff00',
+        yellow: '#00ff41',
+        blue: '#00ffff',
+        magenta: '#ff00ff',
+        cyan: '#00ff41',
+        white: '#00ff00',
+      }
+    },
+    {
+      id: 'smart',
+      name: '智能配色',
+      description: '根据背景自动匹配配色',
+      previewColors: {
+        black: '#1a1a1a',
+        red: '#ff5252',
+        green: '#69f0ae',
+        yellow: '#ffd740',
+        blue: '#448aff',
+        magenta: '#e040fb',
+        cyan: '#18ffff',
+        white: '#ffffff',
+      }
+    },
+    {
+      id: 'custom',
+      name: '自定义',
+      description: '完全自定义所有ANSI颜色',
+      previewColors: {
+        black: '#000000',
+        red: '#cd0000',
+        green: '#00cd00',
+        yellow: '#cdcd00',
+        blue: '#0000ee',
+        magenta: '#cd00cd',
+        cyan: '#00cdcd',
+        white: '#e5e5e5',
+      }
+    }
+  ];
+
+  type AnsiColorKey = keyof NonNullable<AppSettings['appearance']['customAnsiColors']>;
+
+  const ansiColorLabels: Record<AnsiColorKey, string> = {
+    foreground: '前景色',
+    red: '红色',
+    green: '绿色',
+    yellow: '黄色',
+    blue: '蓝色',
+    magenta: '品红',
+  };
+
+  function updateAnsiColorPreset(preset: AnsiColorPreset) {
+    settings.update(s => ({
+      ...s,
+      appearance: {
+        ...s.appearance,
+        ansiColorPreset: preset,
+        customAnsiColors: preset === 'custom' ? s.appearance.customAnsiColors || { ...defaultCustomAnsiColors } : undefined
+      }
+    }));
+  }
+
+  function updateCustomAnsiColor(key: AnsiColorKey, value: string) {
+    if (!$settings.appearance.customAnsiColors) {
+      settings.update(s => ({
+        ...s,
+        appearance: {
+          ...s.appearance,
+          customAnsiColors: { ...defaultCustomAnsiColors }
+        }
+      }));
+      return;
+    }
+    settings.update(s => ({
+      ...s,
+      appearance: {
+        ...s.appearance,
+        customAnsiColors: {
+          ...s.appearance.customAnsiColors!,
+          [key]: value
+        }
+      }
+    }));
+  }
+
+  function resetCustomAnsiColors() {
+    settings.update(s => ({
+      ...s,
+      appearance: {
+        ...s.appearance,
+        customAnsiColors: { ...defaultCustomAnsiColors }
+      }
+    }));
+  }
+
   function resetCustomUITheme() {
     settings.update(s => ({
       ...s,
@@ -1301,6 +1565,87 @@
                   </button>
                 {/each}
               </div>
+            </div>
+
+            <!-- ANSI Color Presets -->
+            <div>
+              <span class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-3">ANSI颜色预设</span>
+              <div class="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-3">
+                {#each ansiColorPresets as preset}
+                  <button
+                    class="relative p-3 border rounded-lg flex flex-col items-center gap-2 transition-all {$settings.appearance.ansiColorPreset === preset.id ? 'border-primary-500 bg-primary-50 dark:bg-primary-500/10' : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'}"
+                    on:click={() => updateAnsiColorPreset(preset.id)}
+                    title={preset.description}
+                  >
+                    {#if preset.id === 'smart'}
+                      <!-- Smart preset special icon -->
+                      <div class="w-full h-16 rounded shadow-sm border border-slate-300 dark:border-slate-600 bg-gradient-to-br from-primary-400 to-purple-500 flex items-center justify-center">
+                        <svg class="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                        </svg>
+                      </div>
+                    {:else if preset.id === 'custom'}
+                      <!-- Custom preset icon -->
+                      <div class="w-full h-16 rounded shadow-sm border border-slate-300 dark:border-slate-600 bg-slate-100 dark:bg-slate-800 flex items-center justify-center">
+                        <svg class="w-6 h-6 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path>
+                        </svg>
+                      </div>
+                    {:else}
+                      <!-- Standard color presets -->
+                      <div
+                        class="w-full h-16 rounded shadow-sm border border-slate-300 dark:border-slate-600 grid grid-cols-4 gap-0.5 p-1"
+                        style="background-color: #1a1a1a"
+                      >
+                        {#each Object.entries(preset.previewColors) as [name, color]}
+                          <div class="aspect-square rounded-sm flex items-center justify-center text-[8px] font-bold" style="background-color: {color}">
+                            {name.charAt(0).toUpperCase()}
+                          </div>
+                        {/each}
+                      </div>
+                    {/if}
+                    <div class="text-center">
+                      <span class="text-xs font-medium text-slate-700 dark:text-slate-300 block">{preset.name}</span>
+                      <span class="text-[10px] text-slate-500 dark:text-slate-400">{preset.description}</span>
+                    </div>
+                    {#if $settings.appearance.ansiColorPreset === preset.id}
+                      <div class="absolute top-2 right-2 w-2 h-2 bg-primary-500 rounded-full"></div>
+                    {/if}
+                  </button>
+                {/each}
+              </div>
+
+              {#if $settings.appearance.ansiColorPreset === 'custom'}
+                <div class="mt-4 p-4 border border-slate-200 dark:border-slate-700 rounded-lg bg-slate-50 dark:bg-slate-900/50" transition:slide={{ duration: 200 }}>
+                  <div class="flex items-center justify-between mb-4">
+                    <h4 class="text-sm font-medium text-slate-700 dark:text-slate-300">自定义ANSI颜色</h4>
+                    <button
+                      class="text-xs px-3 py-1 bg-primary-600 hover:bg-primary-500 text-white rounded transition-colors"
+                      on:click={resetCustomAnsiColors}
+                    >
+                      重置
+                    </button>
+                  </div>
+
+                  <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                    {#each ['foreground', 'red', 'green', 'yellow', 'blue', 'magenta'] as key}
+                      {@const label = ansiColorLabels[key as AnsiColorKey]}
+                      {@const value = $settings.appearance.customAnsiColors?.[key as AnsiColorKey] || defaultCustomAnsiColors[key as AnsiColorKey]}
+                      {@const inputId = `ansi-color-${key}`}
+                      <div class="flex items-center gap-2">
+                        <input
+                          id={inputId}
+                          type="color"
+                          value={value}
+                          on:input={(e) => updateCustomAnsiColor(key as AnsiColorKey, (e.target as HTMLInputElement).value)}
+                          class="w-8 h-8 rounded cursor-pointer border border-slate-300 dark:border-slate-600"
+                        />
+                        <label for={inputId} class="text-xs text-slate-600 dark:text-slate-400">{label}</label>
+                      </div>
+                    {/each}
+                  </div>
+                </div>
+              {/if}
             </div>
 
             <!-- Terminal Theme -->

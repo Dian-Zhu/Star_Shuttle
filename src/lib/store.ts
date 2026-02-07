@@ -167,6 +167,15 @@ export interface AppSettings {
     backgroundImage?: string | null;
     backgroundOpacity?: number; // 0-1, 默认 0.5
     backgroundBlur?: number; // 0-20, 默认 0
+    ansiColorPreset: 'classic' | 'solarized' | 'nord-light' | 'monokai' | 'gruvbox' | 'high-contrast' | 'image-optimized' | 'night-owl' | 'neon-dark' | 'matrix-green' | 'smart' | 'custom';
+    customAnsiColors?: {
+      foreground: string;
+      red: string;
+      green: string;
+      yellow: string;
+      blue: string;
+      magenta: string;
+    };
   };
   terminal: {
     fontSize: number;
@@ -214,6 +223,7 @@ const defaultSettings: AppSettings = {
   appearance: {
     terminalTheme: 'auto',
     accentColor: 'blue',
+    ansiColorPreset: 'classic',
     customUITheme: {
       backgroundColor: '#0f172a',
       surfaceColor: '#1e293b',
@@ -634,10 +644,482 @@ function getBaseXtermTheme(appSettings: AppSettings): ITheme {
   };
 }
 
+// ANSI Color Presets
+const ansiColorPresets: Record<AppSettings['appearance']['ansiColorPreset'], {
+  foreground: string;
+  background: string;
+  black: string;
+  red: string;
+  green: string;
+  yellow: string;
+  blue: string;
+  magenta: string;
+  cyan: string;
+  white: string;
+  brightBlack: string;
+  brightRed: string;
+  brightGreen: string;
+  brightYellow: string;
+  brightBlue: string;
+  brightMagenta: string;
+  brightCyan: string;
+  brightWhite: string;
+}> = {
+  classic: {
+    foreground: '#ffffff',
+    background: '#000000',
+    black: '#000000',
+    red: '#cd0000',
+    green: '#00cd00',
+    yellow: '#cdcd00',
+    blue: '#0000ee',
+    magenta: '#cd00cd',
+    cyan: '#00cdcd',
+    white: '#e5e5e5',
+    brightBlack: '#7f7f7f',
+    brightRed: '#ff0000',
+    brightGreen: '#00ff00',
+    brightYellow: '#ffff00',
+    brightBlue: '#5c5cff',
+    brightMagenta: '#ff00ff',
+    brightCyan: '#00ffff',
+    brightWhite: '#ffffff',
+  },
+  solarized: {
+    foreground: '#839496',
+    background: '#002b36',
+    black: '#073642',
+    red: '#dc322f',
+    green: '#859900',
+    yellow: '#b58900',
+    blue: '#268bd2',
+    magenta: '#d33682',
+    cyan: '#2aa198',
+    white: '#eee8d5',
+    brightBlack: '#002b36',
+    brightRed: '#cb4b16',
+    brightGreen: '#586e75',
+    brightYellow: '#657b83',
+    brightBlue: '#839496',
+    brightMagenta: '#6c71c4',
+    brightCyan: '#93a1a1',
+    brightWhite: '#fdf6e3',
+  },
+  'nord-light': {
+    foreground: '#d8dee9',
+    background: '#2e3440',
+    black: '#3b4252',
+    red: '#bf616a',
+    green: '#a3be8c',
+    yellow: '#ebcb8b',
+    blue: '#81a1c1',
+    magenta: '#b48ead',
+    cyan: '#88c0d0',
+    white: '#e5e9f0',
+    brightBlack: '#4c566a',
+    brightRed: '#bf616a',
+    brightGreen: '#a3be8c',
+    brightYellow: '#ebcb8b',
+    brightBlue: '#81a1c1',
+    brightMagenta: '#b48ead',
+    brightCyan: '#8fbcbb',
+    brightWhite: '#eceff4',
+  },
+  monokai: {
+    foreground: '#f8f8f2',
+    background: '#272822',
+    black: '#1e1f1c',
+    red: '#f92672',
+    green: '#a6e22e',
+    yellow: '#f4bf75',
+    blue: '#66d9ef',
+    magenta: '#ae81ff',
+    cyan: '#a1efe4',
+    white: '#f8f8f2',
+    brightBlack: '#75715e',
+    brightRed: '#f92672',
+    brightGreen: '#a6e22e',
+    brightYellow: '#f4bf75',
+    brightBlue: '#66d9ef',
+    brightMagenta: '#ae81ff',
+    brightCyan: '#a1efe4',
+    brightWhite: '#f9f8f5',
+  },
+  gruvbox: {
+    foreground: '#ebdbb2',
+    background: '#282828',
+    black: '#282828',
+    red: '#cc241d',
+    green: '#98971a',
+    yellow: '#d79921',
+    blue: '#458588',
+    magenta: '#b16286',
+    cyan: '#689d6a',
+    white: '#a89984',
+    brightBlack: '#928374',
+    brightRed: '#fb4934',
+    brightGreen: '#b8bb26',
+    brightYellow: '#fabd2f',
+    brightBlue: '#83a598',
+    brightMagenta: '#d3869b',
+    brightCyan: '#8ec07c',
+    brightWhite: '#ebdbb2',
+  },
+  'high-contrast': {
+    foreground: '#f0f0f0',
+    background: 'rgba(0, 0, 0, 0.7)',
+    black: '#1a1a1a',
+    red: '#ff4444',
+    green: '#44ff44',
+    yellow: '#ffff44',
+    blue: '#4444ff',
+    magenta: '#ff44ff',
+    cyan: '#44ffff',
+    white: '#ffffff',
+    brightBlack: '#555555',
+    brightRed: '#ff6666',
+    brightGreen: '#66ff66',
+    brightYellow: '#ffff66',
+    brightBlue: '#6666ff',
+    brightMagenta: '#ff66ff',
+    brightCyan: '#66ffff',
+    brightWhite: '#ffffff',
+  },
+  'image-optimized': {
+    foreground: '#e0e0e0',
+    background: 'rgba(10, 10, 20, 0.8)',
+    black: '#0a0a14',
+    red: '#ff5252',
+    green: '#69f0ae',
+    yellow: '#ffd740',
+    blue: '#448aff',
+    magenta: '#e040fb',
+    cyan: '#18ffff',
+    white: '#ffffff',
+    brightBlack: '#37474f',
+    brightRed: '#ff80ab',
+    brightGreen: '#b9f6ca',
+    brightYellow: '#ffe57f',
+    brightBlue: '#82b1ff',
+    brightMagenta: '#ea80fc',
+    brightCyan: '#84ffff',
+    brightWhite: '#ffffff',
+  },
+  'night-owl': {
+    foreground: '#d7d7d7',
+    background: 'rgba(1, 22, 39, 0.85)',
+    black: '#011627',
+    red: '#d3423e',
+    green: '#7b9726',
+    yellow: '#e5c07b',
+    blue: '#61afef',
+    magenta: '#c678dd',
+    cyan: '#56b6c2',
+    white: '#ffffff',
+    brightBlack: '#3a4a5c',
+    brightRed: '#f07178',
+    brightGreen: '#98c379',
+    brightYellow: '#d19a66',
+    brightBlue: '#61afef',
+    brightMagenta: '#c678dd',
+    brightCyan: '#56b6c2',
+    brightWhite: '#ffffff',
+  },
+  'neon-dark': {
+    foreground: '#c5c8c6',
+    background: 'rgba(29, 31, 33, 0.9)',
+    black: '#1d1f21',
+    red: '#ff0055',
+    green: '#00ff00',
+    yellow: '#ffcc00',
+    blue: '#00ccff',
+    magenta: '#ff00ff',
+    cyan: '#00ffff',
+    white: '#ffffff',
+    brightBlack: '#666666',
+    brightRed: '#ff3377',
+    brightGreen: '#33ff33',
+    brightYellow: '#ffdd33',
+    brightBlue: '#33ddff',
+    brightMagenta: '#ff33ff',
+    brightCyan: '#33ffff',
+    brightWhite: '#ffffff',
+  },
+  'matrix-green': {
+    foreground: '#00ff41',
+    background: 'rgba(0, 0, 0, 0.9)',
+    black: '#000000',
+    red: '#ff3333',
+    green: '#00ff00',
+    yellow: '#00ff41',
+    blue: '#00ffff',
+    magenta: '#ff00ff',
+    cyan: '#00ff41',
+    white: '#00ff00',
+    brightBlack: '#333333',
+    brightRed: '#ff6666',
+    brightGreen: '#66ff66',
+    brightYellow: '#66ff66',
+    brightBlue: '#66ffff',
+    brightMagenta: '#ff66ff',
+    brightCyan: '#66ff66',
+    brightWhite: '#00ff00',
+  },
+  smart: {
+    foreground: '#e0e0e0',
+    background: 'rgba(0,0,0,0)',
+    black: '#1a1a1a',
+    red: '#ff5252',
+    green: '#69f0ae',
+    yellow: '#ffd740',
+    blue: '#448aff',
+    magenta: '#e040fb',
+    cyan: '#18ffff',
+    white: '#ffffff',
+    brightBlack: '#555555',
+    brightRed: '#ff80ab',
+    brightGreen: '#b9f6ca',
+    brightYellow: '#ffe57f',
+    brightBlue: '#82b1ff',
+    brightMagenta: '#ea80fc',
+    brightCyan: '#84ffff',
+    brightWhite: '#ffffff',
+  },
+  custom: {
+    foreground: '#ffffff',
+    background: '#000000',
+    black: '#000000',
+    red: '#cd0000',
+    green: '#00cd00',
+    yellow: '#cdcd00',
+    blue: '#0000ee',
+    magenta: '#cd00cd',
+    cyan: '#00cdcd',
+    white: '#e5e5e5',
+    brightBlack: '#7f7f7f',
+    brightRed: '#ff0000',
+    brightGreen: '#00ff00',
+    brightYellow: '#ffff00',
+    brightBlue: '#5c5cff',
+    brightMagenta: '#ff00ff',
+    brightCyan: '#00ffff',
+    brightWhite: '#ffffff',
+  },
+};
+
+// Helper function to generate smart ANSI colors based on current settings
+function generateSmartColors(appSettings: AppSettings) {
+  const hasBackgroundImage = !!appSettings.appearance.backgroundImage;
+  const terminalTheme = appSettings.appearance.terminalTheme;
+
+  // If has background image, use image-optimized style
+  if (hasBackgroundImage) {
+    return {
+      foreground: '#e0e0e0',
+      background: 'rgba(0, 0, 0, 0)',
+      black: '#0a0a14',
+      red: '#ff5252',
+      green: '#69f0ae',
+      yellow: '#ffd740',
+      blue: '#448aff',
+      magenta: '#e040fb',
+      cyan: '#18ffff',
+      white: '#ffffff',
+      brightBlack: '#37474f',
+      brightRed: '#ff80ab',
+      brightGreen: '#b9f6ca',
+      brightYellow: '#ffe57f',
+      brightBlue: '#82b1ff',
+      brightMagenta: '#ea80fc',
+      brightCyan: '#84ffff',
+      brightWhite: '#ffffff',
+    };
+  }
+
+  // Otherwise, match the terminal theme
+  const themeMap: Record<string, { hue: number; saturation: number }> = {
+    'auto': { hue: 220, saturation: 30 },           // dark blue-gray
+    'dracula': { hue: 270, saturation: 60 },         // purple
+    'nord': { hue: 220, saturation: 30 },            // arctic blue
+    'solarized-dark': { hue: 195, saturation: 80 },   // deep blue
+    'solarized-light': { hue: 45, saturation: 60 },   // warm cream
+    'monokai': { hue: 40, saturation: 50 },         // warm gray
+    'one-dark': { hue: 220, saturation: 25 },        // dark blue
+    'github-dark': { hue: 210, saturation: 40 },      // deep dark
+    'tokyo-night': { hue: 240, saturation: 30 },     // dark purple-blue
+    'catppuccin': { hue: 240, saturation: 30 },      // mauve
+    'custom': { hue: 220, saturation: 30 },         // default
+  };
+
+  const themeColors = themeMap[terminalTheme] || themeMap['auto'];
+  const hue = themeColors.hue;
+  const isLightTheme = terminalTheme === 'solarized-light';
+
+  // Generate colors based on theme
+  const foreground = isLightTheme ? '#2c3e50' : '#e0e0e0';
+
+  // Generate harmonious colors using color theory
+  // Complementary colors for better contrast
+  const colorSaturation = isLightTheme ? 70 : 80;
+  const red = hslToHex(hue + 350, colorSaturation, 60);
+  const green = hslToHex(hue + 120, colorSaturation, 55);
+  const yellow = hslToHex(hue + 60, colorSaturation, 55);
+  const blue = hslToHex(hue, colorSaturation, 55);
+  const magenta = hslToHex(hue + 300, colorSaturation, 55);
+  const cyan = hslToHex(hue + 180, colorSaturation, 55);
+
+  // Bright versions
+  const brightRed = hslToHex(hue + 350, colorSaturation, 70);
+  const brightGreen = hslToHex(hue + 120, colorSaturation, 65);
+  const brightYellow = hslToHex(hue + 60, colorSaturation, 65);
+  const brightBlue = hslToHex(hue, colorSaturation, 65);
+  const brightMagenta = hslToHex(hue + 300, colorSaturation, 65);
+  const brightCyan = hslToHex(hue + 180, colorSaturation, 65);
+
+  return {
+    foreground,
+    background: 'rgba(0,0,0,0)',
+    black: isLightTheme ? '#e8e8e8' : '#1a1a1a',
+    red,
+    green,
+    yellow,
+    blue,
+    magenta,
+    cyan,
+    white: isLightTheme ? '#1a1a1a' : '#ffffff',
+    brightBlack: isLightTheme ? '#d0d0d0' : '#555555',
+    brightRed,
+    brightGreen,
+    brightYellow,
+    brightBlue,
+    brightMagenta,
+    brightCyan,
+    brightWhite: isLightTheme ? '#000000' : '#ffffff',
+  };
+}
+
+// Convert HSL to Hex
+function hslToHex(h: number, s: number, l: number): string {
+  h = ((h % 360) + 360) % 360;
+  s /= 100;
+  l /= 100;
+
+  const a = s * Math.min(l, 1 - l);
+  const f = (n: number) => {
+    const k = (n + h / 30) % 12;
+    return l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
+  };
+
+  const r = Math.round(255 * f(0));
+  const g = Math.round(255 * f(8));
+  const b = Math.round(255 * f(4));
+
+  return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+}
+
+// Helper function to generate complete ANSI color scheme from 6 core colors
+function generateAnsiColorsFromCustom(customColors: NonNullable<AppSettings['appearance']['customAnsiColors']>) {
+  const { foreground, red, green, yellow, blue, magenta } = customColors;
+
+  // Calculate derived colors
+  const black = '#1a1a1a';
+  const white = foreground;
+  const cyan = mixColors(red, green);
+  const brightBlack = '#555555';
+  const brightWhite = '#ffffff';
+  const brightRed = brightenColor(red, 20);
+  const brightGreen = brightenColor(green, 20);
+  const brightYellow = brightenColor(yellow, 20);
+  const brightBlue = brightenColor(blue, 20);
+  const brightMagenta = brightenColor(magenta, 20);
+  const brightCyan = brightenColor(cyan, 20);
+
+  return {
+    foreground,
+    background: 'rgba(0,0,0,0)',
+    black,
+    red,
+    green,
+    yellow,
+    blue,
+    magenta,
+    cyan,
+    white,
+    brightBlack,
+    brightRed,
+    brightGreen,
+    brightYellow,
+    brightBlue,
+    brightMagenta,
+    brightCyan,
+    brightWhite,
+  };
+}
+
+// Helper: Mix two hex colors
+function mixColors(color1: string, color2: string): string {
+  const r1 = parseInt(color1.slice(1, 3), 16);
+  const g1 = parseInt(color1.slice(3, 5), 16);
+  const b1 = parseInt(color1.slice(5, 7), 16);
+
+  const r2 = parseInt(color2.slice(1, 3), 16);
+  const g2 = parseInt(color2.slice(3, 5), 16);
+  const b2 = parseInt(color2.slice(5, 7), 16);
+
+  const r = Math.round((r1 + r2) / 2);
+  const g = Math.round((g1 + g2) / 2);
+  const b = Math.round((b1 + b2) / 2);
+
+  return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+}
+
+// Helper: Brighten a hex color
+function brightenColor(hex: string, percent: number): string {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+
+  const factor = 1 + percent / 100;
+  const newR = Math.min(255, Math.round(r * factor));
+  const newG = Math.min(255, Math.round(g * factor));
+  const newB = Math.min(255, Math.round(b * factor));
+
+  return `#${newR.toString(16).padStart(2, '0')}${newG.toString(16).padStart(2, '0')}${newB.toString(16).padStart(2, '0')}`;
+}
+
 export function getXtermTheme(appSettings: AppSettings): ITheme {
-  const theme = getBaseXtermTheme(appSettings);
-  // Always use transparent background to allow parent container's background to show through
-  return { ...theme, background: 'rgba(0,0,0,0)' };
+  const baseTheme = getBaseXtermTheme(appSettings);
+  const preset = appSettings.appearance?.ansiColorPreset || 'classic';
+
+  // Get ANSI colors from preset or custom
+  const ansiColors = preset === 'custom' && appSettings.appearance?.customAnsiColors
+    ? generateAnsiColorsFromCustom(appSettings.appearance.customAnsiColors)
+    : preset === 'smart'
+    ? generateSmartColors(appSettings)
+    : ansiColorPresets[preset];
+
+  // Apply ANSI colors to theme
+  return {
+    ...baseTheme,
+    background: 'rgba(0,0,0,0)', // Keep background transparent
+    foreground: ansiColors.foreground,
+    black: ansiColors.black,
+    red: ansiColors.red,
+    green: ansiColors.green,
+    yellow: ansiColors.yellow,
+    blue: ansiColors.blue,
+    magenta: ansiColors.magenta,
+    cyan: ansiColors.cyan,
+    white: ansiColors.white,
+    brightBlack: ansiColors.brightBlack,
+    brightRed: ansiColors.brightRed,
+    brightGreen: ansiColors.brightGreen,
+    brightYellow: ansiColors.brightYellow,
+    brightBlue: ansiColors.brightBlue,
+    brightMagenta: ansiColors.brightMagenta,
+    brightCyan: ansiColors.brightCyan,
+    brightWhite: ansiColors.brightWhite,
+  };
 }
 
 export const settings = writable<AppSettings>(loadSettings());
