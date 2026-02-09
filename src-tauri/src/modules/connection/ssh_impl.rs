@@ -668,6 +668,8 @@ pub async fn connect_ssh_with_known_host(
             }
             #[cfg(not(unix))]
             {
+                // Suppress unused variable warning on non-unix platforms
+                let _ = agent_path;
                 return Err(anyhow!(
                     "Agent authentication not supported on this platform"
                 ));

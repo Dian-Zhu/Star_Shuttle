@@ -1,7 +1,7 @@
 import { writable, derived } from 'svelte/store';
-import type { ITheme, Terminal } from '@xterm/xterm';
-import type { FitAddon } from '@xterm/addon-fit';
-import type { SearchAddon } from '@xterm/addon-search';
+import type { ITheme, Terminal } from 'xterm';
+import type { FitAddon } from 'xterm-addon-fit';
+import type { SearchAddon } from 'xterm-addon-search';
 
 // 定义连接类型 (与后端结构匹配)
 export interface Connection {
@@ -41,6 +41,7 @@ export interface Connection {
   remote_forwards?: { remote_host: string; remote_port: number; local_host: string; local_port: number }[];
   proxy_type?: any;
   socks_proxy_port?: number | null;
+  auto_reconnect?: boolean;
 }
 
 export interface ConnectionGroup {

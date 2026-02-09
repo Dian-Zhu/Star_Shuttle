@@ -1,8 +1,9 @@
 <script lang="ts">
   import { onMount, onDestroy, createEventDispatcher } from 'svelte';
-  import { Terminal } from '@xterm/xterm';
-  import { FitAddon } from '@xterm/addon-fit';
-  import { SearchAddon } from '@xterm/addon-search';
+  import { invoke } from '@tauri-apps/api/core';
+  import { Terminal } from 'xterm';
+  import { FitAddon } from 'xterm-addon-fit';
+  import { SearchAddon } from 'xterm-addon-search';
   import { settings, getXtermTheme, type Connection } from '../../lib/store';
   import { terminalPool } from '../../lib/terminalPool';
   import { TerminalProxy } from '../../lib/terminalProxy';
@@ -270,6 +271,11 @@
     closeContextMenu();
   }
 
+  function handleToggleDevTools() {
+    invoke('toggle_devtools');
+    closeContextMenu();
+  }
+
   function handleSplitHorizontal() {
     dispatch('split', { direction: 'horizontal' });
     closeContextMenu();
@@ -416,6 +422,10 @@
       <ContextMenuDivider />
       <ContextMenuItem on:click={handleClearScrollback} label="清除滚动缓冲区" />
       <ContextMenuItem on:click={handleReset} label="重置终端" danger />
+      <ContextMenuDivider />
+      <ContextMenuItem on:click={handleToggleDevTools} label="调试工具">
+        <svg slot="icon" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"></path></svg>
+      </ContextMenuItem>
     </ContextMenu>
   {/if}
   </div>

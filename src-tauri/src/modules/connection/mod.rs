@@ -103,6 +103,8 @@ pub struct ConnectionConfig {
     pub proxy_type: ProxyType,
     #[serde(default)]
     pub socks_proxy_port: Option<u16>, // For SSH dynamic port forwarding (-D)
+    #[serde(default)]
+    pub auto_reconnect: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -143,6 +145,7 @@ impl Default for ConnectionConfig {
             remote_forwards: Vec::new(),
             proxy_type: ProxyType::None,
             socks_proxy_port: None,
+            auto_reconnect: None,
         }
     }
 }

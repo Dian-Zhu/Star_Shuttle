@@ -45,6 +45,7 @@
     jumpHostCertificatePath: '',
     jumpHostPrivateKeyPath: '',
     socksProxyPort: undefined as number | undefined,
+    autoReconnect: false,
   };
 
   function normalizeTagsValue(value: unknown): string[] {
@@ -69,6 +70,7 @@
     formData.username = connection.username ?? '';
     formData.description = connection.description ?? '';
     formData.tags = normalizeTagsValue((connection as any).tags).join(',');
+    formData.autoReconnect = connection.auto_reconnect ?? false;
 
     formData.localForwards = (connection.local_forwards ?? []).map(f => ({
       local_host: f.local_host,
@@ -576,6 +578,23 @@
                     placeholder={formData.protocol === 'Ssh' ? 'root' : 'Administrator'}
                   />
                 </div>
+              </div>
+
+              <!-- Row 3: Auto Reconnect -->
+              <div class="flex items-center">
+                <label class="flex items-center gap-2 cursor-pointer group">
+                  <div class="relative flex items-center justify-center w-4 h-4">
+                    <input 
+                      type="checkbox" 
+                      bind:checked={formData.autoReconnect} 
+                      class="peer appearance-none w-4 h-4 rounded border border-app-border checked:border-primary-500 checked:bg-primary-500 transition-all"
+                    />
+                    <svg class="absolute w-3 h-3 text-white scale-0 peer-checked:scale-100 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7" />
+                    </svg>
+                  </div>
+                  <span class="text-xs text-app-text-secondary group-hover:text-app-text transition-colors">自动重连 (意外断开时)</span>
+                </label>
               </div>
 
               <!-- Tags moved up -->

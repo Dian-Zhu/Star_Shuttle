@@ -434,6 +434,15 @@ mod commands {
     pub fn get_log_file_path() -> Result<Option<String>, String> {
         Ok(crate::modules::logging::LogManager::get_log_file_path())
     }
+
+    #[command]
+    pub fn toggle_devtools(window: tauri::WebviewWindow) {
+        if window.is_devtools_open() {
+            window.close_devtools();
+        } else {
+            window.open_devtools();
+        }
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -528,6 +537,7 @@ pub fn run() {
             commands::get_logs,
             commands::clear_logs,
             commands::get_log_file_path,
+            commands::toggle_devtools,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

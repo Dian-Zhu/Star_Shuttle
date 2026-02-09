@@ -504,11 +504,7 @@
     brightBlue: '亮蓝',
     brightMagenta: '亮品红',
     brightCyan: '亮青色',
-    brightWhite: '亮白',
-    scrollbarSliderBackground: '滚动条',
-    scrollbarSliderHoverBackground: '滚动条悬停',
-    scrollbarSliderActiveBackground: '滚动条激活',
-    overviewRulerBorder: '概览尺边框'
+    brightWhite: '亮白'
   };
 
   const basicColorKeys: CustomThemeKey[] = ['background', 'foreground', 'cursor', 'selectionBackground'];

@@ -5,11 +5,11 @@
  * 可以在任何时候挂载到不同的容器
  */
 
-import { Terminal } from '@xterm/xterm';
-import { FitAddon } from '@xterm/addon-fit';
-import { SearchAddon } from '@xterm/addon-search';
-import { WebLinksAddon } from '@xterm/addon-web-links';
-import type { ITerminalOptions } from '@xterm/xterm';
+import { Terminal } from 'xterm';
+import { FitAddon } from 'xterm-addon-fit';
+import { SearchAddon } from 'xterm-addon-search';
+import { WebLinksAddon } from 'xterm-addon-web-links';
+import type { ITerminalOptions } from 'xterm';
 import { containerManager } from './containerManager';
 
 export class TerminalInstance {

@@ -1,15 +1,15 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { Terminal } from '@xterm/xterm';
-import { FitAddon } from '@xterm/addon-fit';
-import { SearchAddon } from '@xterm/addon-search';
-import { WebglAddon } from '@xterm/addon-webgl';
-import { WebLinksAddon } from '@xterm/addon-web-links';
+import { Terminal } from 'xterm';
+import { FitAddon } from 'xterm-addon-fit';
+import { SearchAddon } from 'xterm-addon-search';
+import { WebglAddon } from 'xterm-addon-webgl';
+import { WebLinksAddon } from 'xterm-addon-web-links';
 import { get } from 'svelte/store';
 import { activeTerminals, connections, selectedTerminalIndex, type Connection, type ActiveTerminal, type AppSettings, errorMessage, successMessage, settings, connectionHistory, broadcastInputEnabled, broadcastSessionIds, getStoredTerminalUiState, getXtermTheme, terminalSessionMap, connectingConnections } from './store';
 import { terminalPool } from './terminalPool';
 import { TerminalInstance } from './terminalInstance';
-import '@xterm/xterm/css/xterm.css';
+import 'xterm/css/xterm.css';
 
 const IS_DEV = import.meta.env.DEV;
 
@@ -664,7 +664,7 @@ export async function initTerminal(container: HTMLElement, sessionId: string, co
     }
 
     // Handle user input
-    const inputDisposable = term.onData((data) => {
+    const inputDisposable = term.onData((data: string) => {
       handleTerminalInput(sessionId, data, connection);
     });
     inputListeners.set(sessionId, inputDisposable);
@@ -811,7 +811,7 @@ export async function initDetachedTerminal(container: HTMLElement, sessionId: st
       }
     }
 
-    const inputDisposable = term.onData((data) => {
+    const inputDisposable = term.onData((data: string) => {
       handleTerminalInput(sessionId, data, connection);
     });
     inputListeners.set(sessionId, inputDisposable);
@@ -1555,7 +1555,7 @@ export async function setupTerminalListeners(sessionId: string, term: Terminal) 
             } else {
                 void term.write('\r\n\x1b[36mPress R to reconnect...\x1b[0m\r\n');
 
-                const disposable = term.onData(async (data) => {
+                const disposable = term.onData(async (data: string) => {
                     if (data === 'r' || data === 'R') {
                         disposable.dispose();
                         await reconnectTerminal(sessionId);
@@ -1612,7 +1612,7 @@ function scheduleAutoReconnect(sessionId: string, term: Terminal, immediate: boo
   const seconds = Math.max(0, Math.ceil(delay / 1000));
   void term.write(`\r\n\x1b[33mAuto reconnect attempt ${attempts + 1}/${MAX_AUTO_RECONNECT_RETRIES} in ${seconds}s... (Press R to immediate)\x1b[0m\r\n`);
 
-  const disposable = term.onData((data) => {
+  const disposable = term.onData((data: string) => {
     if (data === 'r' || data === 'R') {
       disposable.dispose();
       reconnectKeyListeners.delete(sessionId);
@@ -1702,7 +1702,7 @@ export async function reconnectTerminal(oldSessionId: string) {
       await setupTerminalListeners(newSessionId, term);
 
       // Setup new input listener
-      const newInputListener = term.onData((data) => {
+      const newInputListener = term.onData((data: string) => {
         handleTerminalInput(newSessionId, data, terminalEntry.connection);
       });
       inputListeners.set(newSessionId, newInputListener);

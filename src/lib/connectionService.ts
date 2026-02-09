@@ -69,6 +69,7 @@ function toBackendConnectionConfig(connection: Connection, overrides?: Record<st
     remote_forwards: connection.remote_forwards ?? [],
     proxy_type: (connection as any).proxy_type ?? 'None',
     socks_proxy_port: (connection as any).socks_proxy_port ?? null,
+    auto_reconnect: connection.auto_reconnect ?? null,
     ...(overrides ?? {}),
   };
 }
@@ -305,6 +306,7 @@ export async function createBackendConfig(connectionData: any) {
     remote_forwards: effectiveRemoteForwards,
     proxy_type: effectiveProxyType,
     socks_proxy_port: effectiveSocksProxyPort,
+    auto_reconnect: connectionData.autoReconnect ?? null,
     created_at: connectionData.created_at || new Date().toISOString(),
     updated_at: new Date().toISOString(),
   };
