@@ -964,11 +964,11 @@
   <div class="flex items-center p-2 border-b border-app-border space-x-2">
     <button 
         class="p-1 hover:bg-app-bg-hover rounded text-app-text-secondary" 
-        on:click={() => loadFiles('..')} 
-        title="Up"
+        on:click={() => loadFiles('.')} 
+        title="Home"
     >
       <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-        <path fill-rule="evenodd" d="M14.707 12.707a1 1 0 01-1.414 0L10 9.414l-3.293 3.293a1 1 0 01-1.414-1.414l4-4a1 1 0 011.414 0l4 4a1 1 0 010 1.414z" clip-rule="evenodd" />
+        <path d="M10.707 2.293a1 1 0 00-1.414 0l-7 7a1 1 0 001.414 1.414L4 10.414V17a1 1 0 001 1h2a1 1 0 001-1v-2a1 1 0 011-1h2a1 1 0 011 1v2a1 1 0 001 1h2a1 1 0 001-1v-6.586l.293.293a1 1 0 001.414-1.414l-7-7z" />
       </svg>
     </button>
     <button 
@@ -982,12 +982,19 @@
     </button>
     <button 
         class="p-1 hover:bg-app-bg-hover rounded text-app-text-secondary" 
-        on:click={handleCreateFolder} 
-        title="New Folder"
+        on:click={() => {
+            const currentWidth = get(settings).ui.rightSidebarWidth;
+            const maxWidth = window.innerWidth - 50;
+            if (currentWidth >= maxWidth - 50) {
+                settings.update(s => ({ ...s, ui: { ...s.ui, rightSidebarWidth: 400 } }));
+            } else {
+                settings.update(s => ({ ...s, ui: { ...s.ui, rightSidebarWidth: maxWidth } }));
+            }
+        }}
+        title="Full Screen"
     >
       <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-        <path fill-rule="evenodd" d="M2 6a2 2 0 012-2h4l2 2h4a2 2 0 012 2v1H8a3 3 0 00-3 3v1.5a1.5 1.5 0 01-3 0V6z" clip-rule="evenodd" />
-        <path d="M6 12a2 2 0 012-2h8a2 2 0 012 2v2a2 2 0 01-2 2H2h2a2 2 0 002-2v-2z" />
+        <path fill-rule="evenodd" d="M3 4a1 1 0 011-1h4a1 1 0 010 2H6.414l2.293 2.293a1 1 0 11-1.414 1.414L5 6.414V8a1 1 0 01-2 0V4zm9 1a1 1 0 010-2h4a1 1 0 011 1v4a1 1 0 01-2 0V6.414l-2.293 2.293a1 1 0 11-1.414-1.414L13.586 5H12zm-9 7a1 1 0 011 1v1.586l2.293-2.293a1 1 0 111.414 1.414L5.414 15H7a1 1 0 010 2H3a1 1 0 01-1-1v-4a1 1 0 011-1zm13.414-1.414a1 1 0 011.414 0l2.293 2.293V12a1 1 0 012 0v4a1 1 0 01-1 1h-4a1 1 0 010-2h1.586l-2.293-2.293a1 1 0 010-1.414z" clip-rule="evenodd" />
       </svg>
     </button>
     <button 

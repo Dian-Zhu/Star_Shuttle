@@ -4,7 +4,7 @@
   import { Terminal } from 'xterm';
   import { FitAddon } from 'xterm-addon-fit';
   import { SearchAddon } from 'xterm-addon-search';
-  import { settings, getXtermTheme, type Connection } from '../../lib/store';
+  import { settings, getXtermTheme, getBaseXtermTheme, type Connection } from '../../lib/store';
   import { terminalPool } from '../../lib/terminalPool';
   import { TerminalProxy } from '../../lib/terminalProxy';
   import ContextMenu from '../ui/ContextMenu.svelte';
@@ -13,7 +13,8 @@
   import {
     initDetachedTerminal,
     handleTerminalInput,
-    sendTerminalResize
+    sendTerminalResize,
+    calculateBrightness
   } from '../../lib/terminalService';
   import TerminalIcon from '../icons/TerminalIcon.svelte';
   import XIcon from '../icons/XIcon.svelte';
@@ -192,6 +193,13 @@
       terminal.options.scrollback = $settings.terminal.scrollback;
       terminal.options.theme = getXtermTheme($settings);
       
+      // Update font weight based on theme brightness
+      const baseTheme = getBaseXtermTheme($settings);
+      const bgBrightness = calculateBrightness(baseTheme.background || '#000000');
+      const isLightTheme = bgBrightness > 128;
+      terminal.options.fontWeight = isLightTheme ? '600' : 'normal';
+      terminal.options.fontWeightBold = isLightTheme ? 'bold' : 'bold';
+
       // Force redraw to ensure transparency takes effect
       setTimeout(() => terminal?.refresh(0, terminal.rows - 1), 10);
       
@@ -271,10 +279,7 @@
     closeContextMenu();
   }
 
-  function handleToggleDevTools() {
-    invoke('toggle_devtools');
-    closeContextMenu();
-  }
+
 
   function handleSplitHorizontal() {
     dispatch('split', { direction: 'horizontal' });
@@ -326,7 +331,7 @@
   }
 </script>
 
-<div class="flex flex-col w-full h-full overflow-hidden group relative" style="background-color: transparent;">
+<div class="flex flex-col w-full h-full overflow-hidden group relative" style="background-color: var(--terminal-bg, transparent);">
   <!-- Terminal Header -->
   <div class="flex items-center justify-start h-[24px] select-none flex-shrink-0 relative z-10 px-2" style="background-color: transparent;">
     <div class="flex items-center gap-2 rounded-full px-2.5 py-0.5 border border-app-border/50 max-w-[90%]" style="background-color: transparent;">
@@ -422,10 +427,7 @@
       <ContextMenuDivider />
       <ContextMenuItem on:click={handleClearScrollback} label="清除滚动缓冲区" />
       <ContextMenuItem on:click={handleReset} label="重置终端" danger />
-      <ContextMenuDivider />
-      <ContextMenuItem on:click={handleToggleDevTools} label="调试工具">
-        <svg slot="icon" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"></path></svg>
-      </ContextMenuItem>
+
     </ContextMenu>
   {/if}
   </div>

@@ -168,7 +168,7 @@ export interface AppSettings {
     backgroundImage?: string | null;
     backgroundOpacity?: number; // 0-1, 默认 0.5
     backgroundBlur?: number; // 0-20, 默认 0
-    ansiColorPreset: 'classic' | 'solarized' | 'nord-light' | 'monokai' | 'gruvbox' | 'high-contrast' | 'image-optimized' | 'night-owl' | 'neon-dark' | 'matrix-green' | 'smart' | 'custom';
+    ansiColorPreset: 'classic' | 'standard-light' | 'solarized' | 'nord-light' | 'monokai' | 'gruvbox' | 'github-light' | 'solarized-light' | 'tango-light' | 'smart' | 'custom';
     customAnsiColors?: {
       foreground: string;
       red: string;
@@ -357,7 +357,7 @@ const loadSettings = (): AppSettings => {
   }
 };
 
-function getBaseXtermTheme(appSettings: AppSettings): ITheme {
+export function getBaseXtermTheme(appSettings: AppSettings): ITheme {
   const preset = appSettings.appearance?.terminalTheme ?? 'auto';
 
   // Custom theme
@@ -706,6 +706,26 @@ const ansiColorPresets: Record<AppSettings['appearance']['ansiColorPreset'], {
     brightCyan: '#93a1a1',
     brightWhite: '#fdf6e3',
   },
+  'standard-light': {
+    foreground: '#333333',
+    background: '#ffffff',
+    black: '#000000',
+    red: '#cd3131',
+    green: '#0dbc79',
+    yellow: '#949800',
+    blue: '#2472c8',
+    magenta: '#bc3fbc',
+    cyan: '#11a8cd',
+    white: '#555555',
+    brightBlack: '#666666',
+    brightRed: '#f14c4c',
+    brightGreen: '#23d18b',
+    brightYellow: '#f5f543',
+    brightBlue: '#3b8eea',
+    brightMagenta: '#d670d6',
+    brightCyan: '#29b8db',
+    brightWhite: '#e5e5e5',
+  },
   'nord-light': {
     foreground: '#d8dee9',
     background: '#2e3440',
@@ -766,105 +786,65 @@ const ansiColorPresets: Record<AppSettings['appearance']['ansiColorPreset'], {
     brightCyan: '#8ec07c',
     brightWhite: '#ebdbb2',
   },
-  'high-contrast': {
-    foreground: '#f0f0f0',
-    background: 'rgba(0, 0, 0, 0.7)',
-    black: '#1a1a1a',
-    red: '#ff4444',
-    green: '#44ff44',
-    yellow: '#ffff44',
-    blue: '#4444ff',
-    magenta: '#ff44ff',
-    cyan: '#44ffff',
-    white: '#ffffff',
-    brightBlack: '#555555',
-    brightRed: '#ff6666',
-    brightGreen: '#66ff66',
-    brightYellow: '#ffff66',
-    brightBlue: '#6666ff',
-    brightMagenta: '#ff66ff',
-    brightCyan: '#66ffff',
-    brightWhite: '#ffffff',
+  'github-light': {
+    foreground: '#24292f',
+    background: '#ffffff',
+    black: '#24292f',
+    red: '#cf222e',
+    green: '#1a7f37',
+    yellow: '#9a6700',
+    blue: '#0969da',
+    magenta: '#8250df',
+    cyan: '#1b7c83',
+    white: '#6e7781',
+    brightBlack: '#57606a',
+    brightRed: '#a40e26',
+    brightGreen: '#1a7f37',
+    brightYellow: '#633c01',
+    brightBlue: '#218bff',
+    brightMagenta: '#a475f9',
+    brightCyan: '#3192aa',
+    brightWhite: '#8c959f',
   },
-  'image-optimized': {
-    foreground: '#e0e0e0',
-    background: 'rgba(10, 10, 20, 0.8)',
-    black: '#0a0a14',
-    red: '#ff5252',
-    green: '#69f0ae',
-    yellow: '#ffd740',
-    blue: '#448aff',
-    magenta: '#e040fb',
-    cyan: '#18ffff',
-    white: '#ffffff',
-    brightBlack: '#37474f',
-    brightRed: '#ff80ab',
-    brightGreen: '#b9f6ca',
-    brightYellow: '#ffe57f',
-    brightBlue: '#82b1ff',
-    brightMagenta: '#ea80fc',
-    brightCyan: '#84ffff',
-    brightWhite: '#ffffff',
+  'solarized-light': {
+    foreground: '#657b83',
+    background: '#fdf6e3',
+    black: '#073642',
+    red: '#dc322f',
+    green: '#859900',
+    yellow: '#b58900',
+    blue: '#268bd2',
+    magenta: '#d33682',
+    cyan: '#2aa198',
+    white: '#eee8d5',
+    brightBlack: '#002b36',
+    brightRed: '#cb4b16',
+    brightGreen: '#586e75',
+    brightYellow: '#657b83',
+    brightBlue: '#839496',
+    brightMagenta: '#6c71c4',
+    brightCyan: '#93a1a1',
+    brightWhite: '#fdf6e3',
   },
-  'night-owl': {
-    foreground: '#d7d7d7',
-    background: 'rgba(1, 22, 39, 0.85)',
-    black: '#011627',
-    red: '#d3423e',
-    green: '#7b9726',
-    yellow: '#e5c07b',
-    blue: '#61afef',
-    magenta: '#c678dd',
-    cyan: '#56b6c2',
-    white: '#ffffff',
-    brightBlack: '#3a4a5c',
-    brightRed: '#f07178',
-    brightGreen: '#98c379',
-    brightYellow: '#d19a66',
-    brightBlue: '#61afef',
-    brightMagenta: '#c678dd',
-    brightCyan: '#56b6c2',
-    brightWhite: '#ffffff',
-  },
-  'neon-dark': {
-    foreground: '#c5c8c6',
-    background: 'rgba(29, 31, 33, 0.9)',
-    black: '#1d1f21',
-    red: '#ff0055',
-    green: '#00ff00',
-    yellow: '#ffcc00',
-    blue: '#00ccff',
-    magenta: '#ff00ff',
-    cyan: '#00ffff',
-    white: '#ffffff',
-    brightBlack: '#666666',
-    brightRed: '#ff3377',
-    brightGreen: '#33ff33',
-    brightYellow: '#ffdd33',
-    brightBlue: '#33ddff',
-    brightMagenta: '#ff33ff',
-    brightCyan: '#33ffff',
-    brightWhite: '#ffffff',
-  },
-  'matrix-green': {
-    foreground: '#00ff41',
-    background: 'rgba(0, 0, 0, 0.9)',
-    black: '#000000',
-    red: '#ff3333',
-    green: '#00ff00',
-    yellow: '#00ff41',
-    blue: '#00ffff',
-    magenta: '#ff00ff',
-    cyan: '#00ff41',
-    white: '#00ff00',
-    brightBlack: '#333333',
-    brightRed: '#ff6666',
-    brightGreen: '#66ff66',
-    brightYellow: '#66ff66',
-    brightBlue: '#66ffff',
-    brightMagenta: '#ff66ff',
-    brightCyan: '#66ff66',
-    brightWhite: '#00ff00',
+  'tango-light': {
+    foreground: '#2e3436',
+    background: '#eeeeec',
+    black: '#2e3436',
+    red: '#cc0000',
+    green: '#4e9a06',
+    yellow: '#c4a000',
+    blue: '#3465a4',
+    magenta: '#75507b',
+    cyan: '#06989a',
+    white: '#d3d7cf',
+    brightBlack: '#555753',
+    brightRed: '#ef2929',
+    brightGreen: '#8ae234',
+    brightYellow: '#fce94f',
+    brightBlue: '#729fcf',
+    brightMagenta: '#ad7fa8',
+    brightCyan: '#34e2e2',
+    brightWhite: '#eeeeec',
   },
   smart: {
     foreground: '#e0e0e0',
@@ -954,7 +934,11 @@ function generateSmartColors(appSettings: AppSettings) {
 
   const themeColors = themeMap[terminalTheme] || themeMap['auto'];
   const hue = themeColors.hue;
-  const isLightTheme = terminalTheme === 'solarized-light';
+
+  // Determine if theme is light based on background brightness
+  // Use a temporary color calculation to estimate brightness
+  const tempBg = hslToHex(hue, 10, 95); // Light bg estimation
+  const isLightTheme = terminalTheme.includes('light');
 
   // Generate colors based on theme
   const foreground = isLightTheme ? '#2c3e50' : '#e0e0e0';
@@ -1090,14 +1074,31 @@ function brightenColor(hex: string, percent: number): string {
 
 export function getXtermTheme(appSettings: AppSettings): ITheme {
   const baseTheme = getBaseXtermTheme(appSettings);
-  const preset = appSettings.appearance?.ansiColorPreset || 'classic';
+  let preset = appSettings.appearance?.ansiColorPreset || 'classic';
+
+  // Smart preset selection for light themes
+  // If the user has a light background (theme) but is using a dark-only preset (like classic),
+  // we override it to a smart/light preset to ensure readability.
+  const bgHex = baseTheme.background || '#000000';
+  // Calculate brightness inline to avoid circular dependency with terminalService
+  const r = parseInt(bgHex.slice(1, 3), 16);
+  const g = parseInt(bgHex.slice(3, 5), 16);
+  const b = parseInt(bgHex.slice(5, 7), 16);
+  const brightness = (r * 299 + g * 587 + b * 114) / 1000;
+  
+  const isLightBackground = brightness > 128;
+  const isDarkPreset = ['classic', 'high-contrast', 'neon-dark', 'matrix-green', 'night-owl'].includes(preset);
+
+  if (isLightBackground && isDarkPreset) {
+    preset = 'smart';
+  }
 
   // Get ANSI colors from preset or custom
   const ansiColors = preset === 'custom' && appSettings.appearance?.customAnsiColors
     ? generateAnsiColorsFromCustom(appSettings.appearance.customAnsiColors)
     : preset === 'smart'
     ? generateSmartColors(appSettings)
-    : ansiColorPresets[preset];
+    : ansiColorPresets[preset] || ansiColorPresets['classic'];
 
   // Apply ANSI colors to theme
   return {

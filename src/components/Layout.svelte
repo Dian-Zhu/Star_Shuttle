@@ -16,9 +16,14 @@
   import { loadConnections } from '../lib/connectionService';
   import { themeColors, type ThemeColorKey } from '../lib/themeColors';
   import { fade, fly } from 'svelte/transition';
+  import { getCurrentWindow } from '@tauri-apps/api/window';
+  import CloseActionModal from './CloseActionModal.svelte';
 
   let isCheckingLock = true;
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
+
+  let showCloseModal = false;
+  let preventClose = true;
   type KeyboardInteractivePrompt = { prompt: string; echo: boolean };
   type KeyboardInteractivePayload = {
     request_id: string;
@@ -146,6 +151,14 @@
   $: $settings.appearance.accentColor, updateAccentColor();
 
   onMount(() => {
+    const appWindow = getCurrentWindow();
+    appWindow.onCloseRequested(async (event) => {
+        if (preventClose) {
+            event.preventDefault();
+            showCloseModal = true;
+        }
+    });
+
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
     const handleSystemThemeChange = () => {
       if ($settings.theme === 'system') {
@@ -288,6 +301,15 @@
   }
 
   function handleKeydown(event: KeyboardEvent) {
+    // Disable default DevTools shortcuts (F12, Ctrl+Shift+I)
+    if (
+      event.key === 'F12' || 
+      (event.ctrlKey && event.shiftKey && event.key === 'I')
+    ) {
+      event.preventDefault();
+      return;
+    }
+
     const shortcuts = $settings.shortcuts;
 
     // Command Palette
@@ -353,6 +375,18 @@
       return;
     }
   }
+  async function handleMinimizeApp() {
+    showCloseModal = false;
+    const appWindow = getCurrentWindow();
+    await appWindow.hide();
+  }
+
+  async function handleQuitApp() {
+    showCloseModal = false;
+    preventClose = false;
+    const appWindow = getCurrentWindow();
+    await appWindow.close();
+  }
 </script>
 
 <svelte:window on:keydown={handleKeydown} />
@@ -404,6 +438,14 @@
       {/if}
     </main>
   </div>
+{/if}
+
+{#if showCloseModal}
+  <CloseActionModal 
+    on:close={() => showCloseModal = false}
+    on:minimize={handleMinimizeApp}
+    on:quit={handleQuitApp}
+  />
 {/if}
 
 {#if $showConnectionForm}

@@ -6,7 +6,7 @@ import { SearchAddon } from 'xterm-addon-search';
 import { WebglAddon } from 'xterm-addon-webgl';
 import { WebLinksAddon } from 'xterm-addon-web-links';
 import { get } from 'svelte/store';
-import { activeTerminals, connections, selectedTerminalIndex, type Connection, type ActiveTerminal, type AppSettings, errorMessage, successMessage, settings, connectionHistory, broadcastInputEnabled, broadcastSessionIds, getStoredTerminalUiState, getXtermTheme, terminalSessionMap, connectingConnections } from './store';
+import { activeTerminals, connections, selectedTerminalIndex, type Connection, type ActiveTerminal, type AppSettings, errorMessage, successMessage, settings, connectionHistory, broadcastInputEnabled, broadcastSessionIds, getStoredTerminalUiState, getXtermTheme, getBaseXtermTheme, terminalSessionMap, connectingConnections } from './store';
 import { terminalPool } from './terminalPool';
 import { TerminalInstance } from './terminalInstance';
 import 'xterm/css/xterm.css';
@@ -105,17 +105,34 @@ export function markTerminalStopped(sessionId: string) {
 }
 
 /**
+ * Helper to convert hex to rgba
+ */
+function hexToRgba(hex: string, alpha: number): string {
+  const cleanHex = hex.replace('#', '');
+  const r = parseInt(cleanHex.substring(0, 2), 16);
+  const g = parseInt(cleanHex.substring(2, 4), 16);
+  const b = parseInt(cleanHex.substring(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+/**
  * Apply scrollbar color to match terminal theme background
  */
 export function applyScrollbarColor(appSettings: AppSettings): void {
   log.info('Scrollbar', 'Updating scrollbar colors for terminal');
-  const theme = getXtermTheme(appSettings);
+  const theme = getBaseXtermTheme(appSettings);
   let terminalBg = theme.background || '#0f172a';
   
   // If background image is present, force terminal background to be transparent
   // This ensures the background image behind the terminal is visible
   if (appSettings.appearance?.backgroundImage) {
     terminalBg = 'rgba(0,0,0,0)';
+  } else {
+    // Apply opacity if no background image
+    const opacity = appSettings.appearance.backgroundOpacity ?? 1;
+    if (opacity < 1 && terminalBg.startsWith('#')) {
+       terminalBg = hexToRgba(terminalBg, opacity);
+    }
   }
 
   // Update terminal background color
@@ -154,8 +171,16 @@ export function applyScrollbarColor(appSettings: AppSettings): void {
 /**
  * Calculate brightness of a color (0-255)
  */
-function calculateBrightness(color: string): number {
+export function calculateBrightness(color: string): number {
   const hex = color.replace('#', '');
+  // Handle short hex codes (e.g. #fff)
+  if (hex.length === 3) {
+    const r = parseInt(hex[0] + hex[0], 16);
+    const g = parseInt(hex[1] + hex[1], 16);
+    const b = parseInt(hex[2] + hex[2], 16);
+    return (r * 299 + g * 587 + b * 114) / 1000;
+  }
+  
   const r = parseInt(hex.substr(0, 2), 16);
   const g = parseInt(hex.substr(2, 2), 16);
   const b = parseInt(hex.substr(4, 2), 16);
@@ -558,6 +583,12 @@ export async function initTerminal(container: HTMLElement, sessionId: string, co
     // Get current settings
     const appSettings = get(settings);
 
+    // Calculate font weight based on theme brightness
+    // Light themes need heavier fonts for better readability
+    const baseTheme = getBaseXtermTheme(appSettings);
+    const bgBrightness = calculateBrightness(baseTheme.background || '#000000');
+    const isLightTheme = bgBrightness > 128;
+
     // xterm 6.0: Create terminal with optimized options
     const term = new Terminal({
       cursorBlink: appSettings.terminal.cursorBlink,
@@ -565,6 +596,8 @@ export async function initTerminal(container: HTMLElement, sessionId: string, co
       cursorWidth: 1,
       fontSize: appSettings.terminal.fontSize,
       fontFamily: appSettings.terminal.fontFamily,
+      fontWeight: isLightTheme ? '600' : 'normal',
+      fontWeightBold: isLightTheme ? 'bold' : 'bold',
       theme: getXtermTheme(appSettings),
       scrollback: appSettings.terminal.scrollback,
       allowProposedApi: true,

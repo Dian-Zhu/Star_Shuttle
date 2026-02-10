@@ -646,9 +646,39 @@
       }
     },
     {
+      id: 'standard-light',
+      name: '标准浅色',
+      description: '专为浅色背景优化的配色',
+      previewColors: {
+        black: '#000000',
+        red: '#cd3131',
+        green: '#0dbc79',
+        yellow: '#949800',
+        blue: '#2472c8',
+        magenta: '#bc3fbc',
+        cyan: '#11a8cd',
+        white: '#555555',
+      }
+    },
+    {
       id: 'solarized',
-      name: 'Solarized',
-      description: '精确设计的配色方案,视觉舒适',
+      name: 'Solarized Dark',
+      description: '精确设计的深色配色方案',
+      previewColors: {
+        black: '#073642',
+        red: '#dc322f',
+        green: '#859900',
+        yellow: '#b58900',
+        blue: '#268bd2',
+        magenta: '#d33682',
+        cyan: '#2aa198',
+        white: '#eee8d5',
+      }
+    },
+    {
+      id: 'solarized-light',
+      name: 'Solarized Light',
+      description: '精确设计的浅色配色方案',
       previewColors: {
         black: '#073642',
         red: '#dc322f',
@@ -673,6 +703,36 @@
         magenta: '#b48ead',
         cyan: '#88c0d0',
         white: '#e5e9f0',
+      }
+    },
+    {
+      id: 'github-light',
+      name: 'GitHub Light',
+      description: 'GitHub 风格的浅色主题',
+      previewColors: {
+        black: '#24292f',
+        red: '#cf222e',
+        green: '#1a7f37',
+        yellow: '#9a6700',
+        blue: '#0969da',
+        magenta: '#8250df',
+        cyan: '#1b7c83',
+        white: '#6e7781',
+      }
+    },
+    {
+      id: 'tango-light',
+      name: 'Tango Light',
+      description: '经典的 Linux 终端浅色主题',
+      previewColors: {
+        black: '#2e3436',
+        red: '#cc0000',
+        green: '#4e9a06',
+        yellow: '#c4a000',
+        blue: '#3465a4',
+        magenta: '#75507b',
+        cyan: '#06989a',
+        white: '#d3d7cf',
       }
     },
     {
@@ -703,81 +763,6 @@
         magenta: '#b16286',
         cyan: '#689d6a',
         white: '#a89984',
-      }
-    },
-    {
-      id: 'high-contrast',
-      name: '高对比度',
-      description: '深色背景,适合图片背景使用',
-      previewColors: {
-        black: '#1a1a1a',
-        red: '#ff4444',
-        green: '#44ff44',
-        yellow: '#ffff44',
-        blue: '#4444ff',
-        magenta: '#ff44ff',
-        cyan: '#44ffff',
-        white: '#ffffff',
-      }
-    },
-    {
-      id: 'image-optimized',
-      name: '图片优化',
-      description: '优化后的深色方案,专为图片背景设计',
-      previewColors: {
-        black: '#0a0a14',
-        red: '#ff5252',
-        green: '#69f0ae',
-        yellow: '#ffd740',
-        blue: '#448aff',
-        magenta: '#e040fb',
-        cyan: '#18ffff',
-        white: '#ffffff',
-      }
-    },
-    {
-      id: 'night-owl',
-      name: '夜猫子',
-      description: '深蓝灰色调,优雅护眼',
-      previewColors: {
-        black: '#011627',
-        red: '#d3423e',
-        green: '#7b9726',
-        yellow: '#e5c07b',
-        blue: '#61afef',
-        magenta: '#c678dd',
-        cyan: '#56b6c2',
-        white: '#ffffff',
-      }
-    },
-    {
-      id: 'neon-dark',
-      name: '霓虹深色',
-      description: '高饱和度霓虹色彩,炫酷风格',
-      previewColors: {
-        black: '#1d1f21',
-        red: '#ff0055',
-        green: '#00ff00',
-        yellow: '#ffcc00',
-        blue: '#00ccff',
-        magenta: '#ff00ff',
-        cyan: '#00ffff',
-        white: '#ffffff',
-      }
-    },
-    {
-      id: 'matrix-green',
-      name: '矩阵绿',
-      description: '黑客帝国风格,绿色主题',
-      previewColors: {
-        black: '#000000',
-        red: '#ff3333',
-        green: '#00ff00',
-        yellow: '#00ff41',
-        blue: '#00ffff',
-        magenta: '#ff00ff',
-        cyan: '#00ff41',
-        white: '#00ff00',
       }
     },
     {
@@ -1566,47 +1551,47 @@
             <!-- ANSI Color Presets -->
             <div>
               <span class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-3">ANSI颜色预设</span>
-              <div class="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-3">
+              <div class="flex flex-col gap-3">
                 {#each ansiColorPresets as preset}
                   <button
-                    class="relative p-3 border rounded-lg flex flex-col items-center gap-2 transition-all {$settings.appearance.ansiColorPreset === preset.id ? 'border-primary-500 bg-primary-50 dark:bg-primary-500/10' : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'}"
+                    class="relative p-3 border rounded-lg flex items-center justify-between gap-4 transition-all {$settings.appearance.ansiColorPreset === preset.id ? 'border-primary-500 bg-primary-50 dark:bg-primary-500/10' : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'}"
                     on:click={() => updateAnsiColorPreset(preset.id)}
                     title={preset.description}
                   >
-                    {#if preset.id === 'smart'}
-                      <!-- Smart preset special icon -->
-                      <div class="w-full h-16 rounded shadow-sm border border-slate-300 dark:border-slate-600 bg-gradient-to-br from-primary-400 to-purple-500 flex items-center justify-center">
-                        <svg class="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
-                        </svg>
+                    <div class="flex-1 text-left min-w-0">
+                      <div class="flex items-center gap-2 mb-0.5">
+                        <span class="text-sm font-medium text-slate-700 dark:text-slate-300 truncate">{preset.name}</span>
+                        {#if $settings.appearance.ansiColorPreset === preset.id}
+                          <div class="w-2 h-2 bg-primary-500 rounded-full shrink-0"></div>
+                        {/if}
                       </div>
-                    {:else if preset.id === 'custom'}
-                      <!-- Custom preset icon -->
-                      <div class="w-full h-16 rounded shadow-sm border border-slate-300 dark:border-slate-600 bg-slate-100 dark:bg-slate-800 flex items-center justify-center">
-                        <svg class="w-6 h-6 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path>
-                        </svg>
-                      </div>
-                    {:else}
-                      <!-- Standard color presets -->
-                      <div
-                        class="w-full h-16 rounded shadow-sm border border-slate-300 dark:border-slate-600 grid grid-cols-4 gap-0.5 p-1"
-                        style="background-color: #1a1a1a"
-                      >
-                        {#each Object.entries(preset.previewColors) as [name, color]}
-                          <div class="aspect-square rounded-sm flex items-center justify-center text-[8px] font-bold" style="background-color: {color}">
-                            {name.charAt(0).toUpperCase()}
-                          </div>
-                        {/each}
-                      </div>
-                    {/if}
-                    <div class="text-center">
-                      <span class="text-xs font-medium text-slate-700 dark:text-slate-300 block">{preset.name}</span>
-                      <span class="text-[10px] text-slate-500 dark:text-slate-400">{preset.description}</span>
+                      <span class="text-xs text-slate-500 dark:text-slate-400 truncate block">{preset.description}</span>
                     </div>
-                    {#if $settings.appearance.ansiColorPreset === preset.id}
-                      <div class="absolute top-2 right-2 w-2 h-2 bg-primary-500 rounded-full"></div>
-                    {/if}
+
+                    <div class="shrink-0">
+                      {#if preset.id === 'smart'}
+                        <div class="w-48 h-8 rounded shadow-sm border border-slate-300 dark:border-slate-600 bg-gradient-to-br from-primary-400 to-purple-500 flex items-center justify-center">
+                          <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                          </svg>
+                        </div>
+                      {:else if preset.id === 'custom'}
+                        <div class="w-48 h-8 rounded shadow-sm border border-slate-300 dark:border-slate-600 bg-slate-100 dark:bg-slate-800 flex items-center justify-center">
+                          <svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path>
+                          </svg>
+                        </div>
+                      {:else}
+                        <div
+                          class="flex gap-1 p-1 rounded border border-slate-300 dark:border-slate-600"
+                          style="background-color: {['standard-light', 'classic', 'solarized', 'nord-light'].includes(preset.id) ? '#f8fafc' : '#1a1a1a'}"
+                        >
+                          {#each Object.entries(preset.previewColors) as [name, color]}
+                            <div class="w-5 h-6 rounded-sm" style="background-color: {color}" title={name}></div>
+                          {/each}
+                        </div>
+                      {/if}
+                    </div>
                   </button>
                 {/each}
               </div>
