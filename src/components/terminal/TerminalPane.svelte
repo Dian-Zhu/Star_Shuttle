@@ -1,6 +1,5 @@
 <script lang="ts">
   import { onMount, onDestroy, createEventDispatcher } from 'svelte';
-  import { invoke } from '@tauri-apps/api/core';
   import { Terminal } from 'xterm';
   import { FitAddon } from 'xterm-addon-fit';
   import { SearchAddon } from 'xterm-addon-search';
@@ -44,6 +43,14 @@
   let searchAddon: SearchAddon | null = null;
   let resizeObserver: ResizeObserver | null = null;
   let isInitialized = false;
+  let isDestroyed = false;
+  let mountVersion = 0;
+  let focusListener: (() => void) | null = null;
+  let mouseDownListener: (() => void) | null = null;
+  let textareaEl: HTMLTextAreaElement | null = null;
+  let ctrlCArmedUntil = 0;
+
+  const CTRL_C_INTERRUPT_WINDOW_MS = 800;
   
   // Search state
   let showSearch = false;
@@ -61,7 +68,28 @@
     const key = e.key.toLowerCase();
     if (e.metaKey && key === 'c') return true;
     if ((e.ctrlKey || e.metaKey) && e.shiftKey && key === 'c') return true;
+    if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && key === 'c') return true;
     return false;
+  }
+
+  function isPlainCtrlC(e: KeyboardEvent) {
+    return e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'c';
+  }
+
+  function copyTerminalSelection(term: Terminal): boolean {
+    const selection = term.getSelection() ?? '';
+    if (!selection) return false;
+    if (!navigator.clipboard?.writeText) return false;
+    void navigator.clipboard.writeText(selection);
+    return true;
+  }
+
+  function armCtrlCInterrupt() {
+    ctrlCArmedUntil = Date.now() + CTRL_C_INTERRUPT_WINDOW_MS;
+  }
+
+  function disarmCtrlCInterrupt() {
+    ctrlCArmedUntil = 0;
   }
 
   function handlePaste(e: ClipboardEvent) {
@@ -78,11 +106,27 @@
   function attachTerminalKeybindings(term: Terminal) {
     term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
       if (e.type === 'keydown' && isCopyShortcut(e)) {
-        const selection = term.getSelection() ?? '';
-        if (!selection) return true;
-        if (!navigator.clipboard?.writeText) return true;
-        void navigator.clipboard.writeText(selection);
+        if (isPlainCtrlC(e)) {
+          const now = Date.now();
+          if (now <= ctrlCArmedUntil) {
+            disarmCtrlCInterrupt();
+            if (sessionId) {
+              handleTerminalInput(sessionId, '\x03', connection);
+            }
+            return false;
+          }
+
+          copyTerminalSelection(term);
+          armCtrlCInterrupt();
+          return false;
+        }
+
+        if (!copyTerminalSelection(term)) return true;
+        disarmCtrlCInterrupt();
         return false;
+      }
+      if (e.type === 'keydown') {
+        disarmCtrlCInterrupt();
       }
       if ((e.ctrlKey || e.metaKey) && e.key === 'f' && e.type === 'keydown') {
         showSearch = !showSearch;
@@ -99,6 +143,9 @@
 
   // Initialization
   onMount(async () => {
+    isDestroyed = false;
+    const currentMountVersion = ++mountVersion;
+
     resizeObserver = new ResizeObserver(() => {
       if (isVisible && fitAddon && terminal) {
         fitAddon.fit();
@@ -132,12 +179,15 @@
     } else {
       // Initialize new detached terminal
       const result = await initDetachedTerminal(container, sessionId, connection);
+      if (isDestroyed || currentMountVersion !== mountVersion) {
+        return;
+      }
       if (result) {
         terminal = result.terminal;
         fitAddon = result.fitAddon;
         searchAddon = result.searchAddon;
         attachTerminalKeybindings(terminal);
-        
+
         if (onInit) {
           const instance = terminalPool.getInstance(sessionId);
           if (instance) {
@@ -147,21 +197,28 @@
       }
     }
 
+    if (isDestroyed || currentMountVersion !== mountVersion) {
+      return;
+    }
+
     if (terminal) {
-        terminal.onTitleChange(() => {
-             // Use title change as a proxy for activity/focus if needed, 
-             // but better to use onFocus event from xterm textarea
-        });
-        // We can listen to the textarea focus
-        terminal.textarea?.addEventListener('focus', () => {
-            if (onFocus) onFocus();
-            dispatch('active');
-        });
-        // Also click on container
-        container.addEventListener('mousedown', () => {
-             if (onFocus) onFocus();
-             dispatch('active');
-        });
+      terminal.onTitleChange(() => {
+        // Use title change as a proxy for activity/focus if needed,
+        // but better to use onFocus event from xterm textarea
+      });
+
+      focusListener = () => {
+        if (onFocus) onFocus();
+        dispatch('active');
+      };
+      mouseDownListener = () => {
+        if (onFocus) onFocus();
+        dispatch('active');
+      };
+
+      textareaEl = terminal.textarea ?? null;
+      textareaEl?.addEventListener('focus', focusListener);
+      container.addEventListener('mousedown', mouseDownListener);
     }
 
     if (container) {
@@ -172,10 +229,22 @@
     isInitialized = true;
   });
 
-  onDestroy(async () => {
+  onDestroy(() => {
+    isDestroyed = true;
+    mountVersion += 1;
+
     if (resizeObserver) {
       resizeObserver.disconnect();
     }
+    if (textareaEl && focusListener) {
+      textareaEl.removeEventListener('focus', focusListener);
+    }
+    if (container && mouseDownListener) {
+      container.removeEventListener('mousedown', mouseDownListener);
+    }
+    textareaEl = null;
+    focusListener = null;
+    mouseDownListener = null;
     container?.removeEventListener('paste', handlePaste, true);
     
     // We NO LONGER dispose/disconnect here. 
@@ -233,10 +302,8 @@
 
   function handleMenuCopy() {
     if (!terminal) return;
-    const selection = terminal.getSelection();
-    if (selection && navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(selection);
-    }
+    copyTerminalSelection(terminal);
+    disarmCtrlCInterrupt();
     closeContextMenu();
   }
 
@@ -403,7 +470,7 @@
       on:close={closeContextMenu}
     >
       <ContextMenuItem on:click={handleMenuCopy} label="复制">
-         <span slot="right">Ctrl+Shift+C</span>
+         <span slot="right">Ctrl+C / Ctrl+Shift+C</span>
       </ContextMenuItem>
       <ContextMenuItem on:click={handleMenuPaste} label="粘贴">
          <span slot="right">Ctrl+Shift+V</span>

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { showSettings, activeTerminals, selectedTerminalIndex, broadcastInputEnabled, broadcastSessionIds, terminalSessionMap } from '../lib/store';
-  import { closeTerminal } from '../lib/terminalService';
+  import { disconnectTerminal } from '../lib/terminalService';
   import SettingsIcon from './icons/SettingsIcon.svelte';
   import BroadcastIcon from './icons/BroadcastIcon.svelte';
   import TerminalIcon from './icons/TerminalIcon.svelte';
@@ -89,14 +89,21 @@
     }
   }
 
-  function handleCloseSession(rootId: string, event: MouseEvent) {
+  async function handleCloseSession(rootId: string, event: MouseEvent) {
     event.stopPropagation();
     const group = $terminalSessionMap.get(rootId);
-    if (group) {
-      group.forEach(id => closeTerminal(id));
-    } else {
-      closeTerminal(rootId);
+    if (!group || group.size === 0) {
+      await disconnectTerminal(rootId);
+      return;
     }
+
+    // Close non-root sessions first, then close root session.
+    const allIds = Array.from(group);
+    const childIds = allIds.filter(id => id !== rootId);
+    for (const childId of childIds) {
+      await disconnectTerminal(childId);
+    }
+    await disconnectTerminal(rootId);
   }
 
   function toggleBroadcast() {

@@ -7,17 +7,12 @@ import type { Connection } from './store';
 
 const IS_DEV = import.meta.env.DEV;
 
-function sanitizeConnectionForExport(connection: Connection): Connection {
-  const auth = connection.auth_method;
-
+function sanitizeAuthMethodForExport(auth: Connection['auth_method']): Connection['auth_method'] {
   if (auth.Password) {
     return {
-      ...connection,
-      auth_method: {
-        Password: {
-          ...auth.Password,
-          password: ''
-        }
+      Password: {
+        ...auth.Password,
+        password: ''
       }
     };
   }
@@ -26,10 +21,7 @@ function sanitizeConnectionForExport(connection: Connection): Connection {
     const rest: Omit<typeof auth.PrivateKey, 'passphrase'> & { passphrase?: string } = { ...auth.PrivateKey };
     delete rest.passphrase;
     return {
-      ...connection,
-      auth_method: {
-        PrivateKey: rest
-      }
+      PrivateKey: rest
     };
   }
 
@@ -37,14 +29,64 @@ function sanitizeConnectionForExport(connection: Connection): Connection {
     const rest: Omit<typeof auth.Certificate, 'passphrase'> & { passphrase?: string } = { ...auth.Certificate };
     delete rest.passphrase;
     return {
-      ...connection,
-      auth_method: {
-        Certificate: rest
+      Certificate: rest
+    };
+  }
+
+  if (auth.Agent) {
+    return { Agent: { ...auth.Agent } };
+  }
+
+  return { KeyboardInteractive: {} };
+}
+
+function sanitizeProxyTypeForExport(proxyType: any): any {
+  if (!proxyType || typeof proxyType !== 'object') {
+    return proxyType;
+  }
+
+  if (proxyType.Socks5) {
+    return {
+      Socks5: {
+        ...proxyType.Socks5,
+        password: null
       }
     };
   }
 
-  return connection;
+  if (proxyType.Http) {
+    return {
+      Http: {
+        ...proxyType.Http,
+        password: null
+      }
+    };
+  }
+
+  if (proxyType.JumpHost) {
+    const jumpHost = proxyType.JumpHost;
+    return {
+      JumpHost: {
+        ...jumpHost,
+        auth_method: sanitizeAuthMethodForExport(jumpHost.auth_method ?? { KeyboardInteractive: {} })
+      }
+    };
+  }
+
+  // Some imported data may use flattened shape; sanitize common password-like fields defensively.
+  const sanitized = { ...proxyType };
+  if ('password' in sanitized) {
+    sanitized.password = null;
+  }
+  return sanitized;
+}
+
+function sanitizeConnectionForExport(connection: Connection): Connection {
+  return {
+    ...connection,
+    auth_method: sanitizeAuthMethodForExport(connection.auth_method),
+    proxy_type: sanitizeProxyTypeForExport(connection.proxy_type),
+  };
 }
 
 export async function exportConnections(options?: { includeSensitive?: boolean }) {
@@ -57,10 +99,8 @@ export async function exportConnections(options?: { includeSensitive?: boolean }
       return;
     }
 
-    const includeSensitive = options?.includeSensitive === true;
-    if (includeSensitive) {
-      const confirmed = window.confirm('导出文件将包含明文密码/口令，存在泄露风险。仍要继续吗？');
-      if (!confirmed) return;
+    if (options?.includeSensitive === true && IS_DEV) {
+      console.warn('[exportConnections] includeSensitive is ignored because credentials in secure storage cannot be exported.');
     }
 
     const filePath = await save({
@@ -73,11 +113,12 @@ export async function exportConnections(options?: { includeSensitive?: boolean }
 
     if (!filePath) return; // User cancelled
 
-    const exportData = includeSensitive ? connections : connections.map(sanitizeConnectionForExport);
+    // Connection data from backend is already sanitized; we still sanitize defensively here.
+    const exportData = connections.map(sanitizeConnectionForExport);
 
     await writeTextFile(filePath, JSON.stringify(exportData, null, 2));
     
-    successMessage.set('导出成功！');
+    successMessage.set('导出成功（不含密码/口令）');
     setTimeout(() => successMessage.set(null), 3000);
   } catch (error) {
     console.error('Export failed:', error);
@@ -124,17 +165,13 @@ export async function importConnections() {
           continue;
         }
 
-        // We should probably generate a new ID to avoid conflict with existing ones?
-        // Or if ID exists, update it?
-        // Let's assume "Import" adds new entries.
-        // We strip the ID so the backend generates a new one.
-        // But `save_connection_config` logic: if ID is nil, generate new. If ID provided, update.
-        // If we import from another machine, IDs might not conflict, but if we import same file twice, we overwrite.
-        // To be safe and support "Duplicate/Clone" behavior, maybe we should regenerate IDs?
-        // But if it's "Restore Backup", we want same IDs.
-        // Let's try to save as is.
-        
-        await invoke('save_connection_config', { config: conn });
+        // Import defaults to append semantics: regenerate ID to avoid silent overwrite.
+        const configToSave: Connection = {
+          ...conn,
+          id: crypto.randomUUID(),
+        };
+
+        await invoke('save_connection_config', { config: configToSave });
         successCount++;
       } catch (e) {
         console.error('Failed to save imported connection:', e);

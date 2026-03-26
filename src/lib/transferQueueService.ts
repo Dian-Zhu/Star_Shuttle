@@ -15,10 +15,17 @@ export const transfers = derived([activeTransfers, queue], ([$active, $queue]) =
   all: [...$active, ...$queue]
 }));
 
-export const isTransferring = derived(activeTransfers, $active => $active.length > 0);
+export const isTransferring = derived(activeTransfers, $active =>
+  $active.some(t => t.status === 'transferring')
+);
 
 export class TransferQueueService {
   private transferMetrics = new Map<string, { lastProgress: number; lastTime: number; bytesTransferred: number }>();
+  private runningTransfers = new Set<string>();
+
+  private triggerQueueProcessing(): void {
+    setTimeout(() => this.processQueue(), 0);
+  }
   
   /**
    * Add a new transfer to the queue
@@ -65,27 +72,41 @@ export class TransferQueueService {
     queue.update(q => q.filter(t => t.id !== id));
     // Clean up metrics
     this.transferMetrics.delete(id);
+    this.triggerQueueProcessing();
   }
 
   /**
    * Cancel a transfer
    */
   cancelTransfer(id: string): void {
+    const now = new Date();
     activeTransfers.update(active =>
-      active.map(t => t.id === id ? { ...t, status: 'canceled' as const, endTime: new Date() } : t)
+      active.map(t => t.id === id ? { ...t, status: 'canceled' as const, endTime: now } : t)
     );
-    queue.update(q =>
-      q.map(t => t.id === id ? { ...t, status: 'canceled' as const, endTime: new Date() } : t)
-    );
+    queue.update(q => q.filter(t => t.id !== id));
+    this.transferMetrics.delete(id);
+    this.triggerQueueProcessing();
   }
 
   /**
    * Pause an active transfer
    */
   pauseTransfer(id: string): void {
-    activeTransfers.update(active =>
-      active.map(t => t.id === id ? { ...t, status: 'paused' as const } : t)
-    );
+    let pausedInActive = false;
+    activeTransfers.update(active => {
+      return active.map(transfer => {
+        if (transfer.id !== id) return transfer;
+        pausedInActive = true;
+        return { ...transfer, status: 'paused' as const };
+      });
+    });
+
+    // If this transfer is actively executing, we keep it in `activeTransfers` as paused
+    // until the running loop exits, then move it back to queue in finalizeInterruptedTransfer.
+    if (pausedInActive) {
+      return;
+    }
+
     queue.update(q =>
       q.map(t => t.id === id ? { ...t, status: 'paused' as const } : t)
     );
@@ -95,14 +116,24 @@ export class TransferQueueService {
    * Resume a paused transfer
    */
   resumeTransfer(id: string): void {
-    // Change status to pending so it gets picked up by queue processor
-    activeTransfers.update(active =>
-      active.map(t => t.id === id ? { ...t, status: 'pending' as const } : t)
-    );
+    let resumedInActive = false;
+    activeTransfers.update(active => {
+      return active.map(transfer => {
+        if (transfer.id !== id || transfer.status !== 'paused') return transfer;
+        resumedInActive = true;
+        return { ...transfer, status: 'transferring' as const };
+      });
+    });
+
+    // Fast resume: if execution loop is still alive, just flip back to transferring.
+    if (resumedInActive) {
+      return;
+    }
+
     queue.update(q =>
       q.map(t => t.id === id ? { ...t, status: 'pending' as const } : t)
     );
-    // Trigger queue processing
+
     this.processQueue();
   }
 
@@ -151,14 +182,18 @@ export class TransferQueueService {
    * Mark transfer as completed
    */
   completeTransfer(id: string): void {
+    const now = new Date();
     activeTransfers.update(active =>
-      active.map(t => t.id === id ? { ...t, progress: 100, status: 'completed' as const, endTime: new Date() } : t)
+      active.map(t => t.id === id ? { ...t, progress: 100, status: 'completed' as const, endTime: now } : t)
     );
     // Clean up metrics
     this.transferMetrics.delete(id);
+    this.triggerQueueProcessing();
+
     // Remove from active after a delay
     setTimeout(() => {
       activeTransfers.update(active => active.filter(t => t.id !== id));
+      this.triggerQueueProcessing();
     }, 2000);
   }
 
@@ -166,47 +201,99 @@ export class TransferQueueService {
    * Mark transfer as failed
    */
   failTransfer(id: string, error: string): void {
+    const now = new Date();
     activeTransfers.update(active =>
-      active.map(t => t.id === id ? { ...t, status: 'failed' as const, error, endTime: new Date() } : t)
+      active.map(t => t.id === id ? { ...t, status: 'failed' as const, error, endTime: now } : t)
     );
     queue.update(q => q.filter(t => t.id !== id));
     // Clean up metrics
     this.transferMetrics.delete(id);
+    this.triggerQueueProcessing();
+
+    setTimeout(() => {
+      activeTransfers.update(active => active.filter(t => t.id !== id));
+      this.triggerQueueProcessing();
+    }, 2000);
   }
 
   /**
    * Internal: Process the queue
    */
   private processQueue(): void {
-    activeTransfers.update(active => {
-      if (active.length >= maxConcurrentTransfers) return active;
-      
-      queue.update(q => {
-        // Filter out paused transfers from queue
-        const pendingTransfers = q.filter(t => t.status !== 'paused');
-        const availableSlots = maxConcurrentTransfers - active.length;
-        const toStart = pendingTransfers.slice(0, availableSlots);
-        
-        // Start these transfers
-        toStart.forEach(transfer => {
-          // Update status to transferring
-          const updated: TransferStatus = {
-            ...transfer,
-            status: 'transferring' as const
-          };
-          active = [...active, updated];
-          
-          // Execute the transfer asynchronously
-          this.executeTransfer(updated);
-        });
-        
-        // Remove started transfers from queue (by id)
-        const startedIds = new Set(toStart.map(t => t.id));
-        return q.filter(t => !startedIds.has(t.id));
-      });
-      
-      return active;
+    const queued = get(queue);
+
+    const running = this.runningTransfers.size;
+    const availableSlots = maxConcurrentTransfers - running;
+    if (availableSlots <= 0) return;
+
+    const pendingTransfers = queued.filter(t => t.status === 'pending' && !this.runningTransfers.has(t.id));
+    if (pendingTransfers.length === 0) return;
+
+    const toStart = pendingTransfers.slice(0, availableSlots);
+    const startedIds = new Set(toStart.map(t => t.id));
+    const startedTransfers = toStart.map(transfer => ({
+      ...transfer,
+      status: 'transferring' as const
+    }));
+
+    const active = get(activeTransfers);
+    const nextActive = [...active.filter(t => !startedIds.has(t.id)), ...startedTransfers];
+    const nextQueue = queued.filter(t => !startedIds.has(t.id));
+
+    activeTransfers.set(nextActive);
+    queue.set(nextQueue);
+
+    startedTransfers.forEach(transfer => {
+      this.runningTransfers.add(transfer.id);
+      void this.executeTransfer(transfer);
     });
+  }
+
+  private finalizeInterruptedTransfer(id: string): void {
+    const metrics = this.transferMetrics.get(id);
+    let pausedTransfer: TransferStatus | null = null;
+    let canceled = false;
+
+    activeTransfers.update(active => {
+      const next: TransferStatus[] = [];
+      for (const transfer of active) {
+        if (transfer.id !== id) {
+          next.push(transfer);
+          continue;
+        }
+
+        if (transfer.status === 'paused') {
+          pausedTransfer = {
+            ...transfer,
+            bytesTransferred: metrics?.bytesTransferred ?? transfer.bytesTransferred,
+          };
+          continue;
+        }
+
+        if (transfer.status === 'canceled') {
+          canceled = true;
+          continue;
+        }
+
+        next.push(transfer);
+      }
+      return next;
+    });
+
+    if (pausedTransfer) {
+      queue.update(current => {
+        if (current.some(t => t.id === id)) {
+          return current.map(t => (t.id === id ? pausedTransfer! : t));
+        }
+        return [...current, pausedTransfer!];
+      });
+      return;
+    }
+
+    if (canceled) {
+      queue.update(current => current.filter(t => t.id !== id));
+      this.transferMetrics.delete(id);
+    }
   }
 
   /**
@@ -259,6 +346,12 @@ export class TransferQueueService {
             
             const chunk = await localFsService.readChunk(fileHandle, currentChunkSize);
             if (chunk.length === 0) break;
+
+            // Pause/cancel may happen while waiting for I/O; check again before write.
+            const statusAfterRead = this.getTransferStatus(id);
+            if (statusAfterRead === 'paused' || statusAfterRead === 'canceled') {
+              return;
+            }
             
             // Write chunk with append flag (append=true if offset > 0)
             await sftpService.writeFile(sessionId, remotePath, chunk, offset > 0);
@@ -282,7 +375,6 @@ export class TransferQueueService {
             }
           }
           
-          this.completeTransfer(id);
         } finally {
            if (fileHandle) {
                await localFsService.closeFile(fileHandle);
@@ -321,6 +413,12 @@ export class TransferQueueService {
               done = true;
               break;
             }
+
+            const statusAfterRead = this.getTransferStatus(id);
+            if (statusAfterRead === 'paused' || statusAfterRead === 'canceled') {
+              return;
+            }
+
             await localFsService.writeChunk(fileHandle, chunk);
             offset += chunk.length;
 
@@ -341,10 +439,14 @@ export class TransferQueueService {
           if (currentStatus === 'paused' || currentStatus === 'canceled') {
             return;
           }
-          const content = await sftpService.scpDownload(sessionId, remotePath);
-          if (!fileHandle) {
-            fileHandle = await localFsService.openWriteFile(localPath, true);
+
+          if (fileHandle) {
+            await localFsService.closeFile(fileHandle);
+            fileHandle = null;
           }
+
+          const content = await sftpService.scpDownload(sessionId, remotePath);
+          fileHandle = await localFsService.openWriteFile(localPath, true);
           await localFsService.writeChunk(fileHandle, content);
           offset = content.length;
           totalSize = content.length;
@@ -364,6 +466,10 @@ export class TransferQueueService {
       this.completeTransfer(id);
     } catch (error: any) {
       this.failTransfer(id, error.message);
+    } finally {
+      this.runningTransfers.delete(id);
+      this.finalizeInterruptedTransfer(id);
+      this.triggerQueueProcessing();
     }
   }
 

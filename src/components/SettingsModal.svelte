@@ -317,14 +317,7 @@
        return;
      }
      
-     // Verify old password first
      try {
-       const isValid = await invoke('verify_app_lock', { password: oldPassword });
-       if (!isValid) {
-         securityError = '当前密码错误';
-         return;
-       }
-       
        if (newPassword !== confirmPassword) {
          securityError = '两次输入的新密码不一致';
          return;
@@ -335,7 +328,7 @@
          return;
        }
        
-       await invoke('set_app_lock', { password: newPassword });
+       await invoke('change_app_lock', { currentPassword: oldPassword, newPassword });
        securityMessage = '密码已更新';
        securityError = '';
        oldPassword = '';
@@ -355,13 +348,7 @@
     if (!confirm('确定要清除应用锁吗？清除后应用启动将不再需要密码。')) return;
     
     try {
-      const isValid = await invoke('verify_app_lock', { password: oldPassword });
-       if (!isValid) {
-         securityError = '当前密码错误';
-         return;
-       }
-
-      await invoke('remove_app_lock');
+      await invoke('remove_app_lock', { currentPassword: oldPassword });
       hasLock = false;
       securityMessage = '应用锁已清除';
       securityError = '';
@@ -459,7 +446,7 @@
     blue: '#2472c8',
     magenta: '#bc3fbc',
     cyan: '#11a8cd',
-    white: '#e5e5e5',
+    white: '#f8fafc',
     brightBlack: '#666666',
     brightRed: '#f14c4c',
     brightGreen: '#23d18b',
@@ -607,7 +594,7 @@
   type AnsiColorPreset = AppSettings['appearance']['ansiColorPreset'];
 
   const defaultCustomAnsiColors = {
-    foreground: '#e0e0e0',
+    foreground: '#f8fafc',
     red: '#ff4444',
     green: '#44ff44',
     yellow: '#ffff44',
@@ -642,7 +629,7 @@
         blue: '#0000ee',
         magenta: '#cd00cd',
         cyan: '#00cdcd',
-        white: '#e5e5e5',
+        white: '#f8fafc',
       }
     },
     {
@@ -792,7 +779,7 @@
         blue: '#0000ee',
         magenta: '#cd00cd',
         cyan: '#00cdcd',
-        white: '#e5e5e5',
+        white: '#f8fafc',
       }
     }
   ];
@@ -1860,6 +1847,29 @@
                  {securityError}
                </div>
              {/if}
+
+             <div class="space-y-4 border border-app-border rounded-lg p-4 bg-app-surface">
+               <h4 class="font-medium text-app-text">调试工具</h4>
+
+               <div class="flex items-center justify-between">
+                 <div>
+                   <label class="block text-sm font-medium text-app-text-secondary" for="disableDevToolsShortcuts">
+                     禁用调试工具快捷键
+                   </label>
+                   <p class="text-xs text-app-text-secondary mt-0.5">阻止 `F12`、`Ctrl+Shift+I/J/C` 打开 WebView 调试工具</p>
+                 </div>
+                 <label class="relative inline-flex items-center cursor-pointer">
+                   <input
+                     type="checkbox"
+                     id="disableDevToolsShortcuts"
+                     checked={$settings.security.disableDevToolsShortcuts}
+                     on:change={(e) => updateSecuritySetting('disableDevToolsShortcuts', (e.target as HTMLInputElement).checked)}
+                     class="sr-only peer"
+                   >
+                   <div class="w-11 h-6 bg-app-border peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-600"></div>
+                 </label>
+               </div>
+             </div>
 
              {#if !hasLock}
                <!-- Setup Lock -->

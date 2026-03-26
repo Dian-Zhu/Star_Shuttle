@@ -18,7 +18,6 @@
   import DownloadIcon from './icons/DownloadIcon.svelte';
   import { importConnections, exportConnections } from '../lib/importExportService';
   import { confirm } from '@tauri-apps/plugin-dialog';
-  import { invoke } from '@tauri-apps/api/core';
   import { successMessage } from '../lib/store';
   import { v4 as uuidv4 } from 'uuid';
 
@@ -419,11 +418,6 @@
     await disconnectTerminal(terminal.sessionId);
   }
 
-  function handleToggleDevTools() {
-    invoke('toggle_devtools');
-    closeContextMenu();
-  }
-
   onMount(() => {
     // window.addEventListener('click', closeContextMenu);
     // return () => window.removeEventListener('click', closeContextMenu);
@@ -724,10 +718,6 @@
           danger 
           iconComponent={TrashIcon} 
         />
-        <ContextMenuDivider />
-        <ContextMenuItem on:click={handleToggleDevTools} label="调试工具">
-           <svg slot="icon" class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"></path></svg>
-        </ContextMenuItem>
       {:else if contextMenuFolderRow}
          <ContextMenuItem 
           on:click={() => {
@@ -738,10 +728,6 @@
           danger 
           iconComponent={TrashIcon} 
         />
-        <ContextMenuDivider />
-        <ContextMenuItem on:click={handleToggleDevTools} label="调试工具">
-           <svg slot="icon" class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"></path></svg>
-        </ContextMenuItem>
       {:else}
          <ContextMenuItem 
           on:click={() => {
@@ -760,10 +746,6 @@
           label="新建分组" 
           iconComponent={FolderIcon} 
         />
-        <ContextMenuDivider />
-        <ContextMenuItem on:click={handleToggleDevTools} label="调试工具">
-           <svg slot="icon" class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"></path></svg>
-        </ContextMenuItem>
       {/if}
     </ContextMenu>
   {/if}

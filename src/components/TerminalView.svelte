@@ -1,9 +1,9 @@
 <script lang="ts">
 import { onDestroy } from 'svelte';
+import { get } from 'svelte/store';
 import { activeTerminals, type ActiveTerminal, terminalSessionMap, closeSplitRequest } from '../lib/store';
-import { createTerminalSession, closeSplitSession, closeTerminal } from '../lib/terminalService';
+import { createTerminalSession, closeSplitSession, disconnectTerminal } from '../lib/terminalService';
 import { terminalPool } from '../lib/terminalPool';
-import { TerminalInstance } from '../lib/terminalInstance';
 import type { LayoutNode, TerminalPaneNode, SplitNode } from '../lib/layout';
 import { generateId, findNode, replaceNode, removeNode, findNodeBySessionId } from '../lib/layout';
 import type { TerminalProxy } from '../lib/terminalProxy';
@@ -15,6 +15,7 @@ import SplitPane from './terminal/SplitPane.svelte';
   let layoutRoot: LayoutNode | null = null;
   let initializedSessionId: string | null = null;
   let activePaneId: string | null = null;
+  let destroyed = false;
 
   // Initialize layout when terminalData changes or on mount
   $: if (terminalData && terminalData.sessionId !== initializedSessionId) {
@@ -22,23 +23,6 @@ import SplitPane from './terminal/SplitPane.svelte';
     activePaneId = null; // Reset active pane
     
     const rootId = generateId();
-    
-    // 如果终端已经初始化且不在池中，注册到池中
-    if (terminalData.terminal && terminalData.fitAddon && terminalData.searchAddon) {
-      if (!terminalPool.hasInstance(terminalData.sessionId)) {
-        const instance = TerminalInstance.fromInitialized(
-          terminalData.sessionId,
-          terminalData.terminal,
-          terminalData.fitAddon,
-          terminalData.searchAddon
-        );
-        
-        terminalPool.registerInstance(instance);
-        console.log(`[TerminalView] Registered initialized terminal instance for session ${terminalData.sessionId}`);
-      } else {
-        console.log(`[TerminalView] Terminal instance already exists for session ${terminalData.sessionId}`);
-      }
-    }
     
     layoutRoot = {
       type: 'pane',
@@ -79,7 +63,7 @@ import SplitPane from './terminal/SplitPane.svelte';
     if (node && node.type === 'pane') {
       if (node.isRoot) {
         // If it's the root session, close the whole terminal session
-        closeTerminal(targetSessionId);
+        void disconnectTerminal(targetSessionId);
         closeSplitRequest.set(null);
       } else {
         handleClosePane({ detail: { targetId: node.id } } as CustomEvent);
@@ -105,6 +89,7 @@ import SplitPane from './terminal/SplitPane.svelte';
   }
 
   onDestroy(() => {
+    destroyed = true;
     if (terminalData && layoutRoot) {
       // Clean up all non-root sessions
       const cleanupNode = (node: LayoutNode) => {
@@ -137,17 +122,33 @@ import SplitPane from './terminal/SplitPane.svelte';
 
     const targetNode = findNode(layoutRoot, targetId);
     if (!targetNode || targetNode.type !== 'pane') return;
+    const splitRootSessionId = terminalData.sessionId;
+    const targetSessionId = targetNode.sessionId;
 
     try {
       // Create new session
-      const newSessionId = await createTerminalSession(targetNode.connection as any);
+      const newSessionId = await createTerminalSession(targetNode.connection);
+
+      const latestRoot = layoutRoot;
+      const stillActiveRoot = get(activeTerminals).some(t => t.sessionId === splitRootSessionId);
+      const latestTarget = latestRoot ? findNode(latestRoot, targetId) : null;
+      const targetStillValid =
+        latestTarget &&
+        latestTarget.type === 'pane' &&
+        latestTarget.sessionId === targetSessionId;
+
+      if (destroyed || !latestRoot || !stillActiveRoot || !targetStillValid) {
+        await closeSplitSession(newSessionId);
+        activeTerminals.update(terms => terms.filter(t => t.sessionId !== newSessionId));
+        return;
+      }
       
       // Add to activeTerminals as a child of the current root session
       activeTerminals.update(terms => [
         ...terms,
         {
           sessionId: newSessionId,
-          connection: targetNode.connection as any,
+          connection: latestTarget.connection,
           terminal: null as any,
           fitAddon: null as any,
           searchAddon: null as any,
@@ -162,7 +163,7 @@ import SplitPane from './terminal/SplitPane.svelte';
         type: 'pane',
         id: newPaneId,
         sessionId: newSessionId,
-        connection: targetNode.connection as any,
+        connection: latestTarget.connection,
         isRoot: false,
         createdAt: Date.now(),
         onInit: (proxy: TerminalProxy) => {
@@ -194,7 +195,7 @@ import SplitPane from './terminal/SplitPane.svelte';
         id: generateId(),
         direction,
         splitRatio: 0.5,
-        children: [targetNode, newPane]
+        children: [latestTarget, newPane]
       };
 
       layoutRoot = replaceNode(layoutRoot, targetId, splitNode);
@@ -213,7 +214,7 @@ import SplitPane from './terminal/SplitPane.svelte';
     
     // If it's the root pane, close the entire session
     if (targetNode && targetNode.type === 'pane' && targetNode.isRoot) {
-      closeTerminal(targetNode.sessionId);
+      void disconnectTerminal(targetNode.sessionId);
       return;
     }
 

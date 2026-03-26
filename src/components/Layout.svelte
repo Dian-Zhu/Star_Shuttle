@@ -12,7 +12,7 @@
   import AppLockOverlay from './AppLockOverlay.svelte';
   import AdvancedModal from './AdvancedModal.svelte';
   import { showConnectionForm, editingConnection, showSettings, successMessage, errorMessage, settings, isSidebarCollapsed, isRightSidebarOpen, activeTerminals, selectedTerminalIndex, showCommandPalette, isLocked, showAdvancedModal } from '../lib/store';
-  import { closeAllTerminals, closeTerminal, restoreActiveSessions } from '../lib/terminalService';
+  import { closeAllTerminals, disconnectTerminal, restoreActiveSessions } from '../lib/terminalService';
   import { loadConnections } from '../lib/connectionService';
   import { themeColors, type ThemeColorKey } from '../lib/themeColors';
   import { fade, fly } from 'svelte/transition';
@@ -301,13 +301,22 @@
   }
 
   function handleKeydown(event: KeyboardEvent) {
-    // Disable default DevTools shortcuts (F12, Ctrl+Shift+I)
-    if (
-      event.key === 'F12' || 
-      (event.ctrlKey && event.shiftKey && event.key === 'I')
-    ) {
-      event.preventDefault();
-      return;
+    if ($settings.security.disableDevToolsShortcuts) {
+      const key = event.key.toLowerCase();
+      const isWindowsLikeDevTools =
+        event.ctrlKey && event.shiftKey && (key === 'i' || key === 'j' || key === 'c');
+      const isMacLikeDevTools =
+        event.metaKey && event.altKey && (key === 'i' || key === 'j' || key === 'c');
+
+      // Prevent the webview from opening DevTools. For Ctrl+Shift+C / Cmd+Alt+C we only
+      // suppress the default inspect-element behavior and still allow app-level shortcut
+      // handlers to run.
+      if (event.key === 'F12' || isWindowsLikeDevTools || isMacLikeDevTools) {
+        event.preventDefault();
+        if (key !== 'c') {
+          return;
+        }
+      }
     }
 
     const shortcuts = $settings.shortcuts;
@@ -352,7 +361,7 @@
       event.preventDefault();
       if ($activeTerminals.length > 0 && $selectedTerminalIndex >= 0 && $selectedTerminalIndex < $activeTerminals.length) {
          const session = $activeTerminals[$selectedTerminalIndex];
-         if (session) closeTerminal(session.sessionId);
+         if (session) void disconnectTerminal(session.sessionId);
       }
       return;
     }

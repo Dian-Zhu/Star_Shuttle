@@ -13,7 +13,10 @@
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   let clockTimer: ReturnType<typeof setInterval> | null = null;
   let pollInFlight = false;
+  let pollPending = false;
   let pollingEnabled = false;
+  let pollVersion = 0;
+  let lastSelectedSessionId: string | null = null;
   const lastNetSampleBySession = new Map<string, { rx: number; tx: number; time: number }>();
   const POLL_INTERVAL_MS = 5000;
 
@@ -54,32 +57,65 @@
     return startPolling();
   }
 
-  function parseCpuUsage(output: string) {
-    const match = output.match(/(\d+\.\d+)\s*id/);
-    if (match) {
-      const idle = parseFloat(match[1]);
-      if (!Number.isNaN(idle)) cpuUsage = Math.max(0, Math.round((100 - idle) * 10) / 10);
-    }
+  function parseCpuUsage(output: string): number | null {
+    const source = output.trim();
+    if (!source) return null;
+
+    const idleMatch = source.match(/(\d+(?:\.\d+)?)\s*id\b/i) ?? source.match(/(\d+(?:\.\d+)?)%\s*idle\b/i);
+    if (!idleMatch) return null;
+    const idle = parseFloat(idleMatch[1]);
+    if (Number.isNaN(idle)) return null;
+    return Math.max(0, Math.round((100 - idle) * 10) / 10);
   }
 
-  function parseMemPercent(output: string) {
+  function parseVmStatMemPercent(output: string): number | null {
+    const pageSizeMatch = output.match(/page size of\s+(\d+)\s+bytes/i);
+    const pageSize = pageSizeMatch ? parseInt(pageSizeMatch[1], 10) : 4096;
+    if (!Number.isFinite(pageSize) || pageSize <= 0) return null;
+
+    const readPages = (label: RegExp): number => {
+      const match = output.match(label);
+      if (!match) return 0;
+      const value = parseInt(match[1].replace(/\./g, ''), 10);
+      return Number.isFinite(value) ? value : 0;
+    };
+
+    const freePages = readPages(/Pages free:\s+([\d.]+)/i) + readPages(/Pages speculative:\s+([\d.]+)/i);
+    const activePages = readPages(/Pages active:\s+([\d.]+)/i);
+    const inactivePages = readPages(/Pages inactive:\s+([\d.]+)/i);
+    const wiredPages = readPages(/Pages wired down:\s+([\d.]+)/i);
+    const compressedPages = readPages(/Pages occupied by compressor:\s+([\d.]+)/i);
+    const totalPages = freePages + activePages + inactivePages + wiredPages + compressedPages;
+    if (totalPages <= 0) return null;
+
+    const usedPages = Math.max(0, totalPages - freePages);
+    return Math.max(0, Math.min(100, Math.round((usedPages / totalPages) * 100)));
+  }
+
+  function parseMemPercent(output: string): number | null {
     const lines = output.split('\n');
     const memLine = lines.find(l => l.startsWith('Mem:'));
-    if (!memLine) return;
-    const parts = memLine.split(/\s+/);
-    if (parts.length < 4) return;
-    const total = parseInt(parts[1]);
-    const used = parseInt(parts[2]);
-    if (Number.isNaN(total) || total <= 0) return;
-    const value = Number.isNaN(used) ? 0 : used;
-    memPercent = Math.max(0, Math.min(100, Math.round((value / total) * 100)));
-    if (parts.length >= 7) {
-      const avail = parseInt(parts[6]);
-      if (!Number.isNaN(avail)) {
-        const adjustedUsed = total - avail;
-        memPercent = Math.max(0, Math.min(100, Math.round((adjustedUsed / total) * 100)));
+    if (memLine) {
+      const parts = memLine.split(/\s+/);
+      if (parts.length >= 4) {
+        const total = parseInt(parts[1], 10);
+        const used = parseInt(parts[2], 10);
+        if (!Number.isNaN(total) && total > 0) {
+          const value = Number.isNaN(used) ? 0 : used;
+          let percent = Math.max(0, Math.min(100, Math.round((value / total) * 100)));
+          if (parts.length >= 7) {
+            const avail = parseInt(parts[6], 10);
+            if (!Number.isNaN(avail)) {
+              const adjustedUsed = total - avail;
+              percent = Math.max(0, Math.min(100, Math.round((adjustedUsed / total) * 100)));
+            }
+          }
+          return percent;
+        }
       }
     }
+
+    return parseVmStatMemPercent(output);
   }
 
   function parseNetBytes(output: string): { rx: number; tx: number } {
@@ -102,9 +138,21 @@
     return { rx, tx };
   }
 
+  function getSelectedSessionId(): string | null {
+    const terminal = $activeTerminals[$selectedTerminalIndex];
+    return terminal ? terminal.sessionId : null;
+  }
+
+  function isSessionStillSelected(sessionId: string): boolean {
+    return getSelectedSessionId() === sessionId;
+  }
+
   async function pollSelectedSession() {
     if (!pollingEnabled) return;
-    if (pollInFlight) return;
+    if (pollInFlight) {
+      pollPending = true;
+      return;
+    }
     const terminal = $activeTerminals[$selectedTerminalIndex];
     if (!terminal) {
       netSpeedBps = 0;
@@ -114,17 +162,23 @@
     }
 
     const sessionId = terminal.sessionId;
+    const version = ++pollVersion;
     pollInFlight = true;
     try {
-      // Combine commands to reduce overhead
-      // cat /proc/net/dev; echo "---"; top -bn1 | grep "Cpu(s)"; echo "---"; free -m
-      const combinedCommand = 'cat /proc/net/dev; echo "---STAR_SHUTTLE_SPLIT---"; top -bn1 | grep "Cpu(s)"; echo "---STAR_SHUTTLE_SPLIT---"; free -m';
+      const combinedCommand = [
+        '(cat /proc/net/dev 2>/dev/null || true)',
+        'echo "---STAR_SHUTTLE_SPLIT---"',
+        '((top -bn1 | grep "Cpu(s)") 2>/dev/null || (top -l 1 | grep "CPU usage") 2>/dev/null || true)',
+        'echo "---STAR_SHUTTLE_SPLIT---"',
+        '((free -m) 2>/dev/null || (vm_stat) 2>/dev/null || true)'
+      ].join('; ');
       const output = await invoke('exec_command', { sessionId, command: combinedCommand }) as string;
-      
+      if (version !== pollVersion || !isSessionStillSelected(sessionId)) return;
+
       const parts = output.split('---STAR_SHUTTLE_SPLIT---');
       if (parts.length >= 3) {
         const [netOut, cpuOut, memOut] = parts;
-        
+
         const now = performance.now();
         const { rx, tx } = parseNetBytes(netOut);
         const last = lastNetSampleBySession.get(sessionId);
@@ -134,25 +188,47 @@
             const delta = Math.max(0, (rx - last.rx) + (tx - last.tx));
             netSpeedBps = delta / dt;
           }
+        } else {
+          netSpeedBps = 0;
         }
         lastNetSampleBySession.set(sessionId, { rx, tx, time: now });
 
-        parseCpuUsage(cpuOut);
-        parseMemPercent(memOut);
+        const parsedCpu = parseCpuUsage(cpuOut);
+        const parsedMem = parseMemPercent(memOut);
+        cpuUsage = parsedCpu ?? 0;
+        memPercent = parsedMem ?? 0;
+      } else {
+        netSpeedBps = 0;
+        cpuUsage = 0;
+        memPercent = 0;
+        lastNetSampleBySession.delete(sessionId);
       }
     } catch {
+      if (version !== pollVersion || !isSessionStillSelected(sessionId)) return;
       netSpeedBps = 0;
       cpuUsage = 0;
       memPercent = 0;
       lastNetSampleBySession.delete(sessionId);
     } finally {
       pollInFlight = false;
+      if (pollPending) {
+        pollPending = false;
+        if (pollingEnabled) void pollSelectedSession();
+      }
     }
   }
 
   $: {
     $activeTerminals;
     $selectedTerminalIndex;
+    const selectedNow = getSelectedSessionId();
+    if (selectedNow !== lastSelectedSessionId) {
+      lastSelectedSessionId = selectedNow;
+      pollVersion += 1;
+      netSpeedBps = 0;
+      cpuUsage = 0;
+      memPercent = 0;
+    }
     updatePollingState();
     if (pollingEnabled) {
       void pollSelectedSession();

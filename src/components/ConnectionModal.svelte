@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { showConnectionForm, editingConnection, connections, type Connection, errorMessage, successMessage } from '../lib/store';
+  import { showConnectionForm, editingConnection, connections, type Connection, showErrorMessage, showSuccessMessage } from '../lib/store';
   import { saveConnection, createBackendConfig } from '../lib/connectionService';
   import { connectAndOpen } from '../lib/terminalService';
   import { invoke } from '@tauri-apps/api/core';
@@ -61,15 +61,28 @@
     return [];
   }
 
+  function asRecord(value: unknown): Record<string, unknown> | null {
+    if (!value || typeof value !== 'object') return null;
+    return value as Record<string, unknown>;
+  }
+
+  function asString(value: unknown, fallback = ''): string {
+    return typeof value === 'string' ? value : fallback;
+  }
+
+  function asNumber(value: unknown, fallback: number): number {
+    return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+  }
+
   function hydrateFromConnection(connection: Connection) {
     formData.id = connection.id;
     formData.name = connection.name ?? '';
-    formData.protocol = ((connection as any).protocol ?? 'Ssh') as any;
+    formData.protocol = connection.protocol ?? 'Ssh';
     formData.host = connection.host ?? '';
     formData.port = Number(connection.port ?? 22);
     formData.username = connection.username ?? '';
     formData.description = connection.description ?? '';
-    formData.tags = normalizeTagsValue((connection as any).tags).join(',');
+    formData.tags = normalizeTagsValue(connection.tags).join(',');
     formData.autoReconnect = connection.auto_reconnect ?? false;
 
     formData.localForwards = (connection.local_forwards ?? []).map(f => ({
@@ -85,7 +98,7 @@
       local_port: Number(f.local_port),
     }));
 
-    const socksPort = (connection as any).socks_proxy_port;
+    const socksPort = connection.socks_proxy_port;
     formData.socksProxyPort = typeof socksPort === 'number' ? socksPort : undefined;
 
     formData.password = '';
@@ -98,26 +111,26 @@
     formData.privateKeyPath = '';
 
     const authMethod = connection.auth_method ?? {};
-    if ((authMethod as any).Password) {
+    if (authMethod.Password) {
       formData.authMethod = 'password';
-      formData.password = (authMethod as any).Password.password ?? '';
-      formData.savePassword = Boolean((authMethod as any).Password.save_password);
-    } else if ((authMethod as any).KeyboardInteractive) {
+      formData.password = authMethod.Password.password ?? '';
+      formData.savePassword = Boolean(authMethod.Password.save_password);
+    } else if (authMethod.KeyboardInteractive) {
       formData.authMethod = 'keyboardInteractive';
-    } else if ((authMethod as any).PrivateKey) {
+    } else if (authMethod.PrivateKey) {
       formData.authMethod = 'privateKey';
-      formData.keyPath = (authMethod as any).PrivateKey.key_path ?? '';
-      formData.passphrase = (authMethod as any).PrivateKey.passphrase ?? '';
-      formData.savePassphrase = Boolean((authMethod as any).PrivateKey.save_passphrase);
-    } else if ((authMethod as any).Agent) {
+      formData.keyPath = authMethod.PrivateKey.key_path ?? '';
+      formData.passphrase = authMethod.PrivateKey.passphrase ?? '';
+      formData.savePassphrase = Boolean(authMethod.PrivateKey.save_passphrase);
+    } else if (authMethod.Agent) {
       formData.authMethod = 'agent';
-      formData.agentPath = (authMethod as any).Agent.agent_path ?? '';
-    } else if ((authMethod as any).Certificate) {
+      formData.agentPath = authMethod.Agent.agent_path ?? '';
+    } else if (authMethod.Certificate) {
       formData.authMethod = 'certificate';
-      formData.certificatePath = (authMethod as any).Certificate.certificate_path ?? '';
-      formData.privateKeyPath = (authMethod as any).Certificate.private_key_path ?? '';
-      formData.passphrase = (authMethod as any).Certificate.passphrase ?? '';
-      formData.savePassphrase = Boolean((authMethod as any).Certificate.save_passphrase);
+      formData.certificatePath = authMethod.Certificate.certificate_path ?? '';
+      formData.privateKeyPath = authMethod.Certificate.private_key_path ?? '';
+      formData.passphrase = authMethod.Certificate.passphrase ?? '';
+      formData.savePassphrase = Boolean(authMethod.Certificate.save_passphrase);
     } else {
       formData.authMethod = 'password';
     }
@@ -138,48 +151,57 @@
     formData.jumpHostCertificatePath = '';
     formData.jumpHostPrivateKeyPath = '';
 
-    const proxyType = (connection as any).proxy_type;
-    if (!proxyType || proxyType === 'None') {
-      formData.proxyType = 'none';
-    } else if (proxyType.Socks5) {
-      formData.proxyType = 'socks5';
-      formData.proxyHost = proxyType.Socks5.host ?? '';
-      formData.proxyPort = Number(proxyType.Socks5.port ?? 1080);
-      formData.proxyUsername = proxyType.Socks5.username ?? '';
-      formData.proxyPassword = proxyType.Socks5.password ?? '';
-    } else if (proxyType.Http) {
-      formData.proxyType = 'http';
-      formData.proxyHost = proxyType.Http.host ?? '';
-      formData.proxyPort = Number(proxyType.Http.port ?? 8080);
-      formData.proxyUsername = proxyType.Http.username ?? '';
-      formData.proxyPassword = proxyType.Http.password ?? '';
-    } else if (proxyType.JumpHost) {
-      formData.proxyType = 'jumpHost';
-      formData.proxyHost = proxyType.JumpHost.host ?? '';
-      formData.proxyPort = Number(proxyType.JumpHost.port ?? 22);
-      formData.jumpHostUsername = proxyType.JumpHost.username ?? '';
+    const proxyType = connection.proxy_type;
+    const proxyRecord = asRecord(proxyType);
+    const socksProxy = asRecord(proxyRecord?.Socks5);
+    const httpProxy = asRecord(proxyRecord?.Http);
+    const jumpHostProxy = asRecord(proxyRecord?.JumpHost);
 
-      const jumpAuth = proxyType.JumpHost.auth_method ?? {};
+    if (!proxyType || proxyType === 'None' || !proxyRecord) {
+      formData.proxyType = 'none';
+    } else if (socksProxy) {
+      formData.proxyType = 'socks5';
+      formData.proxyHost = asString(socksProxy.host);
+      formData.proxyPort = asNumber(socksProxy.port, 1080);
+      formData.proxyUsername = asString(socksProxy.username);
+      formData.proxyPassword = asString(socksProxy.password);
+    } else if (httpProxy) {
+      formData.proxyType = 'http';
+      formData.proxyHost = asString(httpProxy.host);
+      formData.proxyPort = asNumber(httpProxy.port, 8080);
+      formData.proxyUsername = asString(httpProxy.username);
+      formData.proxyPassword = asString(httpProxy.password);
+    } else if (jumpHostProxy) {
+      formData.proxyType = 'jumpHost';
+      formData.proxyHost = asString(jumpHostProxy.host);
+      formData.proxyPort = asNumber(jumpHostProxy.port, 22);
+      formData.jumpHostUsername = asString(jumpHostProxy.username);
+
+      const jumpAuth = asRecord(jumpHostProxy.auth_method) ?? {};
       if (jumpAuth.Password) {
         formData.jumpHostAuthMethod = 'password';
-        formData.jumpHostPassword = jumpAuth.Password.password ?? '';
-        formData.jumpHostSavePassword = Boolean(jumpAuth.Password.save_password);
+        const password = asRecord(jumpAuth.Password);
+        formData.jumpHostPassword = asString(password?.password);
+        formData.jumpHostSavePassword = Boolean(password?.save_password);
       } else if (jumpAuth.KeyboardInteractive) {
         formData.jumpHostAuthMethod = 'keyboardInteractive';
       } else if (jumpAuth.PrivateKey) {
         formData.jumpHostAuthMethod = 'privateKey';
-        formData.jumpHostKeyPath = jumpAuth.PrivateKey.key_path ?? '';
-        formData.jumpHostPassphrase = jumpAuth.PrivateKey.passphrase ?? '';
-        formData.jumpHostSavePassphrase = Boolean(jumpAuth.PrivateKey.save_passphrase);
+        const privateKey = asRecord(jumpAuth.PrivateKey);
+        formData.jumpHostKeyPath = asString(privateKey?.key_path);
+        formData.jumpHostPassphrase = asString(privateKey?.passphrase);
+        formData.jumpHostSavePassphrase = Boolean(privateKey?.save_passphrase);
       } else if (jumpAuth.Agent) {
         formData.jumpHostAuthMethod = 'agent';
-        formData.jumpHostAgentPath = jumpAuth.Agent.agent_path ?? '';
+        const agent = asRecord(jumpAuth.Agent);
+        formData.jumpHostAgentPath = asString(agent?.agent_path);
       } else if (jumpAuth.Certificate) {
         formData.jumpHostAuthMethod = 'certificate';
-        formData.jumpHostCertificatePath = jumpAuth.Certificate.certificate_path ?? '';
-        formData.jumpHostPrivateKeyPath = jumpAuth.Certificate.private_key_path ?? '';
-        formData.jumpHostPassphrase = jumpAuth.Certificate.passphrase ?? '';
-        formData.jumpHostSavePassphrase = Boolean(jumpAuth.Certificate.save_passphrase);
+        const certificate = asRecord(jumpAuth.Certificate);
+        formData.jumpHostCertificatePath = asString(certificate?.certificate_path);
+        formData.jumpHostPrivateKeyPath = asString(certificate?.private_key_path);
+        formData.jumpHostPassphrase = asString(certificate?.passphrase);
+        formData.jumpHostSavePassphrase = Boolean(certificate?.save_passphrase);
       }
     }
   }
@@ -263,12 +285,57 @@
   let isTesting = false;
   
   let hostKeyVerification: { 
+    type: 'unknown' | 'mismatch' | 'unavailable';
     host: string; 
     port: number; 
     keyType: string; 
     keyBase64: string; 
     fingerprint: string; 
+    reason?: string;
   } | null = null;
+
+  const hostKeyMarkers: Array<{ marker: string; type: 'unknown' | 'mismatch' | 'unavailable' }> = [
+    { marker: 'HOST_KEY_UNKNOWN|', type: 'unknown' },
+    { marker: 'HOST_KEY_MISMATCH|', type: 'mismatch' },
+    { marker: 'HOST_KEY_UNAVAILABLE|', type: 'unavailable' },
+  ];
+
+  function parseHostKeyError(errStr: string) {
+    for (const { marker, type } of hostKeyMarkers) {
+      if (!errStr.includes(marker)) continue;
+      try {
+        const jsonStr = errStr.split(marker)[1];
+        const keyData = JSON.parse(jsonStr);
+        return {
+          type,
+          host: keyData.host as string,
+          port: keyData.port as number,
+          keyType: keyData.key_type as string,
+          keyBase64: keyData.key_base64 as string,
+          fingerprint: keyData.fingerprint as string,
+          reason: keyData.reason as string | undefined,
+        };
+      } catch (e) {
+        console.error('Failed to parse host key data', e);
+        return null;
+      }
+    }
+    return null;
+  }
+
+  $: hostKeyTitle =
+    hostKeyVerification?.type === 'mismatch'
+      ? '主机密钥已变更'
+      : hostKeyVerification?.type === 'unavailable'
+        ? '无法校验主机密钥'
+        : '未知的主机密钥';
+
+  $: hostKeyHint =
+    hostKeyVerification?.type === 'mismatch'
+      ? '这可能是中间人攻击或服务器重装导致。请谨慎确认后再信任。'
+      : hostKeyVerification?.type === 'unavailable'
+        ? 'known_hosts 当前不可用，无法自动校验服务器身份。'
+        : '首次连接该服务器，请确认指纹后再继续。';
 
   $: if ($editingConnection) {
     hydrateFromConnection($editingConnection);
@@ -283,19 +350,17 @@
         port: hostKeyVerification.port,
         keyType: hostKeyVerification.keyType,
         keyBase64: hostKeyVerification.keyBase64,
-        replace: false
+        replace: hostKeyVerification.type === 'mismatch'
       });
       
       hostKeyVerification = null;
-      successMessage.set('主机密钥已保存');
-      setTimeout(() => successMessage.set(null), 3000);
+      showSuccessMessage('主机密钥已保存', 3000);
       
       // Retry connection test
       handleTestConnection();
     } catch (error) {
       console.error('Failed to save host key:', error);
-      errorMessage.set(`保存主机密钥失败: ${error}`);
-      setTimeout(() => errorMessage.set(null), 5000);
+      showErrorMessage(`保存主机密钥失败: ${error}`, 5000);
     }
   }
 
@@ -303,8 +368,7 @@
     commitPendingTag();
     trimHost();
     if (!formData.host || !formData.port) {
-      errorMessage.set('请填写主机地址和端口');
-      setTimeout(() => errorMessage.set(null), 3000);
+      showErrorMessage('请填写主机地址和端口', 3000);
       return;
     }
     
@@ -317,30 +381,17 @@
       });
       
       await invoke('test_connection', { config });
-      successMessage.set('连接测试成功！');
-      setTimeout(() => successMessage.set(null), 3000);
+      showSuccessMessage('连接测试成功！', 3000);
     } catch (error: any) {
       const errStr = String(error);
-      if (errStr.includes('HOST_KEY_UNKNOWN|')) {
-        try {
-          const jsonStr = errStr.split('HOST_KEY_UNKNOWN|')[1];
-          const keyData = JSON.parse(jsonStr);
-          hostKeyVerification = {
-            host: keyData.host,
-            port: keyData.port,
-            keyType: keyData.key_type,
-            keyBase64: keyData.key_base64,
-            fingerprint: keyData.fingerprint
-          };
-          return;
-        } catch (e) {
-          console.error('Failed to parse host key data', e);
-        }
+      const parsedHostKey = parseHostKeyError(errStr);
+      if (parsedHostKey) {
+        hostKeyVerification = parsedHostKey;
+        return;
       }
 
       console.error('Connection test failed:', error);
-      errorMessage.set(`连接测试失败: ${error}`);
-      setTimeout(() => errorMessage.set(null), 5000);
+      showErrorMessage(`连接测试失败: ${error}`, 5000);
     } finally {
       isTesting = false;
     }
@@ -404,10 +455,16 @@
         <div class="w-16 h-16 bg-yellow-100 dark:bg-yellow-900/30 text-yellow-600 dark:text-yellow-400 rounded-full flex items-center justify-center mb-4">
           <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
         </div>
-        <h3 class="text-xl font-semibold text-app-text mb-2">未知的主机密钥</h3>
+        <h3 class="text-xl font-semibold text-app-text mb-2">{hostKeyTitle}</h3>
         <p class="text-sm text-app-text-secondary mb-6 max-w-md">
-          服务器 <strong>{hostKeyVerification.host}:{hostKeyVerification.port}</strong> 的身份无法验证。
+          服务器 <strong>{hostKeyVerification.host}:{hostKeyVerification.port}</strong> 的身份验证需要确认。
           <br>
+          {hostKeyHint}
+          <br>
+          {#if hostKeyVerification.reason}
+            原因: {hostKeyVerification.reason}
+            <br>
+          {/if}
           指纹: <code class="bg-app-bg px-1 py-0.5 rounded text-xs font-mono select-all mt-2 inline-block">{hostKeyVerification.fingerprint}</code>
         </p>
         <div class="flex items-center gap-3">

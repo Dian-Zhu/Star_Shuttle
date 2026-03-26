@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { get } from 'svelte/store';
   import { save } from '@tauri-apps/plugin-dialog';
-  import { invoke } from '@tauri-apps/api/core';
+  import { writeFile as writeLocalFile } from '@tauri-apps/plugin-fs';
   import { sftpService } from '../../lib/sftpService';
   import { localFsService } from '../../lib/localFsService';
   import { fileClipboard, settings } from '../../lib/store';
@@ -35,10 +35,84 @@
   let editorLoading = false;
   let editorSaving = false;
   let editorError: string | null = null;
+  let editorSessionId: string | null = null;
+  const FILE_TRANSFER_CHUNK_SIZE = 1024 * 1024; // 1MB
+  const MAX_IN_MEMORY_FALLBACK_BYTES = 8 * 1024 * 1024; // 8MB
 
   function joinPath(base: string, name: string): string {
     if (base === '/' || base === '') return `/${name}`;
     return `${base}/${name}`.replace('//', '/');
+  }
+
+  function normalizePath(path: string): string {
+    const trimmed = path.trim();
+    if (!trimmed || trimmed === '.') return '.';
+    if (trimmed === '/') return '/';
+    if (trimmed.startsWith('~')) return trimmed;
+
+    const isAbsolute = trimmed.startsWith('/');
+    const parts = trimmed.split('/').filter(Boolean);
+    const stack: string[] = [];
+
+    for (const part of parts) {
+      if (part === '.') continue;
+      if (part === '..') {
+        if (stack.length > 0 && stack[stack.length - 1] !== '..') {
+          stack.pop();
+        } else if (!isAbsolute) {
+          stack.push('..');
+        }
+        continue;
+      }
+      stack.push(part);
+    }
+
+    if (isAbsolute) {
+      return stack.length > 0 ? `/${stack.join('/')}` : '/';
+    }
+
+    return stack.length > 0 ? stack.join('/') : '.';
+  }
+
+  function parentPath(path: string): string {
+    const normalized = normalizePath(path);
+    if (normalized === '/' || normalized === '.') return normalized;
+    if (normalized.startsWith('~')) return normalized;
+
+    if (normalized.startsWith('/')) {
+      const segments = normalized.split('/').filter(Boolean);
+      segments.pop();
+      return segments.length > 0 ? `/${segments.join('/')}` : '/';
+    }
+
+    const segments = normalized.split('/').filter(Boolean);
+    segments.pop();
+    return segments.length > 0 ? segments.join('/') : '.';
+  }
+
+  function resolveTargetPath(inputPath: string): string {
+    const trimmedInput = inputPath.trim();
+    if (!trimmedInput || trimmedInput === '.') {
+      return normalizePath(currentPath);
+    }
+    if (trimmedInput === '..') {
+      return parentPath(currentPath);
+    }
+    if (trimmedInput.startsWith('/')) {
+      return normalizePath(trimmedInput);
+    }
+    if (trimmedInput.startsWith('~')) {
+      return trimmedInput;
+    }
+
+    const normalizedCurrent = normalizePath(currentPath);
+    if (normalizedCurrent === '/' || normalizedCurrent.startsWith('~')) {
+      return normalizePath(joinPath(normalizedCurrent, trimmedInput));
+    }
+    if (normalizedCurrent === '.') {
+      return normalizePath(trimmedInput);
+    }
+    return normalizePath(`${normalizedCurrent}/${trimmedInput}`);
   }
 
   // 根据文件扩展名获取图标
@@ -172,6 +246,86 @@
     lastRequestedPath = null;
     activeLoadAbortController?.abort();
     activeLoadAbortController = null;
+    if (editorOpen) {
+      editorOpen = false;
+      editorFile = null;
+      editorContent = '';
+      editorLoading = false;
+      editorSaving = false;
+      editorError = null;
+      editorSessionId = null;
+    }
+  }
+
+  function ensureSessionUnchanged(expectedSessionId: string) {
+    if (expectedSessionId !== sessionId) {
+      throw new Error('会话已切换，操作已取消，请重试');
+    }
+  }
+
+  async function uploadLocalPathInChunks(
+    localPath: string,
+    remotePath: string,
+    targetSessionId: string
+  ): Promise<void> {
+    const totalSize = await localFsService.getFileSize(localPath);
+    if (totalSize === 0) {
+      try {
+        ensureSessionUnchanged(targetSessionId);
+        await sftpService.writeFile(targetSessionId, remotePath, new Uint8Array(0), false);
+      } catch (e) {
+        await sftpService.scpUpload(targetSessionId, remotePath, new Uint8Array(0));
+      }
+      return;
+    }
+
+    let handle: any = null;
+    let offset = 0;
+    let append = false;
+    try {
+      handle = await localFsService.openFile(localPath);
+      while (offset < totalSize) {
+        ensureSessionUnchanged(targetSessionId);
+        const remaining = totalSize - offset;
+        const chunk = await localFsService.readChunk(handle, Math.min(FILE_TRANSFER_CHUNK_SIZE, remaining));
+        if (chunk.length === 0) break;
+        await sftpService.writeFile(targetSessionId, remotePath, chunk, append);
+        append = true;
+        offset += chunk.length;
+      }
+      if (offset < totalSize) {
+        throw new Error('读取本地文件时提前结束');
+      }
+    } catch (e) {
+      if (totalSize > MAX_IN_MEMORY_FALLBACK_BYTES) {
+        throw new Error(`上传失败：为避免内存占用，已禁用超大文件整块回退（${formatSize(totalSize)}）`);
+      }
+      const content = await localFsService.readFile(localPath);
+      ensureSessionUnchanged(targetSessionId);
+      await sftpService.scpUpload(targetSessionId, remotePath, content);
+    } finally {
+      if (handle) {
+        await localFsService.closeFile(handle);
+      }
+    }
+  }
+
+  async function copyRemoteFileInChunks(
+    sourceSessionId: string,
+    sourcePath: string,
+    targetSessionId: string,
+    targetPath: string
+  ): Promise<void> {
+    let offset = 0;
+    let append = false;
+    while (true) {
+      ensureSessionUnchanged(targetSessionId);
+      const chunk = await sftpService.readChunk(sourceSessionId, sourcePath, offset, FILE_TRANSFER_CHUNK_SIZE);
+      if (chunk.length === 0) break;
+      await sftpService.writeFile(targetSessionId, targetPath, chunk, append);
+      append = true;
+      offset += chunk.length;
+    }
   }
 
   function sortFiles(list: FileEntry[]) {
@@ -200,9 +354,10 @@
   }
 
   async function loadFiles(path: string, options?: { force?: boolean }) {
-    if (!options?.force && loading && lastRequestedPath === path) return;
+    const targetPath = resolveTargetPath(path);
+    if (!options?.force && loading && lastRequestedPath === targetPath) return;
 
-    lastRequestedPath = path;
+    lastRequestedPath = targetPath;
     const requestId = (loadSequence += 1);
     let controller: AbortController | null = null;
 
@@ -216,10 +371,10 @@
     activeLoadAbortController = null;
 
     if (!options?.force) {
-      const cached = directoryCache.get(getCacheKey(path));
+      const cached = directoryCache.get(getCacheKey(targetPath));
       if (cached && Date.now() - cached.ts <= CACHE_TTL_MS) {
         files = cached.files;
-        currentPath = path;
+        currentPath = targetPath;
         loading = false;
         return;
       }
@@ -237,12 +392,12 @@
         localController.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
       });
 
-      const nextFiles = await Promise.race([sftpService.listDirectory(sessionId, path), abortPromise]);
+      const nextFiles = await Promise.race([sftpService.listDirectory(sessionId, targetPath), abortPromise]);
       if (requestId !== loadSequence) return;
       sortFiles(nextFiles);
       files = nextFiles;
-      currentPath = path;
-      setCache(path, nextFiles);
+      currentPath = targetPath;
+      setCache(targetPath, nextFiles);
     } catch (e: any) {
       if (requestId !== loadSequence) return;
       if (e?.name === 'AbortError') return;
@@ -333,12 +488,17 @@
     closeContextMenu();
     const name = prompt('请输入文件夹名称:');
     if (!name) return;
-    
+
+    const targetSessionId = sessionId;
+    const targetPath = currentPath;
     const path = joinPath(getMenuTargetDirectory(), name);
     try {
-      await sftpService.createDirectory(sessionId, path);
-      invalidateCache(currentPath);
-      loadFiles(currentPath, { force: true });
+      ensureSessionUnchanged(targetSessionId);
+      await sftpService.createDirectory(targetSessionId, path);
+      if (targetSessionId === sessionId) {
+        invalidateCache(targetPath);
+        void loadFiles(targetPath, { force: true });
+      }
     } catch (e: any) {
       error = e.toString();
     }
@@ -349,15 +509,20 @@
     const name = prompt('请输入文件名:');
     if (!name) return;
 
+    const targetSessionId = sessionId;
+    const targetPath = currentPath;
     const path = joinPath(getMenuTargetDirectory(), name);
     try {
+      ensureSessionUnchanged(targetSessionId);
       try {
-        await sftpService.writeFile(sessionId, path, new Uint8Array(0), false);
+        await sftpService.writeFile(targetSessionId, path, new Uint8Array(0), false);
       } catch (e) {
-        await sftpService.scpUpload(sessionId, path, new Uint8Array(0));
+        await sftpService.scpUpload(targetSessionId, path, new Uint8Array(0));
       }
-      invalidateCache(currentPath);
-      loadFiles(currentPath, { force: true });
+      if (targetSessionId === sessionId) {
+        invalidateCache(targetPath);
+        void loadFiles(targetPath, { force: true });
+      }
     } catch (e: any) {
       error = e.toString();
     }
@@ -377,16 +542,21 @@
 
     if (!confirm(confirmMsg)) return;
 
+    const targetSessionId = sessionId;
+    const targetPath = currentPath;
     try {
       for (const file of selectedFiles) {
+        ensureSessionUnchanged(targetSessionId);
         if (file.isDirectory) {
-          await sftpService.removeDirectory(sessionId, file.path);
+          await sftpService.removeDirectory(targetSessionId, file.path);
         } else {
-          await sftpService.removeFile(sessionId, file.path);
+          await sftpService.removeFile(targetSessionId, file.path);
         }
       }
-      invalidateCache(currentPath);
-      loadFiles(currentPath, { force: true });
+      if (targetSessionId === sessionId) {
+        invalidateCache(targetPath);
+        void loadFiles(targetPath, { force: true });
+      }
     } catch (e: any) {
       error = e.toString();
     }
@@ -410,10 +580,15 @@
     const parentPath = parts.join('/');
     const newPath = parentPath === '' ? `/${newName}` : `${parentPath}/${newName}`;
 
+    const targetSessionId = sessionId;
+    const targetPath = currentPath;
     try {
-      await sftpService.rename(sessionId, file.path, newPath);
-      invalidateCache(currentPath);
-      loadFiles(currentPath, { force: true });
+      ensureSessionUnchanged(targetSessionId);
+      await sftpService.rename(targetSessionId, file.path, newPath);
+      if (targetSessionId === sessionId) {
+        invalidateCache(targetPath);
+        void loadFiles(targetPath, { force: true });
+      }
     } catch (e: any) {
       error = e.toString();
     }
@@ -429,6 +604,8 @@
 
   async function handleDrop(e: DragEvent) {
     isDragging = false;
+    const targetSessionId = sessionId;
+    const targetPath = currentPath;
     const payload = e.dataTransfer?.getData('application/x-starshuttle-file');
     if (payload) {
       try {
@@ -436,15 +613,12 @@
         if (data?.source === 'local' && data?.path && data?.name) {
           loading = true;
           try {
-            const content = await localFsService.readFile(data.path);
-            const remotePath = currentPath === '/' ? `/${data.name}` : `${currentPath}/${data.name}`.replace('//', '/');
-            try {
-              await sftpService.writeFile(sessionId, remotePath, content, false);
-            } catch (err) {
-              await sftpService.scpUpload(sessionId, remotePath, content);
+            const remotePath = targetPath === '/' ? `/${data.name}` : `${targetPath}/${data.name}`.replace('//', '/');
+            await uploadLocalPathInChunks(data.path, remotePath, targetSessionId);
+            if (targetSessionId === sessionId) {
+              invalidateCache(targetPath);
+              await loadFiles(targetPath, { force: true });
             }
-            invalidateCache(currentPath);
-            await loadFiles(currentPath, { force: true });
           } finally {
             loading = false;
           }
@@ -458,25 +632,27 @@
     const items = e.dataTransfer?.files;
     if (!items || items.length === 0) return;
 
-    await uploadFiles(Array.from(items));
+    await uploadFiles(Array.from(items), targetSessionId, targetPath);
   }
 
   async function handleFileUpload(e: Event) {
     const input = e.target as HTMLInputElement;
     if (!input.files || input.files.length === 0) return;
-    
-    await uploadFiles(Array.from(input.files));
+
+    await uploadFiles(Array.from(input.files), sessionId, currentPath);
     input.value = ''; // Reset input
   }
 
-  async function uploadFiles(filesToUpload: File[]) {
+  async function uploadFiles(filesToUpload: File[], targetSessionId: string = sessionId, targetPath: string = currentPath) {
     loading = true;
     try {
       for (const file of filesToUpload) {
-        await uploadSingleFile(file);
+        await uploadSingleFile(file, targetSessionId, targetPath);
       }
-      invalidateCache(currentPath);
-      await loadFiles(currentPath, { force: true });
+      if (targetSessionId === sessionId) {
+        invalidateCache(targetPath);
+        await loadFiles(targetPath, { force: true });
+      }
     } catch (e: any) {
       error = e.toString();
     } finally {
@@ -484,48 +660,37 @@
     }
   }
 
-  async function uploadSingleFile(file: File): Promise<void> {
-    const path = currentPath === '/' ? `/${file.name}` : `${currentPath}/${file.name}`.replace('//', '/');
+  async function uploadSingleFile(file: File, targetSessionId: string, targetPath: string): Promise<void> {
+    const path = targetPath === '/' ? `/${file.name}` : `${targetPath}/${file.name}`.replace('//', '/');
     
-    // Chunked upload
-    const CHUNK_SIZE = 1024 * 1024; // 1MB
-    const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+    const totalChunks = Math.ceil(file.size / FILE_TRANSFER_CHUNK_SIZE);
 
     if (file.size === 0) {
       try {
-        await sftpService.writeFile(sessionId, path, new Uint8Array(0), false);
+        ensureSessionUnchanged(targetSessionId);
+        await sftpService.writeFile(targetSessionId, path, new Uint8Array(0), false);
       } catch (e) {
-        await sftpService.scpUpload(sessionId, path, new Uint8Array(0));
+        await sftpService.scpUpload(targetSessionId, path, new Uint8Array(0));
       }
       return;
     }
     
     try {
       for (let i = 0; i < totalChunks; i++) {
-        const start = i * CHUNK_SIZE;
-        const end = Math.min(start + CHUNK_SIZE, file.size);
+        const start = i * FILE_TRANSFER_CHUNK_SIZE;
+        const end = Math.min(start + FILE_TRANSFER_CHUNK_SIZE, file.size);
         const chunk = file.slice(start, end);
-        
-        await new Promise<void>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = async () => {
-            if (!reader.result) { resolve(); return; }
-            const content = new Uint8Array(reader.result as ArrayBuffer);
-            try {
-              // First chunk overwrites/creates, subsequent chunks append
-              await sftpService.writeFile(sessionId, path, content, i > 0);
-              resolve();
-            } catch (e) {
-              reject(e);
-            }
-          };
-          reader.onerror = () => reject(new Error("Failed to read file chunk"));
-          reader.readAsArrayBuffer(chunk);
-        });
+        const content = new Uint8Array(await chunk.arrayBuffer());
+        ensureSessionUnchanged(targetSessionId);
+        await sftpService.writeFile(targetSessionId, path, content, i > 0);
       }
     } catch (e) {
+      if (file.size > MAX_IN_MEMORY_FALLBACK_BYTES) {
+        throw new Error(`上传失败：为避免内存占用，已禁用超大文件整块回退（${formatSize(file.size)}）`);
+      }
       const full = new Uint8Array(await file.arrayBuffer());
-      await sftpService.scpUpload(sessionId, path, full);
+      ensureSessionUnchanged(targetSessionId);
+      await sftpService.scpUpload(targetSessionId, path, full);
     }
   }
 
@@ -540,11 +705,12 @@
 
     loading = true;
     try {
+      const targetSessionId = sessionId;
       let content: Uint8Array;
       try {
-        content = await sftpService.readFile(sessionId, file.path);
+        content = await sftpService.readFile(targetSessionId, file.path);
       } catch (e) {
-        content = await sftpService.scpDownload(sessionId, file.path);
+        content = await sftpService.scpDownload(targetSessionId, file.path);
       }
 
       // 使用保存对话框让用户选择保存位置
@@ -557,15 +723,10 @@
       });
 
       if (!filePath) {
-        loading = false;
         return; // 用户取消了保存
       }
 
-      // 使用 Rust 端的命令保存二进制文件到本地
-      await invoke('save_file_to_local', {
-        path: filePath,
-        content: Array.from(content) // 将 Uint8Array 转换为普通数组，以便通过 IPC 传输
-      });
+      await writeLocalFile(filePath, content);
 
     } catch (e: any) {
       error = e.toString();
@@ -623,33 +784,26 @@
 
     loading = true;
     error = null;
+    const targetSessionId = sessionId;
+    const targetPath = currentPath;
     try {
       for (const entry of item.entries) {
         if (entry.isDirectory) continue; // Skip directories for now
         
         const destPath = joinPath(destDir, entry.name);
-        
-        let content: Uint8Array;
+
         if (item.source === 'local') {
-          content = await localFsService.readFile(entry.path);
+          await uploadLocalPathInChunks(entry.path, destPath, targetSessionId);
         } else {
           if (!item.sessionId) continue;
-          try {
-            content = await sftpService.readFile(item.sessionId, entry.path);
-          } catch (e) {
-            content = await sftpService.scpDownload(item.sessionId, entry.path);
-          }
-        }
-
-        try {
-          await sftpService.writeFile(sessionId, destPath, content, false);
-        } catch (e) {
-          await sftpService.scpUpload(sessionId, destPath, content);
+          await copyRemoteFileInChunks(item.sessionId, entry.path, targetSessionId, destPath);
         }
       }
 
-      invalidateCache(currentPath);
-      await loadFiles(currentPath, { force: true });
+      if (targetSessionId === sessionId) {
+        invalidateCache(targetPath);
+        await loadFiles(targetPath, { force: true });
+      }
     } catch (e: any) {
       error = e?.message ?? String(e);
     } finally {
@@ -744,7 +898,7 @@
     if (matchesShortcut(e, backShortcut)) {
       e.preventDefault();
       if (currentPath !== '/' && currentPath !== '') {
-        loadFiles('..');
+        loadFiles(parentPath(currentPath));
       }
       return;
     }
@@ -859,16 +1013,19 @@
     }
     editorOpen = true;
     editorFile = file;
+    editorSessionId = sessionId;
     editorContent = '';
     editorError = null;
     editorLoading = true;
+    const targetSessionId = sessionId;
     try {
       let content: Uint8Array;
       try {
-        content = await sftpService.readFile(sessionId, file.path);
+        content = await sftpService.readFile(targetSessionId, file.path);
       } catch (e) {
-        content = await sftpService.scpDownload(sessionId, file.path);
+        content = await sftpService.scpDownload(targetSessionId, file.path);
       }
+      ensureSessionUnchanged(targetSessionId);
       if (content.byteLength > 2 * 1024 * 1024) {
         throw new Error('文件过大，暂不支持直接编辑（> 2MB）');
       }
@@ -887,6 +1044,7 @@
     if (editorSaving) return;
     editorOpen = false;
     editorFile = null;
+    editorSessionId = null;
     editorContent = '';
     editorError = null;
     editorLoading = false;
@@ -896,15 +1054,20 @@
     if (!editorFile || editorSaving) return;
     editorSaving = true;
     editorError = null;
+    const targetSessionId = editorSessionId ?? sessionId;
+    const targetPath = currentPath;
     try {
+      ensureSessionUnchanged(targetSessionId);
       const content = new TextEncoder().encode(editorContent);
       try {
-        await sftpService.writeFile(sessionId, editorFile.path, content, false);
+        await sftpService.writeFile(targetSessionId, editorFile.path, content, false);
       } catch (e) {
-        await sftpService.scpUpload(sessionId, editorFile.path, content);
+        await sftpService.scpUpload(targetSessionId, editorFile.path, content);
       }
-      invalidateCache(currentPath);
-      await loadFiles(currentPath, { force: true });
+      if (targetSessionId === sessionId) {
+        invalidateCache(targetPath);
+        await loadFiles(targetPath, { force: true });
+      }
       closeEditor();
     } catch (e: any) {
       editorError = e?.message ?? String(e);

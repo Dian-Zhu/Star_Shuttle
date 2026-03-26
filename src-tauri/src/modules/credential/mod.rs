@@ -1,5 +1,5 @@
-use crate::modules::error::{AppError, Result};
 use crate::modules::db::DatabaseManager;
+use crate::modules::error::{AppError, Result};
 use keyring::Entry;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
@@ -35,17 +35,11 @@ impl CredentialManager {
         format!("credential:{}:{}", connection_id, kind)
     }
 
-    fn fallback_save(&self, connection_id: &Uuid, kind: &str, password: &str) -> Result<()> {
-        let Some(db) = self.db.as_ref() else {
-            return Err(AppError::CredentialError(
-                "secure storage unavailable and no fallback storage configured".to_string(),
-            ));
-        };
-        let db = db
-            .lock()
-            .map_err(|e| AppError::CredentialError(e.to_string()))?;
-        db.save_setting(&Self::fallback_key(connection_id, kind), password)?;
-        Ok(())
+    fn fallback_save(&self, connection_id: &Uuid, kind: &str, _password: &str) -> Result<()> {
+        let _ = (connection_id, kind);
+        Err(AppError::CredentialError(
+            "secure storage unavailable; refusing to save plaintext credentials".to_string(),
+        ))
     }
 
     fn fallback_get(&self, connection_id: &Uuid, kind: &str) -> Result<Option<String>> {
@@ -129,7 +123,6 @@ impl CredentialManager {
             (None, Err(fallback_err)) => Err(fallback_err),
         }
     }
-
 
     pub fn save_password(&self, connection_id: &Uuid, password: &str) -> Result<()> {
         self.save_password_kind(connection_id, "password", password)

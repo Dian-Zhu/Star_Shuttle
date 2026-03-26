@@ -3,9 +3,9 @@ use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use thiserror::Error;
-use uuid::Uuid;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use uuid::Uuid;
 
 // Re-export submodules
 pub mod auth;
@@ -366,8 +366,7 @@ pub trait ConnectionManager {
     fn log_terminal_data(&self, session_id: &Uuid, data: &[u8], direction: &str);
 
     // Command execution
-    fn exec_command(&self, session_id: &Uuid, command: &str)
-        -> Result<String, ConnectionError>;
+    fn exec_command(&self, session_id: &Uuid, command: &str) -> Result<String, ConnectionError>;
 }
 
 // Connection errors
@@ -450,11 +449,31 @@ impl KeyboardInteractiveCoordinator {
         Ok(())
     }
 
-    pub async fn request(
+    fn remove_pending_request(
         &self,
-        app: &AppHandle,
+        request_id: &str,
+    ) -> Result<Option<oneshot::Sender<Result<Vec<String>, String>>>, anyhow::Error> {
+        let removed = self
+            .pending
+            .lock()
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?
+            .remove(request_id);
+        Ok(removed)
+    }
+
+    #[cfg(test)]
+    fn pending_len_for_test(&self) -> usize {
+        self.pending.lock().map(|m| m.len()).unwrap_or_default()
+    }
+
+    async fn request_with_emit<F>(
+        &self,
         request: ssh_impl::KeyboardInteractivePromptRequest,
-    ) -> Result<Vec<String>, anyhow::Error> {
+        emit: F,
+    ) -> Result<Vec<String>, anyhow::Error>
+    where
+        F: FnOnce(serde_json::Value) -> Result<(), anyhow::Error>,
+    {
         let request_id = Uuid::new_v4().to_string();
         let (tx, rx) = oneshot::channel::<Result<Vec<String>, String>>();
         {
@@ -465,38 +484,51 @@ impl KeyboardInteractiveCoordinator {
             guard.insert(request_id.clone(), tx);
         }
 
-        app.emit(
-            SSH_KEYBOARD_INTERACTIVE_EVENT,
-            serde_json::json!({
-                "request_id": request_id,
-                "host": request.host,
-                "port": request.port,
-                "username": request.username,
-                "name": request.name,
-                "instructions": request.instructions,
-                "prompts": request.prompts.iter().map(|p| serde_json::json!({
-                    "prompt": p.prompt,
-                    "echo": p.echo
-                })).collect::<Vec<_>>()
-            }),
-        )?;
+        let payload = serde_json::json!({
+            "request_id": request_id,
+            "host": request.host,
+            "port": request.port,
+            "username": request.username,
+            "name": request.name,
+            "instructions": request.instructions,
+            "prompts": request.prompts.iter().map(|p| serde_json::json!({
+                "prompt": p.prompt,
+                "echo": p.echo
+            })).collect::<Vec<_>>()
+        });
+
+        if let Err(err) = emit(payload) {
+            let _ = self.remove_pending_request(&request_id);
+            return Err(err);
+        }
 
         let res = tokio::time::timeout(std::time::Duration::from_secs(300), rx).await;
         match res {
             Ok(Ok(Ok(v))) => Ok(v),
             Ok(Ok(Err(e))) => Err(anyhow::anyhow!(e)),
-            Ok(Err(_)) => Err(anyhow::anyhow!(
-                "keyboard-interactive response channel closed"
-            )),
+            Ok(Err(_)) => {
+                let _ = self.remove_pending_request(&request_id);
+                Err(anyhow::anyhow!(
+                    "keyboard-interactive response channel closed"
+                ))
+            }
             Err(_) => {
-                let _ = self
-                    .pending
-                    .lock()
-                    .map_err(|e| anyhow::anyhow!(e.to_string()))?
-                    .remove(&request_id);
+                let _ = self.remove_pending_request(&request_id);
                 Err(anyhow::anyhow!("keyboard-interactive prompt timeout"))
             }
         }
+    }
+
+    pub async fn request(
+        &self,
+        app: &AppHandle,
+        request: ssh_impl::KeyboardInteractivePromptRequest,
+    ) -> Result<Vec<String>, anyhow::Error> {
+        self.request_with_emit(request, |payload| {
+            app.emit(SSH_KEYBOARD_INTERACTIVE_EVENT, payload)
+                .map_err(|e| anyhow::anyhow!(e.to_string()))
+        })
+        .await
     }
 }
 
@@ -530,9 +562,71 @@ pub enum TerminalCommand {
     Close,
 }
 
-struct TelnetConnection {
+pub(crate) struct TelnetConnection {
     read: tokio::net::tcp::OwnedReadHalf,
     write: tokio::net::tcp::OwnedWriteHalf,
+}
+
+pub(crate) enum PreparedConnectOperation {
+    Telnet {
+        addr: String,
+    },
+    Ssh {
+        host: String,
+        port: u16,
+        username: String,
+        auth_type: ssh_impl::AuthType,
+        local_forwards: Vec<LocalForward>,
+        remote_forwards: Vec<RemoteForward>,
+        proxy_type: ProxyType,
+        socks_proxy_port: Option<u16>,
+        keyboard_interactive_prompter: Option<Arc<dyn ssh_impl::KeyboardInteractivePrompter>>,
+    },
+}
+
+pub(crate) struct PreparedConnect {
+    pub(crate) session_id: Uuid,
+    connection_id: Uuid,
+    runtime: Arc<Runtime>,
+    operation: PreparedConnectOperation,
+}
+
+pub(crate) enum ConnectArtifacts {
+    Telnet(TelnetConnection),
+    Ssh {
+        connection: SshConnection,
+        jump_connection: Option<SshConnection>,
+    },
+}
+
+pub(crate) struct ConnectCompletion {
+    pub(crate) session_id: Uuid,
+    connection_id: Uuid,
+    artifacts: ConnectArtifacts,
+}
+
+pub(crate) enum PreparedTerminalStartOperation {
+    Telnet {
+        telnet: TelnetConnection,
+    },
+    Ssh {
+        ssh_connection: SshConnection,
+        width: u16,
+        height: u16,
+    },
+}
+
+pub(crate) struct PreparedTerminalStart {
+    session_id: Uuid,
+    runtime: Arc<Runtime>,
+    tracker: Arc<Mutex<ChannelTracker>>,
+    operation: PreparedTerminalStartOperation,
+}
+
+pub(crate) struct StartedTerminal {
+    session_id: Uuid,
+    terminal_id: Uuid,
+    terminal: TerminalSession,
 }
 
 // Default connection manager implementation
@@ -693,7 +787,7 @@ impl DefaultConnectionManager {
                 host: host.clone(),
                 port: *port,
                 username: username.clone(),
-                password: password.clone(),
+                password: password.as_ref().map(|_| String::new()),
             },
             ProxyType::Http {
                 host,
@@ -704,7 +798,7 @@ impl DefaultConnectionManager {
                 host: host.clone(),
                 port: *port,
                 username: username.clone(),
-                password: password.clone(),
+                password: password.as_ref().map(|_| String::new()),
             },
             ProxyType::JumpHost {
                 host,
@@ -1006,6 +1100,765 @@ impl DefaultConnectionManager {
     pub fn get_ssh_connection(&self, id: &Uuid) -> Option<SshConnection> {
         self.ssh_connections.get(id).cloned()
     }
+
+    pub(crate) fn prepare_connect(
+        &mut self,
+        app: &tauri::AppHandle,
+        config: &ConnectionConfig,
+    ) -> Result<PreparedConnect, ConnectionError> {
+        if config.protocol == ConnectionProtocol::Rdp {
+            return Err(ConnectionError::InvalidConfig(
+                "RDP does not support in-app sessions".to_string(),
+            ));
+        }
+
+        info!("Starting connection attempt for config: {:?}", config.id);
+        info!("Validating connection configuration...");
+        let mut effective_config = config.clone();
+        self.fill_saved_credentials(&mut effective_config)?;
+        effective_config.validate()?;
+        info!("Connection configuration validated successfully");
+
+        let session_id = Uuid::new_v4();
+        let session_info = SessionInfo {
+            id: session_id,
+            connection_id: config.id,
+            status: ConnectionStatus::Connecting,
+            terminal_id: None,
+            created_at: Utc::now(),
+            last_active: Utc::now(),
+        };
+        self.sessions.insert(session_id, session_info);
+
+        if effective_config.protocol == ConnectionProtocol::Telnet {
+            let addr = format!("{}:{}", effective_config.host, effective_config.port);
+            return Ok(PreparedConnect {
+                session_id,
+                connection_id: config.id,
+                runtime: Arc::clone(&self.runtime),
+                operation: PreparedConnectOperation::Telnet { addr },
+            });
+        }
+
+        let auth_type = auth_method_to_auth_type(effective_config.auth_method.clone());
+        let keyboard_interactive_prompter: Option<Arc<dyn ssh_impl::KeyboardInteractivePrompter>> =
+            Some(Arc::new(TauriKeyboardInteractivePrompter {
+                app: app.clone(),
+                coordinator: self.keyboard_interactive.clone(),
+            }));
+
+        info!(
+            "Prepared SSH connection to {}:{} as {}",
+            effective_config.host, effective_config.port, effective_config.username
+        );
+
+        Ok(PreparedConnect {
+            session_id,
+            connection_id: config.id,
+            runtime: Arc::clone(&self.runtime),
+            operation: PreparedConnectOperation::Ssh {
+                host: effective_config.host,
+                port: effective_config.port,
+                username: effective_config.username,
+                auth_type,
+                local_forwards: effective_config.local_forwards,
+                remote_forwards: effective_config.remote_forwards,
+                proxy_type: effective_config.proxy_type,
+                socks_proxy_port: effective_config.socks_proxy_port,
+                keyboard_interactive_prompter,
+            },
+        })
+    }
+
+    pub(crate) fn execute_prepared_connect(
+        prepared: PreparedConnect,
+    ) -> Result<ConnectCompletion, ConnectionError> {
+        match prepared.operation {
+            PreparedConnectOperation::Telnet { addr } => {
+                let connect_res = prepared.runtime.block_on(async move {
+                    tokio::time::timeout(std::time::Duration::from_secs(10), TcpStream::connect(addr))
+                        .await
+                });
+
+                match connect_res {
+                    Ok(Ok(stream)) => {
+                        let (read, write) = stream.into_split();
+                        Ok(ConnectCompletion {
+                            session_id: prepared.session_id,
+                            connection_id: prepared.connection_id,
+                            artifacts: ConnectArtifacts::Telnet(TelnetConnection { read, write }),
+                        })
+                    }
+                    Ok(Err(e)) => Err(ConnectionError::ConnectionFailed(e.to_string())),
+                    Err(_) => Err(ConnectionError::ConnectionFailed(
+                        "Telnet connection timed out".to_string(),
+                    )),
+                }
+            }
+            PreparedConnectOperation::Ssh {
+                host,
+                port,
+                username,
+                auth_type,
+                local_forwards,
+                remote_forwards,
+                proxy_type,
+                socks_proxy_port,
+                keyboard_interactive_prompter,
+            } => {
+                let (check_host, check_port) = match &proxy_type {
+                    ProxyType::None => (host.clone(), port),
+                    ProxyType::Socks5 { host, port, .. } => (host.clone(), *port),
+                    ProxyType::Http { host, port, .. } => (host.clone(), *port),
+                    ProxyType::JumpHost { host, port, .. } => (host.clone(), *port),
+                };
+
+                info!(
+                    "Checking network connectivity to {}:{} before connection...",
+                    check_host, check_port
+                );
+                let addr = format!("{}:{}", check_host, check_port);
+                let check_res = prepared.runtime.block_on(async {
+                    tokio::time::timeout(
+                        std::time::Duration::from_secs(3),
+                        TcpStream::connect(&addr),
+                    )
+                    .await
+                });
+
+                match check_res {
+                    Ok(Ok(_)) => {
+                        debug!(
+                            "Network connectivity check passed for {}:{}",
+                            check_host, check_port
+                        );
+                    }
+                    Ok(Err(e)) => {
+                        let msg = format!(
+                            "网络不可达: 无法连接到 {}:{} ({})",
+                            check_host, check_port, e
+                        );
+                        error!("{}", msg);
+                        return Err(ConnectionError::ConnectionFailed(msg));
+                    }
+                    Err(_) => {
+                        let msg =
+                            format!("网络不可达: 连接 {}:{} 超时 (3秒)", check_host, check_port);
+                        error!("{}", msg);
+                        return Err(ConnectionError::ConnectionFailed(msg));
+                    }
+                }
+
+                info!("Starting blocking connection task for session {}", prepared.session_id);
+                let start_time = std::time::Instant::now();
+                let connect_res: Result<(SshConnection, Option<SshConnection>), anyhow::Error> =
+                    prepared.runtime.block_on(async {
+                        match proxy_type {
+                            ProxyType::JumpHost {
+                                host: jump_host,
+                                port: jump_port,
+                                username: jump_username,
+                                auth_method: jump_auth_method,
+                            } => {
+                                let jump_auth_type = auth_method_to_auth_type(jump_auth_method);
+                                let jump_connection = ssh_impl::connect_ssh(
+                                    &jump_host,
+                                    jump_port,
+                                    &jump_username,
+                                    jump_auth_type,
+                                    &Vec::new(),
+                                    &Vec::new(),
+                                    None,
+                                    keyboard_interactive_prompter.clone(),
+                                )
+                                .await?;
+
+                                let local_port = ssh_impl::start_ephemeral_direct_tcpip_listener(
+                                    jump_connection.handle.clone(),
+                                    host.clone(),
+                                    port,
+                                )
+                                .await?;
+
+                                let target_connection = ssh_impl::connect_ssh_with_known_host(
+                                    "127.0.0.1",
+                                    local_port,
+                                    &host,
+                                    port,
+                                    &username,
+                                    auth_type,
+                                    &local_forwards,
+                                    &remote_forwards,
+                                    socks_proxy_port,
+                                    keyboard_interactive_prompter.clone(),
+                                )
+                                .await?;
+
+                                Ok((target_connection, Some(jump_connection)))
+                            }
+                            ProxyType::Socks5 {
+                                host: proxy_host,
+                                port: proxy_port,
+                                username: proxy_username,
+                                password: proxy_password,
+                            } => {
+                                let local_port =
+                                    ssh_impl::start_ephemeral_socks5_proxy_dial_listener(
+                                        proxy_host,
+                                        proxy_port,
+                                        proxy_username,
+                                        proxy_password,
+                                        host.clone(),
+                                        port,
+                                    )
+                                    .await?;
+
+                                let target_connection = ssh_impl::connect_ssh_with_known_host(
+                                    "127.0.0.1",
+                                    local_port,
+                                    &host,
+                                    port,
+                                    &username,
+                                    auth_type,
+                                    &local_forwards,
+                                    &remote_forwards,
+                                    socks_proxy_port,
+                                    keyboard_interactive_prompter.clone(),
+                                )
+                                .await?;
+
+                                Ok((target_connection, None))
+                            }
+                            ProxyType::Http {
+                                host: proxy_host,
+                                port: proxy_port,
+                                username: proxy_username,
+                                password: proxy_password,
+                            } => {
+                                let local_port =
+                                    ssh_impl::start_ephemeral_http_proxy_dial_listener(
+                                        proxy_host,
+                                        proxy_port,
+                                        proxy_username,
+                                        proxy_password,
+                                        host.clone(),
+                                        port,
+                                    )
+                                    .await?;
+
+                                let target_connection = ssh_impl::connect_ssh_with_known_host(
+                                    "127.0.0.1",
+                                    local_port,
+                                    &host,
+                                    port,
+                                    &username,
+                                    auth_type,
+                                    &local_forwards,
+                                    &remote_forwards,
+                                    socks_proxy_port,
+                                    keyboard_interactive_prompter.clone(),
+                                )
+                                .await?;
+
+                                Ok((target_connection, None))
+                            }
+                            ProxyType::None => {
+                                let target_connection = ssh_impl::connect_ssh(
+                                    &host,
+                                    port,
+                                    &username,
+                                    auth_type,
+                                    &local_forwards,
+                                    &remote_forwards,
+                                    socks_proxy_port,
+                                    keyboard_interactive_prompter.clone(),
+                                )
+                                .await?;
+                                Ok((target_connection, None))
+                            }
+                        }
+                    });
+
+                info!("Blocking connection task finished in {:?}", start_time.elapsed());
+
+                match connect_res {
+                    Ok((connection, jump_connection)) => Ok(ConnectCompletion {
+                        session_id: prepared.session_id,
+                        connection_id: prepared.connection_id,
+                        artifacts: ConnectArtifacts::Ssh {
+                            connection,
+                            jump_connection,
+                        },
+                    }),
+                    Err(e) => {
+                        error!(
+                            "SSH connection error for session {}: {:?}",
+                            prepared.session_id, e
+                        );
+                        Err(ConnectionError::ConnectionFailed(format!("{:?}", e)))
+                    }
+                }
+            }
+        }
+    }
+
+    pub(crate) fn finish_connect_success(
+        &mut self,
+        completion: ConnectCompletion,
+    ) -> Result<Uuid, ConnectionError> {
+        let mut session = self
+            .sessions
+            .get(&completion.session_id)
+            .cloned()
+            .ok_or(ConnectionError::SessionNotFound(completion.session_id))?;
+        session.connection_id = completion.connection_id;
+        session.status = ConnectionStatus::Connected;
+        self.sessions.insert(completion.session_id, session);
+
+        match completion.artifacts {
+            ConnectArtifacts::Telnet(telnet) => {
+                self.telnet_connections.insert(completion.session_id, telnet);
+            }
+            ConnectArtifacts::Ssh {
+                connection,
+                jump_connection,
+            } => {
+                self.ssh_connections.insert(completion.session_id, connection);
+                if let Some(jump) = jump_connection {
+                    self.jump_ssh_connections.insert(completion.session_id, jump);
+                }
+            }
+        }
+
+        Ok(completion.session_id)
+    }
+
+    pub(crate) fn finish_connect_failure(&mut self, session_id: Uuid) {
+        if let Some(session) = self.sessions.get_mut(&session_id) {
+            session.status = ConnectionStatus::Error;
+        }
+    }
+
+    pub(crate) fn prepare_start_terminal(
+        &mut self,
+        session_id: &Uuid,
+        width: u16,
+        height: u16,
+    ) -> Result<PreparedTerminalStart, ConnectionError> {
+        let session = self
+            .sessions
+            .get(session_id)
+            .ok_or(ConnectionError::SessionNotFound(*session_id))?;
+
+        if session.status != ConnectionStatus::Connected {
+            return Err(ConnectionError::ConnectionFailed(
+                "Session is not connected".to_string(),
+            ));
+        }
+
+        let protocol = self
+            .connections
+            .get(&session.connection_id)
+            .map(|c| c.protocol.clone())
+            .unwrap_or_default();
+
+        let operation = if protocol == ConnectionProtocol::Telnet {
+            let telnet = self
+                .telnet_connections
+                .remove(session_id)
+                .ok_or(ConnectionError::SessionNotFound(*session_id))?;
+            PreparedTerminalStartOperation::Telnet { telnet }
+        } else {
+            let ssh_connection = self
+                .ssh_connections
+                .get(session_id)
+                .ok_or(ConnectionError::SessionNotFound(*session_id))?
+                .clone();
+            PreparedTerminalStartOperation::Ssh {
+                ssh_connection,
+                width,
+                height,
+            }
+        };
+
+        Ok(PreparedTerminalStart {
+            session_id: *session_id,
+            runtime: Arc::clone(&self.runtime),
+            tracker: Arc::clone(&self.tracker),
+            operation,
+        })
+    }
+
+    pub(crate) fn execute_prepared_terminal_start(
+        app: &tauri::AppHandle,
+        prepared: PreparedTerminalStart,
+    ) -> Result<StartedTerminal, ConnectionError> {
+        match prepared.operation {
+            PreparedTerminalStartOperation::Telnet { telnet } => {
+                info!("Starting Telnet terminal for session: {}", prepared.session_id);
+
+                let terminal_id = Uuid::new_v4();
+                let (tx, mut rx) = mpsc::channel::<TerminalCommand>(2048);
+
+                let session_id_clone = prepared.session_id;
+                let app_clone = app.clone();
+                let tracker_clone = Arc::clone(&prepared.tracker);
+
+                tracker_clone
+                    .lock()
+                    .unwrap()
+                    .register_session(session_id_clone);
+
+                let runtime = Arc::clone(&prepared.runtime);
+                let mut read = telnet.read;
+                let mut write = telnet.write;
+
+                runtime.spawn(async move {
+                    let mut buf = vec![0u8; 8192];
+                    #[allow(unused_assignments)]
+                    let mut exit_reason = "unknown";
+                    let mut output_stats_last = tokio::time::Instant::now();
+                    let mut output_stats_bytes: usize = 0;
+                    let mut output_stats_messages: u64 = 0;
+
+                    loop {
+                        tokio::select! {
+                            read_res = read.read(&mut buf) => {
+                                match read_res {
+                                    Ok(0) => {
+                                        exit_reason = "connection_lost";
+                                        break;
+                                    }
+                                    Ok(n) => {
+                                        let mut display = Vec::<u8>::new();
+                                        let mut replies = Vec::<u8>::new();
+                                        telnet_process_incoming(&buf[..n], &mut display, &mut replies);
+
+                                        if !replies.is_empty() {
+                                            if let Ok(mut tracker) = tracker_clone.lock() {
+                                                tracker.log_data(session_id_clone, &replies, "sent");
+                                            }
+                                            let _ = write.write_all(&replies).await;
+                                        }
+
+                                        if !display.is_empty() {
+                                            if let Ok(mut tracker) = tracker_clone.lock() {
+                                                tracker.log_data(session_id_clone, &display, "received");
+                                            }
+                                            let data_str = String::from_utf8_lossy(&display).to_string();
+                                            let event_name = format!("terminal-output-{}", session_id_clone);
+                                            output_stats_bytes += display.len();
+                                            output_stats_messages += 1;
+                                            let emit_start = tokio::time::Instant::now();
+                                            let _ = app_clone.emit(&event_name, serde_json::json!({ "data": data_str }));
+                                            let emit_ms = emit_start.elapsed().as_millis();
+                                            if emit_ms > 10 {
+                                                warn!(
+                                                    "Terminal output emit slow (telnet) session {}: {}ms",
+                                                    session_id_clone, emit_ms
+                                                );
+                                            }
+                                            let elapsed = output_stats_last.elapsed();
+                                            if elapsed.as_millis() >= 1000 {
+                                                info!(
+                                                    "Terminal output cadence (telnet) session {}: msgs={}, bytes={}, elapsed_ms={}",
+                                                    session_id_clone,
+                                                    output_stats_messages,
+                                                    output_stats_bytes,
+                                                    elapsed.as_millis()
+                                                );
+                                                output_stats_last = tokio::time::Instant::now();
+                                                output_stats_bytes = 0;
+                                                output_stats_messages = 0;
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        let error_msg = format!("Telnet read error: {}", e);
+                                        let event_name = format!("terminal-error-{}", session_id_clone);
+                                        let _ = app_clone.emit(&event_name, serde_json::json!({ "error": error_msg }));
+                                        exit_reason = "read_error";
+                                        break;
+                                    }
+                                }
+                            }
+                            cmd = rx.recv() => {
+                                match cmd {
+                                    Some(TerminalCommand::Data(data)) => {
+                                        if let Ok(mut tracker) = tracker_clone.lock() {
+                                            tracker.log_data(session_id_clone, &data, "sent");
+                                        }
+                                        if let Err(e) = write.write_all(&data).await {
+                                            let error_msg = format!("Telnet write error: {}", e);
+                                            let event_name = format!("terminal-error-{}", session_id_clone);
+                                            let _ = app_clone.emit(&event_name, serde_json::json!({ "error": error_msg }));
+                                            exit_reason = "write_error";
+                                            break;
+                                        }
+                                    }
+                                    Some(TerminalCommand::Resize(_, _)) => {}
+                                    Some(TerminalCommand::Close) => {
+                                        let _ = write.shutdown().await;
+                                        exit_reason = "user_closed";
+                                        break;
+                                    }
+                                    None => {
+                                        exit_reason = "command_channel_closed";
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    let event_name = format!("session-closed-{}", session_id_clone);
+                    let _ = app_clone.emit(&event_name, serde_json::json!({ "reason": exit_reason }));
+                });
+
+                Ok(StartedTerminal {
+                    session_id: prepared.session_id,
+                    terminal_id,
+                    terminal: TerminalSession {
+                        id: terminal_id,
+                        session_id: prepared.session_id,
+                        sender: tx,
+                    },
+                })
+            }
+            PreparedTerminalStartOperation::Ssh {
+                ssh_connection,
+                width,
+                height,
+            } => {
+                info!("Starting terminal for session: {}", prepared.session_id);
+
+                let mut channel = prepared
+                    .runtime
+                    .block_on(async {
+                        let handle = ssh_connection.handle.lock().await;
+                        handle.channel_open_session().await
+                    })
+                    .map_err(|e| {
+                        ConnectionError::ConnectionFailed(format!(
+                            "Failed to open terminal channel: {}",
+                            e
+                        ))
+                    })?;
+
+                prepared
+                    .runtime
+                    .block_on(async {
+                        channel
+                            .request_pty(
+                                true,
+                                "xterm-256color",
+                                width as u32,
+                                height as u32,
+                                0,
+                                0,
+                                &[],
+                            )
+                            .await
+                    })
+                    .map_err(|e| {
+                        ConnectionError::ConnectionFailed(format!("Failed to request PTY: {}", e))
+                    })?;
+
+                prepared
+                    .runtime
+                    .block_on(async { channel.request_shell(true).await })
+                    .map_err(|e| {
+                        ConnectionError::ConnectionFailed(format!("Failed to start shell: {}", e))
+                    })?;
+
+                let newline_data = b"\r\n";
+                if let Err(e) = prepared.runtime.block_on(async { channel.data(&newline_data[..]).await })
+                {
+                    error!("Failed to send initial newline: {:?}", e);
+                }
+
+                let terminal_id = Uuid::new_v4();
+                let (tx, mut rx) = mpsc::channel::<TerminalCommand>(2048);
+
+                let session_id_clone = prepared.session_id;
+                let app_clone = app.clone();
+                let tracker_clone = Arc::clone(&prepared.tracker);
+
+                tracker_clone
+                    .lock()
+                    .unwrap()
+                    .register_session(session_id_clone);
+
+                let runtime = Arc::clone(&prepared.runtime);
+                runtime.spawn(async move {
+                    let mut last_activity = tokio::time::Instant::now();
+                    #[allow(unused_assignments)]
+                    let mut exit_reason = "unknown";
+                    let mut output_stats_last = tokio::time::Instant::now();
+                    let mut output_stats_bytes: usize = 0;
+                    let mut output_stats_messages: u64 = 0;
+
+                    let mut output_buffer = Vec::new();
+                    let mut flush_deadline: Option<tokio::time::Instant> = None;
+
+                    loop {
+                        tokio::select! {
+                            _ = async {
+                                if let Some(deadline) = flush_deadline {
+                                    tokio::time::sleep_until(deadline).await
+                                } else {
+                                    std::future::pending().await
+                                }
+                            }, if flush_deadline.is_some() => {
+                                if !output_buffer.is_empty() {
+                                    if let Ok(mut tracker) = tracker_clone.lock() {
+                                        tracker.log_data(session_id_clone, &output_buffer, "received");
+                                    }
+
+                                    let data_str = String::from_utf8_lossy(&output_buffer).to_string();
+                                    let event_name = format!("terminal-output-{}", session_id_clone);
+                                    output_stats_bytes += output_buffer.len();
+                                    output_stats_messages += 1;
+
+                                    let emit_start = tokio::time::Instant::now();
+                                    let _ = app_clone.emit(&event_name, serde_json::json!({ "data": data_str }));
+                                    let emit_ms = emit_start.elapsed().as_millis();
+                                    if emit_ms > 10 {
+                                        warn!("Terminal output emit slow (ssh) session {}: {}ms", session_id_clone, emit_ms);
+                                    }
+
+                                    output_buffer.clear();
+                                }
+                                flush_deadline = None;
+                            }
+
+                            msg = channel.wait() => {
+                                match msg {
+                                    Some(russh::ChannelMsg::Data { ref data }) => {
+                                        last_activity = tokio::time::Instant::now();
+
+                                        output_buffer.extend_from_slice(data);
+
+                                        if output_buffer.len() >= 65536 {
+                                            if let Ok(mut tracker) = tracker_clone.lock() {
+                                                tracker.log_data(session_id_clone, &output_buffer, "received");
+                                            }
+
+                                            let data_str = String::from_utf8_lossy(&output_buffer).to_string();
+                                            let event_name = format!("terminal-output-{}", session_id_clone);
+                                            output_stats_bytes += output_buffer.len();
+                                            output_stats_messages += 1;
+
+                                            let emit_start = tokio::time::Instant::now();
+                                            let _ = app_clone.emit(&event_name, serde_json::json!({ "data": data_str }));
+                                            let emit_ms = emit_start.elapsed().as_millis();
+                                            if emit_ms > 10 {
+                                                warn!("Terminal output emit slow (ssh) session {}: {}ms", session_id_clone, emit_ms);
+                                            }
+
+                                            output_buffer.clear();
+                                            flush_deadline = None;
+                                        } else if flush_deadline.is_none() {
+                                            flush_deadline = Some(tokio::time::Instant::now() + tokio::time::Duration::from_millis(15));
+                                        }
+
+                                        let elapsed = output_stats_last.elapsed();
+                                        if elapsed.as_millis() >= 1000 {
+                                            info!(
+                                                "Terminal output cadence (ssh) session {}: msgs={}, bytes={}, elapsed_ms={}",
+                                                session_id_clone,
+                                                output_stats_messages,
+                                                output_stats_bytes,
+                                                elapsed.as_millis()
+                                            );
+                                            output_stats_last = tokio::time::Instant::now();
+                                            output_stats_bytes = 0;
+                                            output_stats_messages = 0;
+                                        }
+                                    },
+                                    Some(russh::ChannelMsg::ExitStatus { exit_status }) => {
+                                        info!("Terminal exited with status: {}", exit_status);
+                                        exit_reason = "normal";
+                                        break;
+                                    },
+                                    Some(russh::ChannelMsg::Close) => {
+                                        info!("Channel closed by server");
+                                        exit_reason = "server_closed";
+                                        break;
+                                    },
+                                    None => {
+                                        debug!("Channel closed (connection lost)");
+                                        exit_reason = "connection_lost";
+                                        break;
+                                    },
+                                    _ => {}
+                                }
+                            }
+                            cmd = rx.recv() => {
+                                match cmd {
+                                    Some(TerminalCommand::Data(data)) => {
+                                        last_activity = tokio::time::Instant::now();
+                                        let _ = channel.data(&data[..]).await;
+                                    },
+                                    Some(TerminalCommand::Resize(w, h)) => {
+                                        let _ = channel.window_change(w, h, 0, 0).await;
+                                    },
+                                    Some(TerminalCommand::Close) => {
+                                        let _ = channel.close().await;
+                                        exit_reason = "user_closed";
+                                        break;
+                                    },
+                                    None => {
+                                        debug!("Command channel closed");
+                                        exit_reason = "command_channel_closed";
+                                        break;
+                                    }
+                                }
+                            }
+                            _ = tokio::time::sleep(tokio::time::Duration::from_secs(30)) => {
+                                if last_activity.elapsed() > tokio::time::Duration::from_secs(60) {
+                                    let null_byte = b"\0";
+                                    if let Err(e) = channel.data(&null_byte[..]).await {
+                                        debug!("Keepalive failed, connection may be dead: {:?}", e);
+                                        exit_reason = "keepalive_failed";
+                                        break;
+                                    }
+                                    debug!("Sent keepalive to session: {}", session_id_clone);
+                                }
+                            }
+                        }
+                    }
+
+                    let event_name = format!("session-closed-{}", session_id_clone);
+                    info!("Emitting session closed event: {} (reason: {})", event_name, exit_reason);
+                    let _ = app_clone.emit(&event_name, serde_json::json!({ "reason": exit_reason }));
+                });
+
+                Ok(StartedTerminal {
+                    session_id: prepared.session_id,
+                    terminal_id,
+                    terminal: TerminalSession {
+                        id: terminal_id,
+                        session_id: prepared.session_id,
+                        sender: tx,
+                    },
+                })
+            }
+        }
+    }
+
+    pub(crate) fn finish_start_terminal(
+        &mut self,
+        started: StartedTerminal,
+    ) -> Result<bool, ConnectionError> {
+        self.terminals.insert(started.terminal_id, started.terminal);
+
+        if let Some(session) = self.sessions.get_mut(&started.session_id) {
+            session.terminal_id = Some(started.terminal_id);
+        }
+
+        Ok(true)
+    }
 }
 
 impl ConnectionManager for DefaultConnectionManager {
@@ -1038,24 +1891,29 @@ impl ConnectionManager for DefaultConnectionManager {
             ProxyType::Http { host, port, .. } => (host.clone(), *port),
             ProxyType::JumpHost { host, port, .. } => (host.clone(), *port),
         };
-        
-        info!("Checking network connectivity to {}:{} before connection...", check_host, check_port);
+
+        info!(
+            "Checking network connectivity to {}:{} before connection...",
+            check_host, check_port
+        );
         let addr = format!("{}:{}", check_host, check_port);
         // Use a short timeout (3 seconds) for the connectivity check
         let check_res = self.runtime.block_on(async {
-            tokio::time::timeout(
-                std::time::Duration::from_secs(3),
-                TcpStream::connect(&addr),
-            )
-            .await
+            tokio::time::timeout(std::time::Duration::from_secs(3), TcpStream::connect(&addr)).await
         });
 
         match check_res {
             Ok(Ok(_)) => {
-                debug!("Network connectivity check passed for {}:{}", check_host, check_port);
+                debug!(
+                    "Network connectivity check passed for {}:{}",
+                    check_host, check_port
+                );
             }
             Ok(Err(e)) => {
-                let msg = format!("网络不可达: 无法连接到 {}:{} ({})", check_host, check_port, e);
+                let msg = format!(
+                    "网络不可达: 无法连接到 {}:{} ({})",
+                    check_host, check_port, e
+                );
                 error!("{}", msg);
                 return Err(ConnectionError::ConnectionFailed(msg));
             }
@@ -1155,7 +2013,10 @@ impl ConnectionManager for DefaultConnectionManager {
 
         // Use the persistent runtime to establish SSH connection
         // This ensures the connection task remains alive as long as the manager exists
-        info!("Starting blocking connection task for session {}", session_id);
+        info!(
+            "Starting blocking connection task for session {}",
+            session_id
+        );
         let start_time = std::time::Instant::now();
         let connect_res: Result<(SshConnection, Option<SshConnection>), anyhow::Error> =
             self.runtime.block_on(async {
@@ -1282,8 +2143,11 @@ impl ConnectionManager for DefaultConnectionManager {
                     }
                 }
             });
-        
-        info!("Blocking connection task finished in {:?}", start_time.elapsed());
+
+        info!(
+            "Blocking connection task finished in {:?}",
+            start_time.elapsed()
+        );
 
         match connect_res {
             Ok(ssh_connection) => {
@@ -1308,13 +2172,23 @@ impl ConnectionManager for DefaultConnectionManager {
     }
 
     fn disconnect(&mut self, session_id: &Uuid) -> Result<(), ConnectionError> {
-        let session = self
-            .sessions
-            .get_mut(session_id)
-            .ok_or(ConnectionError::SessionNotFound(*session_id))?;
+        if !self.sessions.contains_key(session_id) {
+            return Err(ConnectionError::SessionNotFound(*session_id));
+        }
 
-        session.status = ConnectionStatus::Disconnecting;
+        if let Some(session) = self.sessions.get_mut(session_id) {
+            session.status = ConnectionStatus::Disconnecting;
+        }
         info!("Disconnecting session: {}", session_id);
+
+        if let Err(err) = self.close_terminal(session_id) {
+            if !matches!(err, ConnectionError::SessionNotFound(_)) {
+                warn!(
+                    "Failed to close terminal while disconnecting session {}: {}",
+                    session_id, err
+                );
+            }
+        }
 
         // Remove SSH connection if it exists
         if self.ssh_connections.remove(session_id).is_some() {
@@ -1328,7 +2202,9 @@ impl ConnectionManager for DefaultConnectionManager {
         }
 
         // Update session status
-        session.status = ConnectionStatus::Disconnected;
+        if let Some(session) = self.sessions.get_mut(session_id) {
+            session.status = ConnectionStatus::Disconnected;
+        }
         info!("Session disconnected: {}", session_id);
 
         Ok(())
@@ -1407,6 +2283,12 @@ impl ConnectionManager for DefaultConnectionManager {
         if self.connections.remove(connection_id).is_some() {
             let _ = self.credential_manager.delete_password(connection_id);
             let _ = self.credential_manager.delete_passphrase(connection_id);
+            let _ = self
+                .credential_manager
+                .delete_password_kind(connection_id, "jump_password");
+            let _ = self
+                .credential_manager
+                .delete_password_kind(connection_id, "jump_passphrase");
             self.persist_connection_configs_to_db()?;
             info!(
                 "Successfully deleted connection configuration with id: {:?}",
@@ -1431,7 +2313,9 @@ impl ConnectionManager for DefaultConnectionManager {
         app: &tauri::AppHandle,
         config: &ConnectionConfig,
     ) -> Result<(), ConnectionError> {
-        if config.protocol == ConnectionProtocol::Rdp || config.protocol == ConnectionProtocol::Telnet {
+        if config.protocol == ConnectionProtocol::Rdp
+            || config.protocol == ConnectionProtocol::Telnet
+        {
             let effective_config = config.clone();
             effective_config.validate()?;
 
@@ -1810,6 +2694,48 @@ impl ConnectionManager for DefaultConnectionManager {
 
         info!("Starting terminal for session: {}", session_id);
 
+        let mut channel = self
+            .runtime
+            .block_on(async {
+                let handle = ssh_connection.handle.lock().await;
+                handle.channel_open_session().await
+            })
+            .map_err(|e| {
+                ConnectionError::ConnectionFailed(format!("Failed to open terminal channel: {}", e))
+            })?;
+
+        self.runtime
+            .block_on(async {
+                channel
+                    .request_pty(
+                        true,
+                        "xterm-256color",
+                        width as u32,
+                        height as u32,
+                        0,
+                        0,
+                        &[],
+                    )
+                    .await
+            })
+            .map_err(|e| {
+                ConnectionError::ConnectionFailed(format!("Failed to request PTY: {}", e))
+            })?;
+
+        self.runtime
+            .block_on(async { channel.request_shell(true).await })
+            .map_err(|e| {
+                ConnectionError::ConnectionFailed(format!("Failed to start shell: {}", e))
+            })?;
+
+        let newline_data = b"\r\n";
+        if let Err(e) = self
+            .runtime
+            .block_on(async { channel.data(&newline_data[..]).await })
+        {
+            error!("Failed to send initial newline: {:?}", e);
+        }
+
         // Create terminal ID
         let terminal_id = Uuid::new_v4();
 
@@ -1818,7 +2744,6 @@ impl ConnectionManager for DefaultConnectionManager {
 
         let session_id_clone = *session_id;
         let app_clone = app.clone();
-        let ssh_handle_clone = Arc::clone(&ssh_connection.handle);
 
         // Tracker clone
         let tracker_clone = Arc::clone(&self.tracker);
@@ -1832,72 +2757,56 @@ impl ConnectionManager for DefaultConnectionManager {
         // Spawn a task to handle the terminal channel on the persistent runtime
         let runtime = Arc::clone(&self.runtime);
         runtime.spawn(async move {
-            // Debug: Log connection state before opening channel
-            debug!("Attempting to open terminal channel for session: {}", session_id_clone);
+            // Event loop for channel and commands
+            let mut last_activity = tokio::time::Instant::now();
+            #[allow(unused_assignments)]
+            let mut exit_reason = "unknown";
+            let mut output_stats_last = tokio::time::Instant::now();
+            let mut output_stats_bytes: usize = 0;
+            let mut output_stats_messages: u64 = 0;
 
-            // Open channel
-            // We need to lock the mutex to access the handle, but we should drop the lock
-            // as soon as we have the channel to allow other operations on the connection.
-            let channel_result = {
-                let handle = ssh_handle_clone.lock().await;
-                handle.channel_open_session().await
-            };
+            let mut output_buffer = Vec::new();
+            let mut flush_deadline: Option<tokio::time::Instant> = None;
 
-            match channel_result {
-                Ok(mut channel) => {
-                    debug!("Channel opened for session: {}", session_id_clone);
+            loop {
+                tokio::select! {
+                    _ = async {
+                        if let Some(deadline) = flush_deadline {
+                            tokio::time::sleep_until(deadline).await
+                        } else {
+                            std::future::pending().await
+                        }
+                    }, if flush_deadline.is_some() => {
+                        if !output_buffer.is_empty() {
+                            if let Ok(mut tracker) = tracker_clone.lock() {
+                                tracker.log_data(session_id_clone, &output_buffer, "received");
+                            }
 
-                    // Request PTY with proper terminal modes
-                    // russh uses a different approach for terminal modes - use empty array for now
-                    if let Err(e) = channel.request_pty(true, "xterm-256color", width as u32, height as u32, 0, 0, &[]).await {
-                        error!("Failed to request PTY: {:?}", e);
-                        // Send error to frontend
-                        let error_msg = format!("Failed to request PTY: {}", e);
-                        let event_name = format!("terminal-error-{}", session_id_clone);
-                        let _ = app_clone.emit(&event_name, serde_json::json!({ "error": error_msg }));
-                        return;
+                            let data_str = String::from_utf8_lossy(&output_buffer).to_string();
+                            let event_name = format!("terminal-output-{}", session_id_clone);
+                            output_stats_bytes += output_buffer.len();
+                            output_stats_messages += 1;
+
+                            let emit_start = tokio::time::Instant::now();
+                            let _ = app_clone.emit(&event_name, serde_json::json!({ "data": data_str }));
+                            let emit_ms = emit_start.elapsed().as_millis();
+                            if emit_ms > 10 {
+                                warn!("Terminal output emit slow (ssh) session {}: {}ms", session_id_clone, emit_ms);
+                            }
+
+                            output_buffer.clear();
+                        }
+                        flush_deadline = None;
                     }
 
-                    // Start shell
-                    if let Err(e) = channel.request_shell(true).await {
-                        error!("Failed to start shell: {:?}", e);
-                        // Send error to frontend
-                        let error_msg = format!("Failed to start shell: {}", e);
-                        let event_name = format!("terminal-error-{}", session_id_clone);
-                        let _ = app_clone.emit(&event_name, serde_json::json!({ "error": error_msg }));
-                        return;
-                    }
+                    msg = channel.wait() => {
+                        match msg {
+                            Some(russh::ChannelMsg::Data { ref data }) => {
+                                last_activity = tokio::time::Instant::now();
 
-                    info!("Terminal started for session: {}", session_id_clone);
+                                output_buffer.extend_from_slice(data);
 
-                    // Send initial newline to trigger shell prompt
-                    let newline_data = b"\r\n";
-                    if let Err(e) = channel.data(&newline_data[..]).await {
-                        error!("Failed to send initial newline: {:?}", e);
-                    }
-
-                    // Event loop for channel and commands
-                    let mut last_activity = tokio::time::Instant::now();
-                    #[allow(unused_assignments)]
-                    let mut exit_reason = "unknown";
-                    let mut output_stats_last = tokio::time::Instant::now();
-                    let mut output_stats_bytes: usize = 0;
-                    let mut output_stats_messages: u64 = 0;
-
-                    let mut output_buffer = Vec::new();
-                    let mut flush_deadline: Option<tokio::time::Instant> = None;
-
-                    loop {
-                        tokio::select! {
-                            // Flush buffer if deadline reached
-                            _ = async {
-                                if let Some(deadline) = flush_deadline {
-                                    tokio::time::sleep_until(deadline).await
-                                } else {
-                                    std::future::pending().await
-                                }
-                            }, if flush_deadline.is_some() => {
-                                if !output_buffer.is_empty() {
+                                if output_buffer.len() >= 65536 {
                                     if let Ok(mut tracker) = tracker_clone.lock() {
                                         tracker.log_data(session_id_clone, &output_buffer, "received");
                                     }
@@ -1906,140 +2815,90 @@ impl ConnectionManager for DefaultConnectionManager {
                                     let event_name = format!("terminal-output-{}", session_id_clone);
                                     output_stats_bytes += output_buffer.len();
                                     output_stats_messages += 1;
-                                    
+
                                     let emit_start = tokio::time::Instant::now();
                                     let _ = app_clone.emit(&event_name, serde_json::json!({ "data": data_str }));
                                     let emit_ms = emit_start.elapsed().as_millis();
                                     if emit_ms > 10 {
                                         warn!("Terminal output emit slow (ssh) session {}: {}ms", session_id_clone, emit_ms);
                                     }
-                                    
+
                                     output_buffer.clear();
+                                    flush_deadline = None;
+                                } else if flush_deadline.is_none() {
+                                    flush_deadline = Some(tokio::time::Instant::now() + tokio::time::Duration::from_millis(15));
                                 }
-                                flush_deadline = None;
-                            }
 
-                            // Handle incoming SSH data
-                            msg = channel.wait() => {
-                                match msg {
-                                    Some(russh::ChannelMsg::Data { ref data }) => {
-                                        // Update last activity time
-                                        last_activity = tokio::time::Instant::now();
-
-                                        output_buffer.extend_from_slice(data);
-
-                                        // Increase buffer threshold to 64KB to reduce IPC frequency and CPU usage
-                                        if output_buffer.len() >= 65536 {
-                                            // Flush immediately
-                                            if let Ok(mut tracker) = tracker_clone.lock() {
-                                                tracker.log_data(session_id_clone, &output_buffer, "received");
-                                            }
-
-                                            let data_str = String::from_utf8_lossy(&output_buffer).to_string();
-                                            let event_name = format!("terminal-output-{}", session_id_clone);
-                                            output_stats_bytes += output_buffer.len();
-                                            output_stats_messages += 1;
-                                            
-                                            let emit_start = tokio::time::Instant::now();
-                                            let _ = app_clone.emit(&event_name, serde_json::json!({ "data": data_str }));
-                                            let emit_ms = emit_start.elapsed().as_millis();
-                                            if emit_ms > 10 {
-                                                warn!("Terminal output emit slow (ssh) session {}: {}ms", session_id_clone, emit_ms);
-                                            }
-                                            
-                                            output_buffer.clear();
-                                            flush_deadline = None;
-                                        } else if flush_deadline.is_none() {
-                                            flush_deadline = Some(tokio::time::Instant::now() + tokio::time::Duration::from_millis(15));
-                                        }
-
-                                        let elapsed = output_stats_last.elapsed();
-                                        if elapsed.as_millis() >= 1000 {
-                                            info!(
-                                                "Terminal output cadence (ssh) session {}: msgs={}, bytes={}, elapsed_ms={}",
-                                                session_id_clone,
-                                                output_stats_messages,
-                                                output_stats_bytes,
-                                                elapsed.as_millis()
-                                            );
-                                            output_stats_last = tokio::time::Instant::now();
-                                            output_stats_bytes = 0;
-                                            output_stats_messages = 0;
-                                        }
-                                    },
-                                    Some(russh::ChannelMsg::ExitStatus { exit_status }) => {
-                                        info!("Terminal exited with status: {}", exit_status);
-                                        exit_reason = "normal";
-                                        break;
-                                    },
-                                    Some(russh::ChannelMsg::Close) => {
-                                        info!("Channel closed by server");
-                                        exit_reason = "server_closed";
-                                        break;
-                                    },
-                                    None => {
-                                        debug!("Channel closed (connection lost)");
-                                        exit_reason = "connection_lost";
-                                        break;
-                                    },
-                                    _ => {}
+                                let elapsed = output_stats_last.elapsed();
+                                if elapsed.as_millis() >= 1000 {
+                                    info!(
+                                        "Terminal output cadence (ssh) session {}: msgs={}, bytes={}, elapsed_ms={}",
+                                        session_id_clone,
+                                        output_stats_messages,
+                                        output_stats_bytes,
+                                        elapsed.as_millis()
+                                    );
+                                    output_stats_last = tokio::time::Instant::now();
+                                    output_stats_bytes = 0;
+                                    output_stats_messages = 0;
                                 }
-                            }
-                            // Handle outgoing commands
-                            cmd = rx.recv() => {
-                                match cmd {
-                                    Some(TerminalCommand::Data(data)) => {
-                                        // Update last activity time
-                                        last_activity = tokio::time::Instant::now();
-
-                                        // russh::Channel::data takes AsyncRead
-                                        let _ = channel.data(&data[..]).await;
-                                    },
-                                    Some(TerminalCommand::Resize(w, h)) => {
-                                        let _ = channel.window_change(w, h, 0, 0).await;
-                                    },
-                                    Some(TerminalCommand::Close) => {
-                                        let _ = channel.close().await;
-                                        exit_reason = "user_closed";
-                                        break;
-                                    },
-                                    None => {
-                                        debug!("Command channel closed");
-                                        exit_reason = "command_channel_closed";
-                                        break;
-                                    }
-                                }
-                            }
-                            // Heartbeat check (every 30 seconds)
-                            _ = tokio::time::sleep(tokio::time::Duration::from_secs(30)) => {
-                                // Check if we've had activity in the last 60 seconds
-                                if last_activity.elapsed() > tokio::time::Duration::from_secs(60) {
-                                    // Send a keepalive by sending a null byte
-                                    let null_byte = b"\0";
-                                    if let Err(e) = channel.data(&null_byte[..]).await {
-                                        debug!("Keepalive failed, connection may be dead: {:?}", e);
-                                        exit_reason = "keepalive_failed";
-                                        break;
-                                    }
-                                    debug!("Sent keepalive to session: {}", session_id_clone);
-                                }
+                            },
+                            Some(russh::ChannelMsg::ExitStatus { exit_status }) => {
+                                info!("Terminal exited with status: {}", exit_status);
+                                exit_reason = "normal";
+                                break;
+                            },
+                            Some(russh::ChannelMsg::Close) => {
+                                info!("Channel closed by server");
+                                exit_reason = "server_closed";
+                                break;
+                            },
+                            None => {
+                                debug!("Channel closed (connection lost)");
+                                exit_reason = "connection_lost";
+                                break;
+                            },
+                            _ => {}
+                        }
+                    }
+                    cmd = rx.recv() => {
+                        match cmd {
+                            Some(TerminalCommand::Data(data)) => {
+                                last_activity = tokio::time::Instant::now();
+                                let _ = channel.data(&data[..]).await;
+                            },
+                            Some(TerminalCommand::Resize(w, h)) => {
+                                let _ = channel.window_change(w, h, 0, 0).await;
+                            },
+                            Some(TerminalCommand::Close) => {
+                                let _ = channel.close().await;
+                                exit_reason = "user_closed";
+                                break;
+                            },
+                            None => {
+                                debug!("Command channel closed");
+                                exit_reason = "command_channel_closed";
+                                break;
                             }
                         }
                     }
-
-                    // Emit session closed event
-                    let event_name = format!("session-closed-{}", session_id_clone);
-                    info!("Emitting session closed event: {} (reason: {})", event_name, exit_reason);
-                    let _ = app_clone.emit(&event_name, serde_json::json!({ "reason": exit_reason }));
-                },
-                Err(e) => {
-                    error!("Failed to open terminal channel: {:?}", e);
-                    // Send error to frontend
-                    let error_msg = format!("Failed to open terminal channel: {}", e);
-                    let event_name = format!("terminal-error-{}", session_id_clone);
-                    let _ = app_clone.emit(&event_name, serde_json::json!({ "error": error_msg }));
+                    _ = tokio::time::sleep(tokio::time::Duration::from_secs(30)) => {
+                        if last_activity.elapsed() > tokio::time::Duration::from_secs(60) {
+                            let null_byte = b"\0";
+                            if let Err(e) = channel.data(&null_byte[..]).await {
+                                debug!("Keepalive failed, connection may be dead: {:?}", e);
+                                exit_reason = "keepalive_failed";
+                                break;
+                            }
+                            debug!("Sent keepalive to session: {}", session_id_clone);
+                        }
+                    }
                 }
             }
+
+            let event_name = format!("session-closed-{}", session_id_clone);
+            info!("Emitting session closed event: {} (reason: {})", event_name, exit_reason);
+            let _ = app_clone.emit(&event_name, serde_json::json!({ "reason": exit_reason }));
         });
 
         // Store terminal session
@@ -2091,7 +2950,7 @@ impl ConnectionManager for DefaultConnectionManager {
                     );
                 }
                 Ok(())
-            },
+            }
             Err(e) => {
                 error!("Failed to send terminal data: {}", e);
                 Err(ConnectionError::ConnectionFailed(format!(
@@ -2124,7 +2983,6 @@ impl ConnectionManager for DefaultConnectionManager {
     }
 
     fn close_terminal(&mut self, session_id: &Uuid) -> Result<(), ConnectionError> {
-        println!("[ConnectionManager] close_terminal called for session: {}", session_id);
         // Find and remove terminal for this session
         let terminal_id = self
             .terminals
@@ -2166,11 +3024,7 @@ impl ConnectionManager for DefaultConnectionManager {
         }
     }
 
-    fn exec_command(
-        &self,
-        session_id: &Uuid,
-        command: &str,
-    ) -> Result<String, ConnectionError> {
+    fn exec_command(&self, session_id: &Uuid, command: &str) -> Result<String, ConnectionError> {
         let ssh_connection = self
             .ssh_connections
             .get(session_id)
@@ -2300,6 +3154,7 @@ fn auth_method_to_auth_type(auth_method: AuthMethod) -> ssh_impl::AuthType {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use russh::client::Prompt;
 
     #[test]
     fn test_connection_config_validation() {
@@ -2380,5 +3235,34 @@ mod tests {
         let id = configs[0].id;
         assert!(manager.delete_connection_config(&id).is_ok());
         assert!(manager.get_all_connection_configs().is_empty());
+    }
+
+    #[test]
+    fn test_keyboard_interactive_request_emit_failure_cleans_pending() {
+        let coordinator = KeyboardInteractiveCoordinator::new();
+        let request = ssh_impl::KeyboardInteractivePromptRequest {
+            host: "127.0.0.1".to_string(),
+            port: 22,
+            username: "user".to_string(),
+            name: "auth".to_string(),
+            instructions: "instructions".to_string(),
+            prompts: vec![Prompt {
+                prompt: "Password:".to_string(),
+                echo: false,
+            }],
+        };
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("failed to create runtime");
+        let result = runtime.block_on(async {
+            coordinator
+                .request_with_emit(request, |_payload| Err(anyhow::anyhow!("emit failed")))
+                .await
+        });
+
+        assert!(result.is_err());
+        assert_eq!(coordinator.pending_len_for_test(), 0);
     }
 }

@@ -3,6 +3,55 @@ import type { ITheme, Terminal } from 'xterm';
 import type { FitAddon } from 'xterm-addon-fit';
 import type { SearchAddon } from 'xterm-addon-search';
 
+export type ConnectionAuthMethod = {
+  Password?: {
+    password: string;
+    save_password: boolean;
+  };
+  KeyboardInteractive?: Record<string, never>;
+  PrivateKey?: {
+    key_path: string;
+    passphrase?: string;
+    save_passphrase: boolean;
+  };
+  Agent?: {
+    agent_path?: string;
+  };
+  Certificate?: {
+    certificate_path: string;
+    private_key_path: string;
+    passphrase?: string;
+    save_passphrase: boolean;
+  };
+};
+
+export type ConnectionProxyType =
+  | 'None'
+  | {
+      Socks5: {
+        host: string;
+        port: number;
+        username: string | null;
+        password: string | null;
+      };
+    }
+  | {
+      Http: {
+        host: string;
+        port: number;
+        username: string | null;
+        password: string | null;
+      };
+    }
+  | {
+      JumpHost: {
+        host: string;
+        port: number;
+        username: string;
+        auth_method: ConnectionAuthMethod;
+      };
+    };
+
 // 定义连接类型 (与后端结构匹配)
 export interface Connection {
   id: string;
@@ -11,27 +60,7 @@ export interface Connection {
   host: string;
   port: number;
   username: string;
-  auth_method: {
-    Password?: {
-      password: string;
-      save_password: boolean;
-    };
-    KeyboardInteractive?: Record<string, never>;
-    PrivateKey?: {
-      key_path: string;
-      passphrase?: string;
-      save_passphrase: boolean;
-    };
-    Agent?: {
-      agent_path?: string;
-    };
-    Certificate?: {
-      certificate_path: string;
-      private_key_path: string;
-      passphrase?: string;
-      save_passphrase: boolean;
-    };
-  };
+  auth_method: ConnectionAuthMethod;
   description: string | null;
   tags: string[];
   created_at: string;
@@ -39,7 +68,7 @@ export interface Connection {
   group_id: string | null;
   local_forwards?: { local_host: string; local_port: number; remote_host: string; remote_port: number }[];
   remote_forwards?: { remote_host: string; remote_port: number; local_host: string; local_port: number }[];
-  proxy_type?: any;
+  proxy_type?: ConnectionProxyType | Record<string, unknown>;
   socks_proxy_port?: number | null;
   auto_reconnect?: boolean;
 }
@@ -100,6 +129,65 @@ export const terminalSplitConfigs = writable<Map<string, SplitConfig>>(new Map()
 // Map root sessionId -> Set of all child sessionIds (including root itself)
 export const terminalSessionMap = writable<Map<string, Set<string>>>(new Map());
 export const closeSplitRequest = writable<string | null>(null);
+
+let errorMessageTimer: ReturnType<typeof setTimeout> | null = null;
+let successMessageTimer: ReturnType<typeof setTimeout> | null = null;
+let errorMessageVersion = 0;
+let successMessageVersion = 0;
+
+export function clearErrorMessage(): void {
+  errorMessageVersion += 1;
+  if (errorMessageTimer) {
+    clearTimeout(errorMessageTimer);
+    errorMessageTimer = null;
+  }
+  errorMessage.set(null);
+}
+
+export function clearSuccessMessage(): void {
+  successMessageVersion += 1;
+  if (successMessageTimer) {
+    clearTimeout(successMessageTimer);
+    successMessageTimer = null;
+  }
+  successMessage.set(null);
+}
+
+export function showErrorMessage(message: string, timeoutMs = 5000): void {
+  errorMessageVersion += 1;
+  const currentVersion = errorMessageVersion;
+  if (errorMessageTimer) {
+    clearTimeout(errorMessageTimer);
+    errorMessageTimer = null;
+  }
+  errorMessage.set(message);
+  if (timeoutMs > 0) {
+    errorMessageTimer = setTimeout(() => {
+      if (errorMessageVersion === currentVersion) {
+        errorMessage.set(null);
+        errorMessageTimer = null;
+      }
+    }, timeoutMs);
+  }
+}
+
+export function showSuccessMessage(message: string, timeoutMs = 3000): void {
+  successMessageVersion += 1;
+  const currentVersion = successMessageVersion;
+  if (successMessageTimer) {
+    clearTimeout(successMessageTimer);
+    successMessageTimer = null;
+  }
+  successMessage.set(message);
+  if (timeoutMs > 0) {
+    successMessageTimer = setTimeout(() => {
+      if (successMessageVersion === currentVersion) {
+        successMessage.set(null);
+        successMessageTimer = null;
+      }
+    }, timeoutMs);
+  }
+}
 
 // History Store
 const loadHistory = (): HistoryItem[] => {
@@ -211,6 +299,7 @@ export interface AppSettings {
   security: {
     autoLockMinutes: number; // 0 = disabled
     lockOnBlur: boolean;
+    disableDevToolsShortcuts: boolean;
   };
 }
 
@@ -269,6 +358,7 @@ const defaultSettings: AppSettings = {
   security: {
     autoLockMinutes: 0,
     lockOnBlur: false,
+    disableDevToolsShortcuts: true,
   }
 };
 
@@ -676,7 +766,7 @@ const ansiColorPresets: Record<AppSettings['appearance']['ansiColorPreset'], {
     blue: '#0000ee',
     magenta: '#cd00cd',
     cyan: '#00cdcd',
-    white: '#e5e5e5',
+    white: '#f8fafc',
     brightBlack: '#7f7f7f',
     brightRed: '#ff0000',
     brightGreen: '#00ff00',
@@ -876,7 +966,7 @@ const ansiColorPresets: Record<AppSettings['appearance']['ansiColorPreset'], {
     blue: '#0000ee',
     magenta: '#cd00cd',
     cyan: '#00cdcd',
-    white: '#e5e5e5',
+    white: '#f8fafc',
     brightBlack: '#7f7f7f',
     brightRed: '#ff0000',
     brightGreen: '#00ff00',
@@ -935,9 +1025,7 @@ function generateSmartColors(appSettings: AppSettings) {
   const themeColors = themeMap[terminalTheme] || themeMap['auto'];
   const hue = themeColors.hue;
 
-  // Determine if theme is light based on background brightness
-  // Use a temporary color calculation to estimate brightness
-  const tempBg = hslToHex(hue, 10, 95); // Light bg estimation
+  // Determine if theme is light based on theme preset.
   const isLightTheme = terminalTheme.includes('light');
 
   // Generate colors based on theme

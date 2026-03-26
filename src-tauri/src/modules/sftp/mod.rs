@@ -1,17 +1,19 @@
-use crate::modules::connection::DefaultConnectionManager;
+use crate::modules::connection::{ConnectionManager, ConnectionStatus, DefaultConnectionManager};
+use crate::modules::db::DatabaseManager;
+use crate::{ensure_app_unlocked_runtime, AppLockRuntimeState};
 use russh::Channel;
 use russh_sftp::client::SftpSession;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
-use std::sync::Arc;
+use std::io::SeekFrom;
+use std::sync::{Arc, Mutex as StdMutex};
 use tauri::ipc::{InvokeBody, Request, Response};
 use tauri::State;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, AsyncSeekExt};
-use tokio::sync::Mutex;
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
+use tokio::sync::{Mutex, Notify};
 use uuid::Uuid;
-use std::io::SeekFrom;
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct FileEntry {
@@ -25,8 +27,56 @@ pub struct FileEntry {
 }
 
 pub struct SftpManager {
-    sessions: Arc<Mutex<HashMap<Uuid, Arc<Mutex<SftpSession>>>>>,
+    sessions: Arc<Mutex<HashMap<Uuid, CachedSftpSession>>>,
+    generations: SessionGenerationMap,
     connection_manager: Arc<std::sync::RwLock<DefaultConnectionManager>>,
+}
+
+enum CachedSftpSession {
+    Ready {
+        session: Arc<Mutex<SftpSession>>,
+        generation: u64,
+    },
+    Pending {
+        notify: Arc<Notify>,
+        generation: u64,
+    },
+}
+
+type SessionGenerationMap = Arc<StdMutex<HashMap<Uuid, u64>>>;
+
+#[derive(Clone)]
+struct SftpSessionLease {
+    session_id: Uuid,
+    generation: u64,
+    session: Arc<Mutex<SftpSession>>,
+    generations: SessionGenerationMap,
+}
+
+fn is_generation_valid(
+    generations: &StdMutex<HashMap<Uuid, u64>>,
+    session_id: Uuid,
+    generation: u64,
+) -> Result<bool, String> {
+    let guard = generations.lock().map_err(|e| e.to_string())?;
+    let current = guard.get(&session_id).copied().unwrap_or(0);
+    Ok(current == generation)
+}
+
+impl SftpSessionLease {
+    fn ensure_valid(&self) -> Result<(), String> {
+        if is_generation_valid(&self.generations, self.session_id, self.generation)? {
+            return Ok(());
+        }
+        Err(format!(
+            "SFTP session {} has been invalidated",
+            self.session_id
+        ))
+    }
+
+    async fn lock(&self) -> tokio::sync::MutexGuard<'_, SftpSession> {
+        self.session.lock().await
+    }
 }
 
 struct ScpChannel {
@@ -152,57 +202,217 @@ impl SftpManager {
     pub fn new(connection_manager: Arc<std::sync::RwLock<DefaultConnectionManager>>) -> Self {
         Self {
             sessions: Arc::new(Mutex::new(HashMap::new())),
+            generations: Arc::new(StdMutex::new(HashMap::new())),
             connection_manager,
         }
     }
-    // ...
 
-    async fn get_session(&self, session_id: Uuid) -> Result<Arc<Mutex<SftpSession>>, String> {
-        let mut sessions = self.sessions.lock().await;
-        if let Some(session) = sessions.get(&session_id) {
-            return Ok(session.clone());
-        }
-        
-        println!("[SFTP] get_session: Creating new SFTP session for {}", session_id);
+    fn current_generation(&self, session_id: Uuid) -> Result<u64, String> {
+        let guard = self.generations.lock().map_err(|e| e.to_string())?;
+        Ok(guard.get(&session_id).copied().unwrap_or(0))
+    }
 
-        // Create new
-        let ssh_conn = {
-            let cm = self.connection_manager.read().map_err(|e| e.to_string())?;
-            cm.get_ssh_connection(&session_id)
-                .ok_or_else(|| {
-                    println!("[SFTP] get_session failed: SSH session not found for {}", session_id);
-                    "SSH session not found".to_string()
-                })?
+    fn bump_generation(&self, session_id: Uuid) -> Result<u64, String> {
+        let mut guard = self.generations.lock().map_err(|e| e.to_string())?;
+        let next = guard
+            .get(&session_id)
+            .copied()
+            .unwrap_or(0)
+            .saturating_add(1);
+        guard.insert(session_id, next);
+        Ok(next)
+    }
+
+    pub async fn remove_session(&self, session_id: Uuid) {
+        let removed = {
+            let mut sessions = self.sessions.lock().await;
+            sessions.remove(&session_id)
         };
 
-        let handle = ssh_conn.handle.lock().await;
-        let channel = handle
-            .channel_open_session()
-            .await
-            .map_err(|e| {
-                 println!("[SFTP] get_session failed: channel open error: {}", e);
-                 e.to_string()
-            })?;
-        channel
-            .request_subsystem(true, "sftp")
-            .await
-            .map_err(|e| {
-                 println!("[SFTP] get_session failed: subsystem request error: {}", e);
-                 e.to_string()
-            })?;
+        let _ = self.bump_generation(session_id);
 
-        let sftp = SftpSession::new(channel.into_stream())
-            .await
-            .map_err(|e| {
-                 println!("[SFTP] get_session failed: sftp init error: {}", e);
-                 e.to_string()
-            })?;
+        if let Some(CachedSftpSession::Pending { notify, .. }) = removed {
+            notify.notify_waiters();
+        }
+    }
 
-        let sftp_arc = Arc::new(Mutex::new(sftp));
-        sessions.insert(session_id, sftp_arc.clone());
+    fn is_session_still_connected(&self, session_id: Uuid) -> Result<bool, String> {
+        let cm = self.connection_manager.read().map_err(|e| e.to_string())?;
+        let Some(session) = cm.get_session(&session_id) else {
+            return Ok(false);
+        };
+        if session.status != ConnectionStatus::Connected {
+            return Ok(false);
+        }
+        Ok(cm.get_ssh_connection(&session_id).is_some())
+    }
 
-        println!("[SFTP] get_session: Successfully created SFTP session for {}", session_id);
-        Ok(sftp_arc)
+    async fn get_session(&self, session_id: Uuid) -> Result<SftpSessionLease, String> {
+        loop {
+            enum AcquireAction {
+                Wait(Arc<Notify>),
+                Create {
+                    notify: Arc<Notify>,
+                    generation: u64,
+                },
+            }
+
+            let action = {
+                let mut sessions = self.sessions.lock().await;
+                match sessions.get(&session_id) {
+                    Some(CachedSftpSession::Ready {
+                        session,
+                        generation,
+                    }) => {
+                        return Ok(SftpSessionLease {
+                            session_id,
+                            generation: *generation,
+                            session: session.clone(),
+                            generations: self.generations.clone(),
+                        })
+                    }
+                    Some(CachedSftpSession::Pending { notify, .. }) => {
+                        AcquireAction::Wait(notify.clone())
+                    }
+                    None => {
+                        let generation = self.current_generation(session_id)?;
+                        let notify = Arc::new(Notify::new());
+                        sessions.insert(
+                            session_id,
+                            CachedSftpSession::Pending {
+                                notify: notify.clone(),
+                                generation,
+                            },
+                        );
+                        AcquireAction::Create { notify, generation }
+                    }
+                }
+            };
+
+            let (pending_notify, pending_generation) = match action {
+                AcquireAction::Wait(notify) => {
+                    notify.notified().await;
+                    continue;
+                }
+                AcquireAction::Create { notify, generation } => (notify, generation),
+            };
+
+            println!(
+                "[SFTP] get_session: Creating new SFTP session for {}",
+                session_id
+            );
+
+            let create_result: Result<Arc<Mutex<SftpSession>>, String> = async {
+                let ssh_conn = {
+                    let cm = self.connection_manager.read().map_err(|e| e.to_string())?;
+                    let session = cm
+                        .get_session(&session_id)
+                        .ok_or_else(|| "Session not found".to_string())?;
+                    if session.status != ConnectionStatus::Connected {
+                        return Err(format!(
+                            "Session {} is not connected (status: {:?})",
+                            session_id, session.status
+                        ));
+                    }
+                    cm.get_ssh_connection(&session_id).ok_or_else(|| {
+                        println!(
+                            "[SFTP] get_session failed: SSH session not found for {}",
+                            session_id
+                        );
+                        "SSH session not found".to_string()
+                    })?
+                };
+
+                let handle = ssh_conn.handle.lock().await;
+                let channel = handle.channel_open_session().await.map_err(|e| {
+                    println!("[SFTP] get_session failed: channel open error: {}", e);
+                    e.to_string()
+                })?;
+                channel.request_subsystem(true, "sftp").await.map_err(|e| {
+                    println!("[SFTP] get_session failed: subsystem request error: {}", e);
+                    e.to_string()
+                })?;
+
+                let sftp = SftpSession::new(channel.into_stream()).await.map_err(|e| {
+                    println!("[SFTP] get_session failed: sftp init error: {}", e);
+                    e.to_string()
+                })?;
+
+                Ok(Arc::new(Mutex::new(sftp)))
+            }
+            .await;
+
+            let result = match create_result {
+                Ok(sftp_arc) => {
+                    if !self.is_session_still_connected(session_id)? {
+                        Err(format!(
+                            "Session {} is no longer connected during SFTP initialization",
+                            session_id
+                        ))
+                    } else {
+                        let mut sessions = self.sessions.lock().await;
+                        match sessions.get(&session_id) {
+                            Some(CachedSftpSession::Pending {
+                                notify: existing_notify,
+                                generation: existing_generation,
+                            }) if Arc::ptr_eq(existing_notify, &pending_notify)
+                                && *existing_generation == pending_generation =>
+                            {
+                                sessions.insert(
+                                    session_id,
+                                    CachedSftpSession::Ready {
+                                        session: sftp_arc.clone(),
+                                        generation: pending_generation,
+                                    },
+                                );
+                                println!(
+                                    "[SFTP] get_session: Successfully created SFTP session for {}",
+                                    session_id
+                                );
+                                Ok(SftpSessionLease {
+                                    session_id,
+                                    generation: pending_generation,
+                                    session: sftp_arc,
+                                    generations: self.generations.clone(),
+                                })
+                            }
+                            Some(CachedSftpSession::Ready {
+                                session: existing_session,
+                                generation,
+                            }) => Ok(SftpSessionLease {
+                                session_id,
+                                generation: *generation,
+                                session: existing_session.clone(),
+                                generations: self.generations.clone(),
+                            }),
+                            _ => Err(format!(
+                                "Session {} SFTP initialization was canceled",
+                                session_id
+                            )),
+                        }
+                    }
+                }
+                Err(err) => Err(err),
+            };
+
+            if result.is_err() {
+                let mut sessions = self.sessions.lock().await;
+                if matches!(
+                    sessions.get(&session_id),
+                    Some(CachedSftpSession::Pending {
+                        notify: existing_notify,
+                        generation: existing_generation
+                    })
+                        if Arc::ptr_eq(existing_notify, &pending_notify)
+                            && *existing_generation == pending_generation
+                ) {
+                    sessions.remove(&session_id);
+                }
+            }
+
+            pending_notify.notify_waiters();
+            return result;
+        }
     }
 
     async fn exec_ssh_command(&self, session_id: Uuid, command: String) -> Result<String, String> {
@@ -342,8 +552,10 @@ impl SftpManager {
         session_id: Uuid,
         path: String,
     ) -> Result<Vec<FileEntry>, String> {
-        let session_arc = self.get_session(session_id).await?;
-        let session = session_arc.lock().await;
+        let session_lease = self.get_session(session_id).await?;
+        session_lease.ensure_valid()?;
+        let session = session_lease.lock().await;
+        session_lease.ensure_valid()?;
 
         let path = if path.is_empty() { "." } else { &path };
 
@@ -406,8 +618,10 @@ impl SftpManager {
     }
 
     pub async fn read_file(&self, session_id: Uuid, path: String) -> Result<Vec<u8>, String> {
-        let session_arc = self.get_session(session_id).await?;
-        let session = session_arc.lock().await;
+        let session_lease = self.get_session(session_id).await?;
+        session_lease.ensure_valid()?;
+        let session = session_lease.lock().await;
+        session_lease.ensure_valid()?;
 
         let mut file = session.open(path).await.map_err(|e| e.to_string())?;
         let mut contents = Vec::new();
@@ -425,8 +639,10 @@ impl SftpManager {
         content: Vec<u8>,
         append: bool,
     ) -> Result<(), String> {
-        let session_arc = self.get_session(session_id).await?;
-        let session = session_arc.lock().await;
+        let session_lease = self.get_session(session_id).await?;
+        session_lease.ensure_valid()?;
+        let session = session_lease.lock().await;
+        session_lease.ensure_valid()?;
 
         let mut file = if append {
             use russh_sftp::protocol::OpenFlags;
@@ -447,22 +663,28 @@ impl SftpManager {
     }
 
     pub async fn create_directory(&self, session_id: Uuid, path: String) -> Result<(), String> {
-        let session_arc = self.get_session(session_id).await?;
-        let session = session_arc.lock().await;
+        let session_lease = self.get_session(session_id).await?;
+        session_lease.ensure_valid()?;
+        let session = session_lease.lock().await;
+        session_lease.ensure_valid()?;
         session.create_dir(path).await.map_err(|e| e.to_string())?;
         Ok(())
     }
 
     pub async fn remove_file(&self, session_id: Uuid, path: String) -> Result<(), String> {
-        let session_arc = self.get_session(session_id).await?;
-        let session = session_arc.lock().await;
+        let session_lease = self.get_session(session_id).await?;
+        session_lease.ensure_valid()?;
+        let session = session_lease.lock().await;
+        session_lease.ensure_valid()?;
         session.remove_file(path).await.map_err(|e| e.to_string())?;
         Ok(())
     }
 
     pub async fn remove_directory(&self, session_id: Uuid, path: String) -> Result<(), String> {
-        let session_arc = self.get_session(session_id).await?;
-        let session = session_arc.lock().await;
+        let session_lease = self.get_session(session_id).await?;
+        session_lease.ensure_valid()?;
+        let session = session_lease.lock().await;
+        session_lease.ensure_valid()?;
         session.remove_dir(path).await.map_err(|e| e.to_string())?;
         Ok(())
     }
@@ -473,8 +695,10 @@ impl SftpManager {
         old_path: String,
         new_path: String,
     ) -> Result<(), String> {
-        let session_arc = self.get_session(session_id).await?;
-        let session = session_arc.lock().await;
+        let session_lease = self.get_session(session_id).await?;
+        session_lease.ensure_valid()?;
+        let session = session_lease.lock().await;
+        session_lease.ensure_valid()?;
         session
             .rename(old_path, new_path)
             .await
@@ -561,16 +785,22 @@ impl SftpManager {
 
 #[tauri::command]
 pub async fn sftp_ls(
+    db: State<'_, Arc<StdMutex<DatabaseManager>>>,
+    app_lock_state: State<'_, Arc<StdMutex<AppLockRuntimeState>>>,
     state: State<'_, SftpManager>,
     session_id: Uuid,
     path: String,
 ) -> Result<Vec<FileEntry>, String> {
-    println!("[SFTP] sftp_ls called for session: {}, path: {}", session_id, path);
+    ensure_app_unlocked_runtime(db.inner(), app_lock_state.inner())?;
+    println!(
+        "[SFTP] sftp_ls called for session: {}, path: {}",
+        session_id, path
+    );
     match state.list_directory(session_id, path).await {
         Ok(entries) => {
             println!("[SFTP] sftp_ls success, entries: {}", entries.len());
             Ok(entries)
-        },
+        }
         Err(e) => {
             println!("[SFTP] sftp_ls failed: {}", e);
             Err(e)
@@ -595,8 +825,9 @@ fn header_uuid(request: &Request) -> Result<Uuid, String> {
 fn body_bytes(request: &Request<'_>) -> Result<Vec<u8>, String> {
     match request.body() {
         InvokeBody::Raw(bytes) => Ok(bytes.clone()),
-        InvokeBody::Json(value) => serde_json::from_value::<Vec<u8>>(value.clone())
-            .map_err(|e| e.to_string()),
+        InvokeBody::Json(value) => {
+            serde_json::from_value::<Vec<u8>>(value.clone()).map_err(|e| e.to_string())
+        }
     }
 }
 
@@ -607,9 +838,12 @@ fn header_u64(request: &Request, key: &str) -> Result<u64, String> {
 
 #[tauri::command]
 pub async fn sftp_read(
+    db: State<'_, Arc<StdMutex<DatabaseManager>>>,
+    app_lock_state: State<'_, Arc<StdMutex<AppLockRuntimeState>>>,
     state: State<'_, SftpManager>,
     request: Request<'_>,
 ) -> Result<Response, String> {
+    ensure_app_unlocked_runtime(db.inner(), app_lock_state.inner())?;
     let session_id = header_uuid(&request)?;
     let path = header_string(&request, "path")?;
     let data = state.read_file(session_id, path).await?;
@@ -618,17 +852,22 @@ pub async fn sftp_read(
 
 #[tauri::command]
 pub async fn sftp_read_chunk(
+    db: State<'_, Arc<StdMutex<DatabaseManager>>>,
+    app_lock_state: State<'_, Arc<StdMutex<AppLockRuntimeState>>>,
     state: State<'_, SftpManager>,
     request: Request<'_>,
 ) -> Result<Response, String> {
+    ensure_app_unlocked_runtime(db.inner(), app_lock_state.inner())?;
     use russh_sftp::protocol::OpenFlags;
     let session_id = header_uuid(&request)?;
     let path = header_string(&request, "path")?;
     let offset = header_u64(&request, "offset")?;
     let length = header_u64(&request, "length")?;
 
-    let session_arc = state.get_session(session_id).await?;
-    let session = session_arc.lock().await;
+    let session_lease = state.get_session(session_id).await?;
+    session_lease.ensure_valid()?;
+    let session = session_lease.lock().await;
+    session_lease.ensure_valid()?;
     let mut file = session
         .open_with_flags(&path, OpenFlags::READ)
         .await
@@ -647,9 +886,12 @@ pub async fn sftp_read_chunk(
 
 #[tauri::command]
 pub async fn sftp_write(
+    db: State<'_, Arc<StdMutex<DatabaseManager>>>,
+    app_lock_state: State<'_, Arc<StdMutex<AppLockRuntimeState>>>,
     state: State<'_, SftpManager>,
     request: Request<'_>,
 ) -> Result<(), String> {
+    ensure_app_unlocked_runtime(db.inner(), app_lock_state.inner())?;
     let session_id = header_uuid(&request)?;
     let path = header_string(&request, "path")?;
     let append = request
@@ -664,46 +906,61 @@ pub async fn sftp_write(
 
 #[tauri::command]
 pub async fn sftp_mkdir(
+    db: State<'_, Arc<StdMutex<DatabaseManager>>>,
+    app_lock_state: State<'_, Arc<StdMutex<AppLockRuntimeState>>>,
     state: State<'_, SftpManager>,
     session_id: Uuid,
     path: String,
 ) -> Result<(), String> {
+    ensure_app_unlocked_runtime(db.inner(), app_lock_state.inner())?;
     state.create_directory(session_id, path).await
 }
 
 #[tauri::command]
 pub async fn sftp_rm(
+    db: State<'_, Arc<StdMutex<DatabaseManager>>>,
+    app_lock_state: State<'_, Arc<StdMutex<AppLockRuntimeState>>>,
     state: State<'_, SftpManager>,
     session_id: Uuid,
     path: String,
 ) -> Result<(), String> {
+    ensure_app_unlocked_runtime(db.inner(), app_lock_state.inner())?;
     state.remove_file(session_id, path).await
 }
 
 #[tauri::command]
 pub async fn sftp_rmdir(
+    db: State<'_, Arc<StdMutex<DatabaseManager>>>,
+    app_lock_state: State<'_, Arc<StdMutex<AppLockRuntimeState>>>,
     state: State<'_, SftpManager>,
     session_id: Uuid,
     path: String,
 ) -> Result<(), String> {
+    ensure_app_unlocked_runtime(db.inner(), app_lock_state.inner())?;
     state.remove_directory(session_id, path).await
 }
 
 #[tauri::command]
 pub async fn sftp_rename(
+    db: State<'_, Arc<StdMutex<DatabaseManager>>>,
+    app_lock_state: State<'_, Arc<StdMutex<AppLockRuntimeState>>>,
     state: State<'_, SftpManager>,
     session_id: Uuid,
     old_path: String,
     new_path: String,
 ) -> Result<(), String> {
+    ensure_app_unlocked_runtime(db.inner(), app_lock_state.inner())?;
     state.rename(session_id, old_path, new_path).await
 }
 
 #[tauri::command]
 pub async fn scp_upload(
+    db: State<'_, Arc<StdMutex<DatabaseManager>>>,
+    app_lock_state: State<'_, Arc<StdMutex<AppLockRuntimeState>>>,
     state: State<'_, SftpManager>,
     request: Request<'_>,
 ) -> Result<(), String> {
+    ensure_app_unlocked_runtime(db.inner(), app_lock_state.inner())?;
     let session_id = header_uuid(&request)?;
     let remote_path = header_string(&request, "remote-path")?;
     let content = body_bytes(&request)?;
@@ -712,11 +969,54 @@ pub async fn scp_upload(
 
 #[tauri::command]
 pub async fn scp_download(
+    db: State<'_, Arc<StdMutex<DatabaseManager>>>,
+    app_lock_state: State<'_, Arc<StdMutex<AppLockRuntimeState>>>,
     state: State<'_, SftpManager>,
     request: Request<'_>,
 ) -> Result<Response, String> {
+    ensure_app_unlocked_runtime(db.inner(), app_lock_state.inner())?;
     let session_id = header_uuid(&request)?;
     let remote_path = header_string(&request, "remote-path")?;
     let data = state.scp_download(session_id, remote_path).await?;
     Ok(Response::new(data))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_generation_validation_detects_invalidation() {
+        let generations = StdMutex::new(HashMap::new());
+        let session_id = Uuid::new_v4();
+
+        assert!(is_generation_valid(&generations, session_id, 0).unwrap());
+
+        {
+            let mut guard = generations.lock().unwrap();
+            guard.insert(session_id, 1);
+        }
+
+        assert!(!is_generation_valid(&generations, session_id, 0).unwrap());
+        assert!(is_generation_valid(&generations, session_id, 1).unwrap());
+    }
+
+    #[test]
+    fn test_remove_session_bumps_generation() {
+        let connection_manager = Arc::new(std::sync::RwLock::new(DefaultConnectionManager::new()));
+        let sftp_manager = SftpManager::new(connection_manager);
+        let session_id = Uuid::new_v4();
+
+        assert_eq!(sftp_manager.current_generation(session_id).unwrap(), 0);
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("failed to create runtime");
+        runtime.block_on(async {
+            sftp_manager.remove_session(session_id).await;
+        });
+
+        assert_eq!(sftp_manager.current_generation(session_id).unwrap(), 1);
+    }
 }

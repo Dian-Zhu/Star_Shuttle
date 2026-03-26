@@ -6,7 +6,26 @@ import { SearchAddon } from 'xterm-addon-search';
 import { WebglAddon } from 'xterm-addon-webgl';
 import { WebLinksAddon } from 'xterm-addon-web-links';
 import { get } from 'svelte/store';
-import { activeTerminals, connections, selectedTerminalIndex, type Connection, type ActiveTerminal, type AppSettings, errorMessage, successMessage, settings, connectionHistory, broadcastInputEnabled, broadcastSessionIds, getStoredTerminalUiState, getXtermTheme, getBaseXtermTheme, terminalSessionMap, connectingConnections } from './store';
+import {
+  activeTerminals,
+  connections,
+  selectedTerminalIndex,
+  type Connection,
+  type ActiveTerminal,
+  type AppSettings,
+  settings,
+  connectionHistory,
+  broadcastInputEnabled,
+  broadcastSessionIds,
+  getStoredTerminalUiState,
+  getXtermTheme,
+  getBaseXtermTheme,
+  terminalSessionMap,
+  connectingConnections,
+  clearErrorMessage,
+  showErrorMessage,
+  showSuccessMessage,
+} from './store';
 import { terminalPool } from './terminalPool';
 import { TerminalInstance } from './terminalInstance';
 import 'xterm/css/xterm.css';
@@ -51,8 +70,7 @@ function handleTerminalError(error: unknown, context: string, userMessage?: stri
 
   // User-facing error message
   if (userMessage) {
-    errorMessage.set(userMessage);
-    setTimeout(() => errorMessage.set(null), 5000);
+    showErrorMessage(userMessage, 5000);
   }
 }
 
@@ -79,6 +97,8 @@ const sessionStatusListeners = new Map<string, () => void>();
 const reconnectAttempts = new Map<string, number>();
 const reconnectTimers = new Map<string, number>();
 const reconnectKeyListeners = new Map<string, { dispose: () => void }>();
+const reconnectInFlight = new Map<string, Promise<boolean>>();
+const reconnectSuppressed = new Set<string>();
 const MAX_AUTO_RECONNECT_RETRIES = 5;
 const BASE_AUTO_RECONNECT_DELAY_MS = 1500;
 const MAX_AUTO_RECONNECT_DELAY_MS = 30000;
@@ -228,6 +248,47 @@ type InputSendState = {
 const outputWriteStates = new Map<string, OutputWriteState>();
 const inputSendStates = new Map<string, InputSendState>();
 
+function cleanupBufferedTerminalState(sessionId: string) {
+  markTerminalStopped(sessionId);
+
+  const outputState = outputWriteStates.get(sessionId);
+  if (outputState) {
+    outputState.disposed = true;
+    if (outputState.scheduled !== null) {
+      cancelScheduled(outputState.scheduled);
+    }
+    outputWriteStates.delete(sessionId);
+  }
+
+  const inputState = inputSendStates.get(sessionId);
+  if (inputState) {
+    if (inputState.timer !== null) {
+      cancelScheduled(inputState.timer);
+    }
+    inputSendStates.delete(sessionId);
+  }
+}
+
+function cleanupTerminalListeners(sessionId: string) {
+  const unlisten = outputListeners.get(sessionId);
+  if (unlisten) {
+    unlisten();
+    outputListeners.delete(sessionId);
+  }
+
+  const inputListener = inputListeners.get(sessionId);
+  if (inputListener) {
+    inputListener.dispose();
+    inputListeners.delete(sessionId);
+  }
+
+  const statusUnlisten = sessionStatusListeners.get(sessionId);
+  if (statusUnlisten) {
+    statusUnlisten();
+    sessionStatusListeners.delete(sessionId);
+  }
+}
+
 function nowMs(): number {
   if (typeof performance !== 'undefined' && typeof performance.now === 'function') return performance.now();
   return Date.now();
@@ -271,9 +332,23 @@ async function invokeWithTimeout<T>(cmd: string, args: any, timeoutMs: number = 
   });
 }
 
+async function connectWithInteractivePrompts(config: any, connectionName: string): Promise<string> {
+  let connectConfig = await ensureConnectConfig(config, connectionName);
+  try {
+    return await connectWithKnownHostsPrompt(connectConfig);
+  } catch (error) {
+    if (!shouldPromptForPasswordOnConnectError(error, connectConfig)) {
+      throw error;
+    }
+    const prompted = await promptPassword(connectionName);
+    connectConfig = applyPromptedPassword(connectConfig, prompted);
+    return connectWithKnownHostsPrompt(connectConfig);
+  }
+}
+
 export async function connectAndOpen(connection: Connection, connectConfig?: any) {
   try {
-    errorMessage.set(null);
+    clearErrorMessage();
     connectingConnections.update(s => {
       s.add(connection.id);
       return s;
@@ -293,8 +368,7 @@ export async function connectAndOpen(connection: Connection, connectConfig?: any
         return newHistory.slice(0, 50);
       });
 
-      successMessage.set(`已启动 RDP: ${connection.name}`);
-      setTimeout(() => successMessage.set(null), 3000);
+      showSuccessMessage(`已启动 RDP: ${connection.name}`, 3000);
       connectingConnections.update(s => {
         s.delete(connection.id);
         return s;
@@ -338,8 +412,7 @@ export async function connectAndOpen(connection: Connection, connectConfig?: any
         return newHistory.slice(0, 50);
       });
 
-      successMessage.set(`连接成功: ${connection.name}`);
-      setTimeout(() => successMessage.set(null), 3000);
+      showSuccessMessage(`连接成功: ${connection.name}`, 3000);
       connectingConnections.update(s => {
         s.delete(connection.id);
         return s;
@@ -347,20 +420,7 @@ export async function connectAndOpen(connection: Connection, connectConfig?: any
       return;
     }
 
-    let config = await ensureConnectConfig(baseConfig, connection.name);
-
-    let sessionId: string;
-    try {
-      sessionId = await connectWithKnownHostsPrompt(config);
-    } catch (error) {
-      if (shouldPromptForPasswordOnConnectError(error, config)) {
-        const prompted = await promptPassword(connection.name);
-        config = applyPromptedPassword(config, prompted);
-        sessionId = await connectWithKnownHostsPrompt(config);
-      } else {
-        throw error;
-      }
-    }
+    const sessionId = await connectWithInteractivePrompts(baseConfig, connection.name);
     
     // Check if session already exists (shouldn't happen with unique sessionIds usually, but good to check)
     const terminals = get(activeTerminals);
@@ -404,8 +464,7 @@ export async function connectAndOpen(connection: Connection, connectConfig?: any
       return newHistory.slice(0, 50);
     });
 
-    successMessage.set(`连接成功: ${connection.name}`);
-    setTimeout(() => successMessage.set(null), 3000);
+    showSuccessMessage(`连接成功: ${connection.name}`, 3000);
     connectingConnections.update(s => {
       s.delete(connection.id);
       return s;
@@ -418,8 +477,7 @@ export async function connectAndOpen(connection: Connection, connectConfig?: any
     });
     log.error('Connection', `Failed to connect to ${connection.name}`, error);
     const msg = normalizeErrorMessage(error);
-    errorMessage.set(`连接失败：${msg}`);
-    setTimeout(() => errorMessage.set(null), 5000);
+    showErrorMessage(`连接失败：${msg}`, 5000);
   }
 }
 
@@ -483,7 +541,7 @@ function applyPromptedPassword(config: any, password: string): any {
 }
 
 export async function createTerminalSession(connection: Connection): Promise<string> {
-  return connectWithKnownHostsPrompt(connection);
+  return connectWithInteractivePrompts(connection, connection.name);
 }
 
 type HostKeyPromptType = 'unknown' | 'mismatch' | 'unavailable';
@@ -715,8 +773,7 @@ export async function initTerminal(container: HTMLElement, sessionId: string, co
     if (!result) {
       log.error('TermInit', 'Failed to start terminal session', null);
       void term.write('\r\n\x1b[31mFailed to start terminal session\x1b[0m\r\n');
-      errorMessage.set('启动终端会话失败');
-      setTimeout(() => errorMessage.set(null), 5000);
+      showErrorMessage('启动终端会话失败', 5000);
       return null;
     }
 
@@ -859,8 +916,7 @@ export async function initDetachedTerminal(container: HTMLElement, sessionId: st
 
     if (!result) {
       void term.write('\r\n\x1b[31mFailed to start terminal session\x1b[0m\r\n');
-      errorMessage.set('启动终端会话失败');
-      setTimeout(() => errorMessage.set(null), 5000);
+      showErrorMessage('启动终端会话失败', 5000);
       return null;
     }
 
@@ -1084,19 +1140,16 @@ export async function monitorSessionStatus(sessionId: string) {
         // Handle different status changes
         switch (event.payload.status) {
           case 'disconnected':
-            errorMessage.set(`会话已断开: ${sessionId}`);
-            setTimeout(() => errorMessage.set(null), 5000);
+            showErrorMessage(`会话已断开: ${sessionId}`, 5000);
             // Optionally attempt to reconnect
             break;
           case 'error':
             if (event.payload.error) {
-              errorMessage.set(`会话错误: ${event.payload.error}`);
-              setTimeout(() => errorMessage.set(null), 5000);
+              showErrorMessage(`会话错误: ${event.payload.error}`, 5000);
             }
             break;
           case 'connected':
-            successMessage.set('会话已连接');
-            setTimeout(() => successMessage.set(null), 3000);
+            showSuccessMessage('会话已连接', 3000);
             break;
         }
       }
@@ -1114,6 +1167,7 @@ export async function monitorSessionStatus(sessionId: string) {
 
 export async function closeSplitSession(sessionId: string) {
   try {
+    suppressReconnect(sessionId);
     await closeDetachedTerminal(sessionId);
     await invoke('disconnect', { sessionId });
     
@@ -1137,11 +1191,12 @@ export async function closeSplitSession(sessionId: string) {
 }
 
 export async function closeTerminal(sessionId: string) {
+  suppressReconnect(sessionId);
   const terminals = get(activeTerminals);
   const index = terminals.findIndex(t => t.sessionId === sessionId);
 
   if (index !== -1) {
-    markTerminalStopped(sessionId);
+    cleanupBufferedTerminalState(sessionId);
     const terminal = terminals[index];
 
     // xterm 6.0: Graceful terminal disposal with cleanup tracking
@@ -1166,25 +1221,6 @@ export async function closeTerminal(sessionId: string) {
       log.warn('TermCleanup', 'Failed to dispose terminal instance', e);
     }
 
-    // xterm 6.0: Clean up output state
-    const outputState = outputWriteStates.get(sessionId);
-    if (outputState) {
-      outputState.disposed = true;
-      if (outputState.scheduled !== null) {
-        cancelScheduled(outputState.scheduled);
-      }
-      outputWriteStates.delete(sessionId);
-    }
-
-    // xterm 6.0: Clean up input state
-    const inputState = inputSendStates.get(sessionId);
-    if (inputState) {
-      if (inputState.timer !== null) {
-        cancelScheduled(inputState.timer);
-      }
-      inputSendStates.delete(sessionId);
-    }
-
     // Remove from store
     activeTerminals.update(items => items.filter(t => t.sessionId !== sessionId));
     broadcastSessionIds.update(ids => ids.filter(id => id !== sessionId));
@@ -1201,24 +1237,7 @@ export async function closeTerminal(sessionId: string) {
       selectedTerminalIndex.set(Math.max(0, terminals.length - 2));
     }
 
-    // Clean up listeners
-    const unlisten = outputListeners.get(sessionId);
-    if (unlisten) {
-      unlisten();
-      outputListeners.delete(sessionId);
-    }
-
-    const inputListener = inputListeners.get(sessionId);
-    if (inputListener) {
-      inputListener.dispose();
-      inputListeners.delete(sessionId);
-    }
-
-    const statusUnlisten = sessionStatusListeners.get(sessionId);
-    if (statusUnlisten) {
-      statusUnlisten();
-      sessionStatusListeners.delete(sessionId);
-    }
+    cleanupTerminalListeners(sessionId);
 
     // Notify backend to close terminal
     try {
@@ -1231,42 +1250,8 @@ export async function closeTerminal(sessionId: string) {
 }
 
 export async function closeDetachedTerminal(sessionId: string) {
-  markTerminalStopped(sessionId);
-
-  const outputState = outputWriteStates.get(sessionId);
-  if (outputState) {
-    outputState.disposed = true;
-    if (outputState.scheduled !== null) {
-      cancelScheduled(outputState.scheduled);
-    }
-    outputWriteStates.delete(sessionId);
-  }
-
-  const inputState = inputSendStates.get(sessionId);
-  if (inputState) {
-    if (inputState.timer !== null) {
-      cancelScheduled(inputState.timer);
-    }
-    inputSendStates.delete(sessionId);
-  }
-
-  const unlisten = outputListeners.get(sessionId);
-  if (unlisten) {
-    unlisten();
-    outputListeners.delete(sessionId);
-  }
-
-  const inputListener = inputListeners.get(sessionId);
-  if (inputListener) {
-    inputListener.dispose();
-    inputListeners.delete(sessionId);
-  }
-
-  const statusUnlisten = sessionStatusListeners.get(sessionId);
-  if (statusUnlisten) {
-    statusUnlisten();
-    sessionStatusListeners.delete(sessionId);
-  }
+  cleanupBufferedTerminalState(sessionId);
+  cleanupTerminalListeners(sessionId);
 
   try {
     await invoke('close_terminal', { sessionId });
@@ -1281,9 +1266,7 @@ export async function disconnectTerminal(sessionId: string) {
   const name = terminal?.connection?.name ?? sessionId;
   const hadTerminal = Boolean(terminal);
 
-  clearReconnectTimer(sessionId);
-  clearReconnectKeyListener(sessionId);
-  reconnectAttempts.delete(sessionId);
+  suppressReconnect(sessionId);
 
   await closeTerminal(sessionId);
 
@@ -1298,11 +1281,9 @@ export async function disconnectTerminal(sessionId: string) {
 
   try {
     await invoke('disconnect', { sessionId });
-    successMessage.set(`已断开连接: ${name}`);
-    setTimeout(() => successMessage.set(null), 3000);
+    showSuccessMessage(`已断开连接: ${name}`, 3000);
   } catch (error) {
-    errorMessage.set(`断开连接失败: ${name}`);
-    setTimeout(() => errorMessage.set(null), 5000);
+    showErrorMessage(`断开连接失败: ${name}`, 5000);
     log.warn('Disconnect', 'Failed to disconnect', error, { sessionId, name });
   }
 }
@@ -1319,9 +1300,10 @@ async function closeBackendTerminalsBestEffort(sessionId: string) {
   for (let i = 0; i < 10; i++) {
     try {
       await invoke('close_terminal', { sessionId });
+      return;
     } catch (error) {
       log.warn('TermCleanup', 'Failed to close terminal in best-effort mode', error, { sessionId, attempt: i });
-      return;
+      await new Promise(resolve => setTimeout(resolve, 50));
     }
   }
 }
@@ -1565,8 +1547,7 @@ export async function setupTerminalListeners(sessionId: string, term: Terminal) 
       if (event.payload && event.payload.error) {
         log.error('TermError', 'Terminal error reported from backend', event.payload.error, { sessionId });
         void term.write(`\r\n\x1b[31mError: ${event.payload.error}\x1b[0m\r\n`);
-        errorMessage.set(`终端错误: ${event.payload.error}`);
-        setTimeout(() => errorMessage.set(null), 5000);
+        showErrorMessage(`终端错误: ${event.payload.error}`, 5000);
       }
     });
 
@@ -1627,15 +1608,29 @@ function clearReconnectKeyListener(sessionId: string) {
   }
 }
 
+function clearReconnectState(sessionId: string) {
+  clearReconnectTimer(sessionId);
+  clearReconnectKeyListener(sessionId);
+  reconnectAttempts.delete(sessionId);
+}
+
+function suppressReconnect(sessionId: string) {
+  reconnectSuppressed.add(sessionId);
+  clearReconnectState(sessionId);
+}
+
 function scheduleAutoReconnect(sessionId: string, term: Terminal, immediate: boolean) {
+  if (reconnectSuppressed.has(sessionId)) {
+    return;
+  }
+
   clearReconnectTimer(sessionId);
   clearReconnectKeyListener(sessionId);
 
   const attempts = reconnectAttempts.get(sessionId) ?? 0;
   if (attempts >= MAX_AUTO_RECONNECT_RETRIES) {
     void term.write(`\r\n\x1b[31mAuto reconnect stopped after ${MAX_AUTO_RECONNECT_RETRIES} attempts.\x1b[0m\r\n`);
-    errorMessage.set('自动重连已停止：超过最大重试次数');
-    setTimeout(() => errorMessage.set(null), 5000);
+    showErrorMessage('自动重连已停止：超过最大重试次数', 5000);
     return;
   }
 
@@ -1657,6 +1652,9 @@ function scheduleAutoReconnect(sessionId: string, term: Terminal, immediate: boo
   const timer = window.setTimeout(async () => {
     reconnectTimers.delete(sessionId);
     clearReconnectKeyListener(sessionId);
+    if (reconnectSuppressed.has(sessionId)) {
+      return;
+    }
 
     reconnectAttempts.set(sessionId, attempts + 1);
     try {
@@ -1673,7 +1671,7 @@ function scheduleAutoReconnect(sessionId: string, term: Terminal, immediate: boo
     }
 
     const appSettings = get(settings);
-    if (appSettings.connection?.autoReconnect) {
+    if (appSettings.connection?.autoReconnect && !reconnectSuppressed.has(sessionId)) {
       scheduleAutoReconnect(sessionId, term, false);
     }
   }, delay);
@@ -1681,26 +1679,18 @@ function scheduleAutoReconnect(sessionId: string, term: Terminal, immediate: boo
   reconnectTimers.set(sessionId, timer);
 }
 
-export async function reconnectTerminal(oldSessionId: string) {
-  const terminals = get(activeTerminals);
-  const index = terminals.findIndex(t => t.sessionId === oldSessionId);
-  if (index === -1) return false;
+async function reconnectTerminalInternal(oldSessionId: string): Promise<boolean> {
+  if (reconnectSuppressed.has(oldSessionId)) {
+    return false;
+  }
 
-  const terminalEntry = terminals[index];
+  const terminals = get(activeTerminals);
+  const terminalEntry = terminals.find(t => t.sessionId === oldSessionId);
+  if (!terminalEntry) return false;
   const term = terminalEntry.terminal;
   
-  // Clean up old listeners
-  const unlisten = outputListeners.get(oldSessionId);
-  if (unlisten) {
-      unlisten();
-      outputListeners.delete(oldSessionId);
-  }
-
-  const oldInputListener = inputListeners.get(oldSessionId);
-  if (oldInputListener) {
-      oldInputListener.dispose();
-      inputListeners.delete(oldSessionId);
-  }
+  cleanupBufferedTerminalState(oldSessionId);
+  cleanupTerminalListeners(oldSessionId);
 
   void term.write('\r\n\x1b[33mReconnecting...\x1b[0m\r\n');
 
@@ -1717,19 +1707,89 @@ export async function reconnectTerminal(oldSessionId: string) {
 
       if (!result) throw new Error("Failed to start terminal");
 
+      if (reconnectSuppressed.has(oldSessionId)) {
+        markTerminalStopped(newSessionId);
+        try {
+          await invoke('close_terminal', { sessionId: newSessionId });
+        } catch (error) {
+          log.warn('Reconnect', 'Failed to close new terminal for suppressed reconnect', error, { oldSessionId, newSessionId });
+        }
+        try {
+          await invoke('disconnect', { sessionId: newSessionId });
+        } catch (error) {
+          log.warn('Reconnect', 'Failed to disconnect new session for suppressed reconnect', error, { oldSessionId, newSessionId });
+        }
+        return false;
+      }
+
       markTerminalStopped(oldSessionId);
       markTerminalStarted(newSessionId);
 
-      // Update store
+      let replaced = false;
       activeTerminals.update(items => {
-          const newItems = [...items];
-          newItems[index] = { ...terminalEntry, sessionId: newSessionId };
-          return newItems;
+        const idx = items.findIndex(item => item.sessionId === oldSessionId);
+        if (idx === -1) {
+          return items;
+        }
+        replaced = true;
+        const current = items[idx];
+        const next = [...items];
+        next[idx] = { ...current, sessionId: newSessionId };
+        return next;
       });
+
+      if (!replaced) {
+        markTerminalStopped(newSessionId);
+        try {
+          await invoke('close_terminal', { sessionId: newSessionId });
+        } catch (error) {
+          log.warn('Reconnect', 'Failed to close new terminal after stale reconnect', error, { oldSessionId, newSessionId });
+        }
+        try {
+          await invoke('disconnect', { sessionId: newSessionId });
+        } catch (error) {
+          log.warn('Reconnect', 'Failed to disconnect new session after stale reconnect', error, { oldSessionId, newSessionId });
+        }
+        return false;
+      }
+
       broadcastSessionIds.update(ids => ids.map(id => (id === oldSessionId ? newSessionId : id)));
+      terminalSessionMap.update(map => {
+        if (map.has(oldSessionId)) {
+          const children = map.get(oldSessionId);
+          map.delete(oldSessionId);
+          if (children) {
+            children.delete(oldSessionId);
+            children.add(newSessionId);
+            map.set(newSessionId, children);
+          } else {
+            map.set(newSessionId, new Set([newSessionId]));
+          }
+          return map;
+        }
+        for (const children of map.values()) {
+          if (children.has(oldSessionId)) {
+            children.delete(oldSessionId);
+            children.add(newSessionId);
+          }
+        }
+        return map;
+      });
       reconnectAttempts.delete(oldSessionId);
       clearReconnectTimer(oldSessionId);
       clearReconnectKeyListener(oldSessionId);
+
+      try {
+        await invoke('close_terminal', { sessionId: oldSessionId });
+      } catch (error) {
+        log.warn('Reconnect', 'Failed to close old terminal during reconnect', error, { oldSessionId });
+      }
+
+      try {
+        await invoke('disconnect', { sessionId: oldSessionId });
+      } catch (error) {
+        log.warn('Reconnect', 'Failed to disconnect old session during reconnect', error, { oldSessionId });
+      }
       
       // Setup new listeners
       await setupTerminalListeners(newSessionId, term);
@@ -1741,8 +1801,7 @@ export async function reconnectTerminal(oldSessionId: string) {
       inputListeners.set(newSessionId, newInputListener);
       
       term.write('\r\n\x1b[32mReconnected!\x1b[0m\r\n');
-      successMessage.set(`已重连: ${terminalEntry.connection.name}`);
-      setTimeout(() => successMessage.set(null), 3000);
+      showSuccessMessage(`已重连: ${terminalEntry.connection.name}`, 3000);
       term.focus();
       
       // Trigger resize
@@ -1750,9 +1809,27 @@ export async function reconnectTerminal(oldSessionId: string) {
 
       return true;
   } catch (e) {
+      if (reconnectSuppressed.has(oldSessionId)) {
+        return false;
+      }
       void term.write(`\r\n\x1b[31mReconnection failed: ${e}\x1b[0m\r\n`);
-      errorMessage.set(`重连失败: ${terminalEntry.connection.name}`);
-      setTimeout(() => errorMessage.set(null), 5000);
+      showErrorMessage(`重连失败: ${terminalEntry.connection.name}`, 5000);
       return false;
   }
+}
+
+export async function reconnectTerminal(oldSessionId: string) {
+  const existing = reconnectInFlight.get(oldSessionId);
+  if (existing) {
+    return existing;
+  }
+
+  const reconnectPromise = reconnectTerminalInternal(oldSessionId).finally(() => {
+    if (reconnectInFlight.get(oldSessionId) === reconnectPromise) {
+      reconnectInFlight.delete(oldSessionId);
+    }
+  });
+
+  reconnectInFlight.set(oldSessionId, reconnectPromise);
+  return reconnectPromise;
 }
