@@ -1,7 +1,7 @@
 import { save, open } from '@tauri-apps/plugin-dialog';
-import { writeTextFile, readTextFile } from '@tauri-apps/plugin-fs';
 import { invoke } from '@tauri-apps/api/core';
 import { loadConnections } from './connectionService';
+import { localFsService } from './localFsService';
 import { successMessage, errorMessage } from './store';
 import type { Connection } from './store';
 
@@ -116,7 +116,7 @@ export async function exportConnections(options?: { includeSensitive?: boolean }
     // Connection data from backend is already sanitized; we still sanitize defensively here.
     const exportData = connections.map(sanitizeConnectionForExport);
 
-    await writeTextFile(filePath, JSON.stringify(exportData, null, 2));
+    await localFsService.writeTextFile(filePath, JSON.stringify(exportData, null, 2));
     
     successMessage.set('导出成功（不含密码/口令）');
     setTimeout(() => successMessage.set(null), 3000);
@@ -140,7 +140,7 @@ export async function importConnections() {
 
     const pathStr = typeof filePath === 'string' ? filePath : filePath[0];
     
-    const jsonContent = await readTextFile(pathStr);
+    const jsonContent = await localFsService.readTextFile(pathStr);
     let importedConnections: Connection[];
     
     try {

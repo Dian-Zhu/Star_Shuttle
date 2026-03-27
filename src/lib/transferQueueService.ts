@@ -22,6 +22,14 @@ export const isTransferring = derived(activeTransfers, $active =>
 export class TransferQueueService {
   private transferMetrics = new Map<string, { lastProgress: number; lastTime: number; bytesTransferred: number }>();
   private runningTransfers = new Set<string>();
+  private runningTransferTargets = new Map<string, string>();
+  private resumeRequestedTransfers = new Set<string>();
+
+  private getTransferTargetKey(transfer: TransferStatus): string {
+    return transfer.type === 'upload'
+      ? `upload:${transfer.sessionId}:${transfer.remotePath}`
+      : `download:${transfer.localPath}`;
+  }
 
   private triggerQueueProcessing(): void {
     setTimeout(() => this.processQueue(), 0);
@@ -72,6 +80,7 @@ export class TransferQueueService {
     queue.update(q => q.filter(t => t.id !== id));
     // Clean up metrics
     this.transferMetrics.delete(id);
+    this.resumeRequestedTransfers.delete(id);
     this.triggerQueueProcessing();
   }
 
@@ -85,6 +94,7 @@ export class TransferQueueService {
     );
     queue.update(q => q.filter(t => t.id !== id));
     this.transferMetrics.delete(id);
+    this.resumeRequestedTransfers.delete(id);
     this.triggerQueueProcessing();
   }
 
@@ -116,20 +126,21 @@ export class TransferQueueService {
    * Resume a paused transfer
    */
   resumeTransfer(id: string): void {
-    let resumedInActive = false;
+    let pendingResume = false;
     activeTransfers.update(active => {
       return active.map(transfer => {
         if (transfer.id !== id || transfer.status !== 'paused') return transfer;
-        resumedInActive = true;
-        return { ...transfer, status: 'transferring' as const };
+        pendingResume = true;
+        return transfer;
       });
     });
 
-    // Fast resume: if execution loop is still alive, just flip back to transferring.
-    if (resumedInActive) {
+    if (pendingResume) {
+      this.resumeRequestedTransfers.add(id);
       return;
     }
 
+    this.resumeRequestedTransfers.delete(id);
     queue.update(q =>
       q.map(t => t.id === id ? { ...t, status: 'pending' as const } : t)
     );
@@ -229,7 +240,17 @@ export class TransferQueueService {
     const pendingTransfers = queued.filter(t => t.status === 'pending' && !this.runningTransfers.has(t.id));
     if (pendingTransfers.length === 0) return;
 
-    const toStart = pendingTransfers.slice(0, availableSlots);
+    const reservedTargets = new Set(this.runningTransferTargets.values());
+    const toStart: TransferStatus[] = [];
+    for (const transfer of pendingTransfers) {
+      if (toStart.length >= availableSlots) break;
+      const targetKey = this.getTransferTargetKey(transfer);
+      if (reservedTargets.has(targetKey)) continue;
+      reservedTargets.add(targetKey);
+      toStart.push(transfer);
+    }
+    if (toStart.length === 0) return;
+
     const startedIds = new Set(toStart.map(t => t.id));
     const startedTransfers = toStart.map(transfer => ({
       ...transfer,
@@ -245,6 +266,7 @@ export class TransferQueueService {
 
     startedTransfers.forEach(transfer => {
       this.runningTransfers.add(transfer.id);
+      this.runningTransferTargets.set(transfer.id, this.getTransferTargetKey(transfer));
       void this.executeTransfer(transfer);
     });
   }
@@ -281,12 +303,21 @@ export class TransferQueueService {
     });
 
     if (pausedTransfer) {
+      const shouldResume = this.resumeRequestedTransfers.delete(id);
       queue.update(current => {
+        const nextStatus: TransferStatus['status'] = shouldResume ? 'pending' : 'paused';
+        const nextTransfer = {
+          ...pausedTransfer!,
+          status: nextStatus,
+        };
         if (current.some(t => t.id === id)) {
-          return current.map(t => (t.id === id ? pausedTransfer! : t));
+          return current.map(t => (t.id === id ? nextTransfer : t));
         }
-        return [...current, pausedTransfer!];
+        return [...current, nextTransfer];
       });
+      if (shouldResume) {
+        this.triggerQueueProcessing();
+      }
       return;
     }
 
@@ -294,6 +325,74 @@ export class TransferQueueService {
       queue.update(current => current.filter(t => t.id !== id));
       this.transferMetrics.delete(id);
     }
+
+    this.resumeRequestedTransfers.delete(id);
+  }
+
+  private async downloadFileInChunks(
+    id: string,
+    sessionId: string,
+    remotePath: string,
+    localPath: string,
+    totalSize: number,
+    offset: number
+  ): Promise<{ totalSize: number; offset: number }> {
+    const chunkSize = 128 * 1024;
+    let fileHandle: any = null;
+    let iterations = 0;
+
+    try {
+      fileHandle = await localFsService.openWriteFile(localPath, offset === 0);
+      if (offset > 0 && fileHandle?.seek) {
+        try {
+          await fileHandle.seek(offset, 0);
+        } catch {
+          await localFsService.closeFile(fileHandle);
+          fileHandle = await localFsService.openWriteFile(localPath, true);
+          offset = 0;
+        }
+      }
+
+      let done = false;
+      while (!done) {
+        const currentStatus = this.getTransferStatus(id);
+        if (currentStatus === 'paused' || currentStatus === 'canceled') {
+          return { totalSize, offset };
+        }
+
+        const chunk = await sftpService.readChunk(sessionId, remotePath, offset, chunkSize);
+        if (chunk.length === 0) {
+          done = true;
+          break;
+        }
+
+        const statusAfterRead = this.getTransferStatus(id);
+        if (statusAfterRead === 'paused' || statusAfterRead === 'canceled') {
+          return { totalSize, offset };
+        }
+
+        await localFsService.writeChunk(fileHandle, chunk);
+        offset += chunk.length;
+
+        const progress = totalSize > 0 ? Math.floor((offset / totalSize) * 100) : 0;
+        this.updateProgress(id, progress, 0);
+        this.transferMetrics.set(id, {
+          lastProgress: progress,
+          lastTime: Date.now(),
+          bytesTransferred: offset
+        });
+
+        if (++iterations % 5 === 0) {
+          await new Promise(resolve => setTimeout(resolve, 0));
+        }
+      }
+    } finally {
+      if (fileHandle) {
+        await localFsService.closeFile(fileHandle);
+      }
+    }
+
+    return { totalSize, offset };
   }
 
   /**
@@ -353,8 +452,10 @@ export class TransferQueueService {
               return;
             }
             
-            // Write chunk with append flag (append=true if offset > 0)
-            await sftpService.writeFile(sessionId, remotePath, chunk, offset > 0);
+            await sftpService.writeFile(sessionId, remotePath, chunk, {
+              offset,
+              truncate: offset === 0,
+            });
             
             offset += chunk.length;
             
@@ -385,74 +486,33 @@ export class TransferQueueService {
         let totalSize = transfer.totalSize ?? 0;
         const metrics = this.transferMetrics.get(id);
         let offset = metrics?.bytesTransferred || 0;
-        const chunkSize = 128 * 1024;
-        let fileHandle: any = null;
-        let iterations = 0;
 
         try {
-          fileHandle = await localFsService.openWriteFile(localPath, offset === 0);
-          if (offset > 0 && fileHandle?.seek) {
-            try {
-              await fileHandle.seek(offset, 0);
-            } catch {
-              await localFsService.closeFile(fileHandle);
-              fileHandle = await localFsService.openWriteFile(localPath, true);
-              offset = 0;
-            }
-          }
-
-          let done = false;
-          while (!done) {
-            const currentStatus = this.getTransferStatus(id);
-            if (currentStatus === 'paused' || currentStatus === 'canceled') {
-              return;
-            }
-
-            const chunk = await sftpService.readChunk(sessionId, remotePath, offset, chunkSize);
-            if (chunk.length === 0) {
-              done = true;
-              break;
-            }
-
-            const statusAfterRead = this.getTransferStatus(id);
-            if (statusAfterRead === 'paused' || statusAfterRead === 'canceled') {
-              return;
-            }
-
-            await localFsService.writeChunk(fileHandle, chunk);
-            offset += chunk.length;
-
-            const progress = totalSize > 0 ? Math.floor((offset / totalSize) * 100) : 0;
-            this.updateProgress(id, progress, 0);
-            this.transferMetrics.set(id, {
-              lastProgress: progress,
-              lastTime: Date.now(),
-              bytesTransferred: offset
-            });
-
-            if (++iterations % 5 === 0) {
-              await new Promise(resolve => setTimeout(resolve, 0));
-            }
-          }
+          ({ totalSize, offset } = await this.downloadFileInChunks(
+            id,
+            sessionId,
+            remotePath,
+            localPath,
+            totalSize,
+            offset
+          ));
         } catch (e) {
           const currentStatus = this.getTransferStatus(id);
           if (currentStatus === 'paused' || currentStatus === 'canceled') {
             return;
           }
 
-          if (fileHandle) {
-            await localFsService.closeFile(fileHandle);
-            fileHandle = null;
-          }
-
-          const content = await sftpService.scpDownload(sessionId, remotePath);
-          fileHandle = await localFsService.openWriteFile(localPath, true);
-          await localFsService.writeChunk(fileHandle, content);
-          offset = content.length;
-          totalSize = content.length;
-        } finally {
-          if (fileHandle) {
-            await localFsService.closeFile(fileHandle);
+          if (offset > 0) {
+            ({ totalSize, offset } = await this.downloadFileInChunks(
+              id,
+              sessionId,
+              remotePath,
+              localPath,
+              totalSize,
+              0
+            ));
+          } else {
+            throw e;
           }
         }
 
@@ -468,6 +528,7 @@ export class TransferQueueService {
       this.failTransfer(id, error.message);
     } finally {
       this.runningTransfers.delete(id);
+      this.runningTransferTargets.delete(id);
       this.finalizeInterruptedTransfer(id);
       this.triggerQueueProcessing();
     }

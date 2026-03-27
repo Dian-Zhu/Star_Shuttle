@@ -38,7 +38,7 @@ pub(crate) fn ensure_app_unlocked_runtime(
 }
 
 // Create a separate module for commands to avoid macro name conflicts
-mod commands {
+pub(crate) mod commands {
     use super::*;
     use crate::modules::connection::known_hosts::KnownHostsManager;
     use crate::modules::connection::ConnectionManager;
@@ -63,6 +63,13 @@ mod commands {
         app_lock_state: &State<Arc<Mutex<AppLockRuntimeState>>>,
     ) -> Result<(), String> {
         crate::ensure_app_unlocked_runtime(db.inner(), app_lock_state.inner())
+    }
+
+    pub(crate) fn sanitize_rdp_field(name: &str, value: &str) -> Result<(), String> {
+        if value.contains('\n') || value.contains('\r') {
+            return Err(format!("{} contains invalid line breaks", name));
+        }
+        Ok(())
     }
 
     fn schedule_rdp_file_cleanup(path: PathBuf) {
@@ -148,6 +155,25 @@ mod commands {
         let db = db.lock().map_err(|e| e.to_string())?;
         let result = db.get_setting("app_lock_hash").map_err(|e| e.to_string())?;
         Ok(result.is_some())
+    }
+
+    #[command]
+    pub fn lock_app(
+        db: State<Arc<Mutex<DatabaseManager>>>,
+        app_lock_state: State<Arc<Mutex<AppLockRuntimeState>>>,
+    ) -> Result<(), String> {
+        let db = db.lock().map_err(|e| e.to_string())?;
+        let lock_enabled = db
+            .get_setting("app_lock_hash")
+            .map_err(|e| e.to_string())?
+            .is_some();
+        drop(db);
+
+        if !lock_enabled {
+            return Ok(());
+        }
+
+        set_unlock_state(&app_lock_state, false)
     }
 
     #[command]
@@ -259,6 +285,8 @@ mod commands {
         }
         let port = if config.port == 0 { 3389 } else { config.port };
         let username = config.username.trim();
+        sanitize_rdp_field("Host", host)?;
+        sanitize_rdp_field("Username", username)?;
 
         let rdp_path = write_temp_rdp_file(host, port, username)?;
         let cleanup_path = rdp_path.clone();
@@ -692,10 +720,10 @@ pub fn run() {
     let connection_manager = Arc::new(RwLock::new(DefaultConnectionManager::new()));
     let connection_manager_for_setup = connection_manager.clone();
     let sftp_manager = crate::modules::sftp::SftpManager::new(connection_manager.clone());
+    let local_fs_state = crate::modules::local_fs::LocalFsState::default();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_fs::init())
         .setup(move |app| {
             // Remove tauri_plugin_log to avoid logger initialization conflict
             // We use our custom structured logger instead
@@ -771,6 +799,7 @@ pub fn run() {
         })
         .manage(connection_manager)
         .manage(sftp_manager)
+        .manage(local_fs_state)
         .invoke_handler(tauri::generate_handler![
             // Connection management commands
             commands::connect,
@@ -796,7 +825,18 @@ pub fn run() {
             commands::change_app_lock,
             commands::verify_app_lock,
             commands::is_app_lock_enabled,
+            commands::lock_app,
             commands::remove_app_lock,
+            // Local filesystem commands
+            crate::modules::local_fs::local_fs_open_read,
+            crate::modules::local_fs::local_fs_stat,
+            crate::modules::local_fs::local_fs_read_chunk,
+            crate::modules::local_fs::local_fs_open_write,
+            crate::modules::local_fs::local_fs_write_chunk,
+            crate::modules::local_fs::local_fs_seek,
+            crate::modules::local_fs::local_fs_close,
+            crate::modules::local_fs::local_fs_read_text,
+            crate::modules::local_fs::local_fs_write_text,
             // SFTP commands
             crate::modules::sftp::sftp_ls,
             crate::modules::sftp::sftp_read,
@@ -830,3 +870,15 @@ pub fn run() {
 pub mod models;
 pub mod modules;
 pub mod utils;
+
+#[cfg(test)]
+mod tests {
+    use super::commands::sanitize_rdp_field;
+
+    #[test]
+    fn rejects_rdp_fields_with_line_breaks() {
+        assert!(sanitize_rdp_field("Host", "rdp-host").is_ok());
+        assert!(sanitize_rdp_field("Host", "bad\nhost").is_err());
+        assert!(sanitize_rdp_field("Username", "bad\ruser").is_err());
+    }
+}

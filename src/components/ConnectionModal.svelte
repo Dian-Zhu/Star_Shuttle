@@ -334,7 +334,7 @@
     hostKeyVerification?.type === 'mismatch'
       ? '这可能是中间人攻击或服务器重装导致。请谨慎确认后再信任。'
       : hostKeyVerification?.type === 'unavailable'
-        ? 'known_hosts 当前不可用，无法自动校验服务器身份。'
+        ? '应用信任库当前不可用，无法自动校验服务器身份。'
         : '首次连接该服务器，请确认指纹后再继续。';
 
   $: if ($editingConnection) {
@@ -354,7 +354,7 @@
       });
       
       hostKeyVerification = null;
-      showSuccessMessage('主机密钥已保存', 3000);
+      showSuccessMessage('主机密钥已保存到应用信任库', 3000);
       
       // Retry connection test
       handleTestConnection();

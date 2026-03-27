@@ -1,6 +1,14 @@
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const rootDir = dirname(fileURLToPath(import.meta.url));
+
 /** @type {import('tailwindcss').Config} */
 export default {
-  content: ['./index.html', './src/**/*.{js,ts,svelte}'],
+  content: [
+    resolve(rootDir, 'index.html'),
+    resolve(rootDir, 'src/**/*.{js,ts,svelte}')
+  ],
   darkMode: 'class',
   theme: {
     extend: {

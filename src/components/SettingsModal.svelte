@@ -1,6 +1,6 @@
 <script lang="ts">
   // Force rebuild.
-  import { showSettings, settings, type AppSettings } from '../lib/store';
+  import { showSettings, settings, isLocked, type AppSettings } from '../lib/store';
   import { themeColors } from '../lib/themeColors';
   import XIcon from './icons/XIcon.svelte';
   import EyeDropperIcon from './icons/EyeDropperIcon.svelte';
@@ -302,6 +302,7 @@
     try {
       await invoke('set_app_lock', { password: newPassword });
       hasLock = true;
+      isLocked.set(true);
       securityMessage = '应用锁已设置';
       securityError = '';
       newPassword = '';
@@ -350,6 +351,7 @@
     try {
       await invoke('remove_app_lock', { currentPassword: oldPassword });
       hasLock = false;
+      isLocked.set(false);
       securityMessage = '应用锁已清除';
       securityError = '';
       oldPassword = '';

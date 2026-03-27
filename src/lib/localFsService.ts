@@ -1,37 +1,99 @@
-import { readDir, readFile, writeFile, create, remove, rename, open } from '@tauri-apps/plugin-fs';
-import { homeDir } from '@tauri-apps/api/path';
-import type { FileEntry } from '../types';
+import { invoke } from '@tauri-apps/api/core';
+
+type BackendOpenHandle = {
+  handle_id: string;
+  size: number;
+};
+
+type BackendFileStat = {
+  size: number;
+};
+
+class LocalReadHandle {
+  constructor(
+    private readonly handleId: string,
+    private readonly sizeValue: number
+  ) {}
+
+  async read(buffer: Uint8Array): Promise<number> {
+    const data = await invoke<number[]>('local_fs_read_chunk', {
+      handleId: this.handleId,
+      length: buffer.length,
+    });
+    const bytes = Uint8Array.from(data);
+    buffer.set(bytes);
+    return bytes.length;
+  }
+
+  async seek(offset: number, whence: number): Promise<number> {
+    return invoke<number>('local_fs_seek', {
+      handleId: this.handleId,
+      offset,
+      whence,
+    });
+  }
+
+  async stat(): Promise<BackendFileStat> {
+    return { size: this.sizeValue };
+  }
+
+  async close(): Promise<void> {
+    await invoke('local_fs_close', { handleId: this.handleId });
+  }
+}
+
+class LocalWriteHandle {
+  constructor(private readonly handleId: string) {}
+
+  async write(content: Uint8Array): Promise<number> {
+    return invoke<number>('local_fs_write_chunk', {
+      handleId: this.handleId,
+      content: Array.from(content),
+    });
+  }
+
+  async seek(offset: number, whence: number): Promise<number> {
+    return invoke<number>('local_fs_seek', {
+      handleId: this.handleId,
+      offset,
+      whence,
+    });
+  }
+
+  async close(): Promise<void> {
+    await invoke('local_fs_close', { handleId: this.handleId });
+  }
+}
 
 export class LocalFsService {
   private normalizePath(path: string): string {
     return path.replace(/\\/g, '/');
   }
 
-  /**
-   * Open a file for reading
-   */
-  async openFile(path: string): Promise<any> {
+  async openFile(path: string): Promise<LocalReadHandle> {
     try {
-      return await open(this.normalizePath(path), { read: true, write: false });
+      const result = await invoke<BackendOpenHandle>('local_fs_open_read', {
+        path: this.normalizePath(path),
+      });
+      return new LocalReadHandle(result.handle_id, result.size);
     } catch (error: any) {
       throw new Error(`Failed to open file: ${error.message}`);
     }
   }
 
-  async openWriteFile(path: string, truncate: boolean): Promise<any> {
+  async openWriteFile(path: string, truncate: boolean): Promise<LocalWriteHandle> {
     try {
-      return await open(this.normalizePath(path), {
-        read: false,
-        write: true,
-        create: true,
-        truncate
+      const handleId = await invoke<string>('local_fs_open_write', {
+        path: this.normalizePath(path),
+        truncate,
       });
+      return new LocalWriteHandle(handleId);
     } catch (error: any) {
       throw new Error(`Failed to open file for writing: ${error.message}`);
     }
   }
 
-  async readChunk(handle: any, length: number): Promise<Uint8Array> {
+  async readChunk(handle: LocalReadHandle, length: number): Promise<Uint8Array> {
     try {
       const buffer = new Uint8Array(length);
       const bytesRead = await handle.read(buffer);
@@ -45,7 +107,7 @@ export class LocalFsService {
     }
   }
 
-  async writeChunk(handle: any, content: Uint8Array): Promise<number> {
+  async writeChunk(handle: LocalWriteHandle, content: Uint8Array): Promise<number> {
     try {
       return await handle.write(content);
     } catch (error: any) {
@@ -53,7 +115,7 @@ export class LocalFsService {
     }
   }
 
-  async closeFile(handle: any): Promise<void> {
+  async closeFile(handle: { close: () => Promise<void> }): Promise<void> {
     try {
       await handle.close();
     } catch (error: any) {
@@ -61,154 +123,86 @@ export class LocalFsService {
     }
   }
 
-  /**
-   * Get file size
-   */
   async getFileSize(path: string): Promise<number> {
     try {
-        const handle = await open(this.normalizePath(path), { read: true });
-        const stat = await handle.stat();
-        await handle.close();
-        return stat.size;
+      const stat = await invoke<BackendFileStat>('local_fs_stat', {
+        path: this.normalizePath(path),
+      });
+      return stat.size;
     } catch (error: any) {
-        // Fallback or rethrow
-         throw new Error(`Failed to get file size: ${error.message}`);
+      throw new Error(`Failed to get file size: ${error.message}`);
     }
   }
 
-  /**
-   * List directory contents
-   */
-  async listDirectory(path: string): Promise<FileEntry[]> {
-    try {
-      // Handle special paths
-      let actualPath = path;
-      if (path === '~') {
-        try {
-          actualPath = await homeDir();
-        } catch {
-          actualPath = '.';
-        }
-      } else if (path === '' || path === '.') {
-        actualPath = '.'; // Current directory
-      }
-      if (!actualPath) actualPath = '.';
-
-      actualPath = this.normalizePath(actualPath);
-      const normalizedActualPath = actualPath.replace(/\/+$/, '');
-
-      const entries = await readDir(actualPath);
-      
-      return await Promise.all(entries.map(async (entry) => {
-        // Tauri's DirEntry has .path and .name
-        const name = entry.name || '';
-        const path = this.normalizePath((entry as any).path || (actualPath === '.' ? name : `${normalizedActualPath}/${name}`));
-        const isDirectory = (entry as any).isDirectory || false;
-        // Size and modified time may not be available directly
-        // We'll use defaults for now
-        const size = 0;
-        const modified = Date.now() / 1000;
-
-        return {
-          name,
-          path,
-          isDirectory,
-          size,
-          modified: new Date(modified * 1000),
-          permissions: '644',
-          owner: '',
-          group: ''
-        };
-      }));
-    } catch (error: any) {
-      const message = error?.message ?? String(error);
-      throw new Error(`Failed to list directory: ${message}`);
-    }
-  }
-
-  /**
-   * Read file content
-   */
   async readFile(path: string): Promise<Uint8Array> {
+    const handle = await this.openFile(path);
     try {
-      const content = await readFile(this.normalizePath(path));
-      return new Uint8Array(content);
+      const stat = await handle.stat();
+      const size = stat.size;
+      const chunks: Uint8Array[] = [];
+      let remaining = size;
+      const chunkSize = 128 * 1024;
+
+      while (remaining > 0) {
+        const chunk = await this.readChunk(handle, Math.min(chunkSize, remaining));
+        if (chunk.length === 0) break;
+        chunks.push(chunk);
+        remaining -= chunk.length;
+      }
+
+      const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+      const content = new Uint8Array(total);
+      let offset = 0;
+      for (const chunk of chunks) {
+        content.set(chunk, offset);
+        offset += chunk.length;
+      }
+      return content;
     } catch (error: any) {
       throw new Error(`Failed to read file: ${error.message}`);
+    } finally {
+      await this.closeFile(handle);
     }
   }
 
-  /**
-   * Write file content
-   */
   async writeFile(path: string, content: Uint8Array, append: boolean = false): Promise<void> {
     try {
       const normalizedPath = this.normalizePath(path);
-      if (append) {
-        // For append, we need to read existing content first
-        const existing = await this.readFile(normalizedPath).catch(() => new Uint8Array(0));
-        const combined = new Uint8Array(existing.length + content.length);
-        combined.set(existing);
-        combined.set(content, existing.length);
-        await writeFile(normalizedPath, combined);
-      } else {
-        await writeFile(normalizedPath, content);
+      const handle = await this.openWriteFile(normalizedPath, !append);
+      try {
+        if (append) {
+          await handle.seek(0, 2);
+        }
+        await this.writeChunk(handle, content);
+      } finally {
+        await this.closeFile(handle);
       }
     } catch (error: any) {
       throw new Error(`Failed to write file: ${error.message}`);
     }
   }
 
-  /**
-   * Create directory
-   */
-  async createDirectory(path: string): Promise<void> {
+  async readTextFile(path: string): Promise<string> {
     try {
-      await create(this.normalizePath(path));
+      return await invoke<string>('local_fs_read_text', {
+        path: this.normalizePath(path),
+      });
     } catch (error: any) {
-      throw new Error(`Failed to create directory: ${error.message}`);
+      throw new Error(`Failed to read text file: ${error.message}`);
     }
   }
 
-  /**
-   * Remove file
-   */
-  async removeFile(path: string): Promise<void> {
+  async writeTextFile(path: string, content: string): Promise<void> {
     try {
-      await remove(this.normalizePath(path));
+      await invoke('local_fs_write_text', {
+        path: this.normalizePath(path),
+        content,
+      });
     } catch (error: any) {
-      throw new Error(`Failed to remove file: ${error.message}`);
+      throw new Error(`Failed to write text file: ${error.message}`);
     }
   }
 
-  /**
-   * Remove directory
-   */
-  async removeDirectory(path: string): Promise<void> {
-    try {
-      await remove(this.normalizePath(path), { recursive: true });
-    } catch (error: any) {
-      throw new Error(`Failed to remove directory: ${error.message}`);
-    }
-  }
-
-  /**
-   * Rename file or directory
-   */
-  async rename(oldPath: string, newPath: string): Promise<void> {
-    try {
-      await rename(this.normalizePath(oldPath), this.normalizePath(newPath));
-    } catch (error: any) {
-      throw new Error(`Failed to rename: ${error.message}`);
-    }
-  }
-
-  /**
-   * Get home directory path
-   */
-  async getHomeDir(): Promise<string> {
-    return this.normalizePath(await homeDir());
-  }
 }
 
 export const localFsService = new LocalFsService();

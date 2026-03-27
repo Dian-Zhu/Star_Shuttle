@@ -3,8 +3,8 @@
   import XIcon from './icons/XIcon.svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { save } from '@tauri-apps/plugin-dialog';
-  import { writeTextFile } from '@tauri-apps/plugin-fs';
   import { onMount } from 'svelte';
+  import { localFsService } from '../lib/localFsService';
 
   type LogEntry = {
     timestamp?: string;
@@ -80,7 +80,7 @@
       });
       if (!filePath) return;
       const content = rawLogs.join('\n');
-      await writeTextFile(filePath, content);
+      await localFsService.writeTextFile(filePath, content);
       setToast('日志已导出');
     } catch (e) {
       error = `导出日志失败: ${e}`;

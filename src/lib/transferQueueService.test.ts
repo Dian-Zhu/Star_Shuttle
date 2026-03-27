@@ -117,11 +117,11 @@ describe('TransferQueueService queue progression', () => {
     readGate.resolve(new Uint8Array([2]));
     await vi.runAllTimersAsync();
 
-    expect(mocks.localOpenFile).toHaveBeenCalledTimes(1);
+    expect(mocks.localOpenFile).toHaveBeenCalledTimes(2);
     expect(mocks.sftpWriteFile).toHaveBeenCalledTimes(2);
   });
 
-  it('pauses cleanly and resumes from previous offset with append mode', async () => {
+  it('pauses cleanly and resumes from previous offset with explicit remote offset writes', async () => {
     const secondReadGate = deferred<Uint8Array>();
     let readCalls = 0;
 
@@ -174,6 +174,47 @@ describe('TransferQueueService queue progression', () => {
     expect(snapshot.queue).toHaveLength(0);
     expect(mocks.localOpenFile).toHaveBeenCalledTimes(2);
     expect(mocks.sftpWriteFile).toHaveBeenCalledTimes(2);
-    expect(mocks.sftpWriteFile.mock.calls[1][3]).toBe(true);
+    expect(mocks.sftpWriteFile.mock.calls[1][3]).toEqual({
+      offset: 1,
+      truncate: false,
+    });
+  });
+
+  it('serializes uploads targeting the same remote path', async () => {
+    const firstWriteGate = deferred<void>();
+    const handles = new Map<string, { reads: number }>();
+
+    mocks.localGetFileSize.mockResolvedValue(1);
+    mocks.localOpenFile.mockImplementation(async (path: string) => {
+      const handle = { reads: 0 };
+      handles.set(path, handle);
+      return handle;
+    });
+    mocks.localReadChunk.mockImplementation(async (handle: { reads: number }) => {
+      if (handle.reads === 0) {
+        handle.reads += 1;
+        return new Uint8Array([1]);
+      }
+      return new Uint8Array([]);
+    });
+    mocks.sftpWriteFile
+      .mockImplementationOnce(async () => {
+        await firstWriteGate.promise;
+      })
+      .mockResolvedValue(undefined);
+
+    const { TransferQueueService } = await loadModule();
+    const service = new TransferQueueService();
+
+    await service.addTransfer('upload', 's1', '/tmp/a', '/r/shared', 1);
+    await service.addTransfer('upload', 's1', '/tmp/b', '/r/shared', 1);
+
+    await vi.runOnlyPendingTimersAsync();
+    expect(mocks.sftpWriteFile).toHaveBeenCalledTimes(1);
+
+    firstWriteGate.resolve();
+    await vi.runAllTimersAsync();
+
+    expect(mocks.sftpWriteFile).toHaveBeenCalledTimes(2);
   });
 });

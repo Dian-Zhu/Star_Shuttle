@@ -562,6 +562,21 @@ pub enum TerminalCommand {
     Close,
 }
 
+fn try_send_terminal_command(
+    sender: &mpsc::Sender<TerminalCommand>,
+    command: TerminalCommand,
+) -> Result<(), ConnectionError> {
+    match sender.try_send(command) {
+        Ok(()) => Ok(()),
+        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => Err(
+            ConnectionError::ConnectionFailed("Terminal command queue is full".to_string()),
+        ),
+        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => Err(
+            ConnectionError::ConnectionFailed("Terminal command channel is closed".to_string()),
+        ),
+    }
+}
+
 pub(crate) struct TelnetConnection {
     read: tokio::net::tcp::OwnedReadHalf,
     write: tokio::net::tcp::OwnedWriteHalf,
@@ -1176,8 +1191,11 @@ impl DefaultConnectionManager {
         match prepared.operation {
             PreparedConnectOperation::Telnet { addr } => {
                 let connect_res = prepared.runtime.block_on(async move {
-                    tokio::time::timeout(std::time::Duration::from_secs(10), TcpStream::connect(addr))
-                        .await
+                    tokio::time::timeout(
+                        std::time::Duration::from_secs(10),
+                        TcpStream::connect(addr),
+                    )
+                    .await
                 });
 
                 match connect_res {
@@ -1249,7 +1267,10 @@ impl DefaultConnectionManager {
                     }
                 }
 
-                info!("Starting blocking connection task for session {}", prepared.session_id);
+                info!(
+                    "Starting blocking connection task for session {}",
+                    prepared.session_id
+                );
                 let start_time = std::time::Instant::now();
                 let connect_res: Result<(SshConnection, Option<SshConnection>), anyhow::Error> =
                     prepared.runtime.block_on(async {
@@ -1379,7 +1400,10 @@ impl DefaultConnectionManager {
                         }
                     });
 
-                info!("Blocking connection task finished in {:?}", start_time.elapsed());
+                info!(
+                    "Blocking connection task finished in {:?}",
+                    start_time.elapsed()
+                );
 
                 match connect_res {
                     Ok((connection, jump_connection)) => Ok(ConnectCompletion {
@@ -1411,21 +1435,33 @@ impl DefaultConnectionManager {
             .get(&completion.session_id)
             .cloned()
             .ok_or(ConnectionError::SessionNotFound(completion.session_id))?;
+        if session.status != ConnectionStatus::Connecting {
+            info!(
+                "Discarding late connect completion for session {} in state {:?}",
+                completion.session_id, session.status
+            );
+            return Err(ConnectionError::ConnectionFailed(
+                "Connection attempt was canceled".to_string(),
+            ));
+        }
         session.connection_id = completion.connection_id;
         session.status = ConnectionStatus::Connected;
         self.sessions.insert(completion.session_id, session);
 
         match completion.artifacts {
             ConnectArtifacts::Telnet(telnet) => {
-                self.telnet_connections.insert(completion.session_id, telnet);
+                self.telnet_connections
+                    .insert(completion.session_id, telnet);
             }
             ConnectArtifacts::Ssh {
                 connection,
                 jump_connection,
             } => {
-                self.ssh_connections.insert(completion.session_id, connection);
+                self.ssh_connections
+                    .insert(completion.session_id, connection);
                 if let Some(jump) = jump_connection {
-                    self.jump_ssh_connections.insert(completion.session_id, jump);
+                    self.jump_ssh_connections
+                        .insert(completion.session_id, jump);
                 }
             }
         }
@@ -1434,8 +1470,11 @@ impl DefaultConnectionManager {
     }
 
     pub(crate) fn finish_connect_failure(&mut self, session_id: Uuid) {
-        if let Some(session) = self.sessions.get_mut(&session_id) {
-            session.status = ConnectionStatus::Error;
+        if matches!(
+            self.sessions.get(&session_id).map(|session| &session.status),
+            Some(ConnectionStatus::Connecting)
+        ) {
+            self.sessions.remove(&session_id);
         }
     }
 
@@ -1453,6 +1492,11 @@ impl DefaultConnectionManager {
         if session.status != ConnectionStatus::Connected {
             return Err(ConnectionError::ConnectionFailed(
                 "Session is not connected".to_string(),
+            ));
+        }
+        if session.terminal_id.is_some() {
+            return Err(ConnectionError::ConnectionFailed(
+                "Terminal is already started for this session".to_string(),
             ));
         }
 
@@ -1495,7 +1539,10 @@ impl DefaultConnectionManager {
     ) -> Result<StartedTerminal, ConnectionError> {
         match prepared.operation {
             PreparedTerminalStartOperation::Telnet { telnet } => {
-                info!("Starting Telnet terminal for session: {}", prepared.session_id);
+                info!(
+                    "Starting Telnet terminal for session: {}",
+                    prepared.session_id
+                );
 
                 let terminal_id = Uuid::new_v4();
                 let (tx, mut rx) = mpsc::channel::<TerminalCommand>(2048);
@@ -1672,7 +1719,9 @@ impl DefaultConnectionManager {
                     })?;
 
                 let newline_data = b"\r\n";
-                if let Err(e) = prepared.runtime.block_on(async { channel.data(&newline_data[..]).await })
+                if let Err(e) = prepared
+                    .runtime
+                    .block_on(async { channel.data(&newline_data[..]).await })
                 {
                     error!("Failed to send initial newline: {:?}", e);
                 }
@@ -1851,6 +1900,28 @@ impl DefaultConnectionManager {
         &mut self,
         started: StartedTerminal,
     ) -> Result<bool, ConnectionError> {
+        let session = self
+            .sessions
+            .get(&started.session_id)
+            .cloned()
+            .ok_or(ConnectionError::SessionNotFound(started.session_id))?;
+        if session.status != ConnectionStatus::Connected {
+            let _ = try_send_terminal_command(&started.terminal.sender, TerminalCommand::Close);
+            info!(
+                "Discarding late terminal start for session {} in state {:?}",
+                started.session_id, session.status
+            );
+            return Err(ConnectionError::ConnectionFailed(
+                "Terminal start was canceled".to_string(),
+            ));
+        }
+        if session.terminal_id.is_some() {
+            let _ = try_send_terminal_command(&started.terminal.sender, TerminalCommand::Close);
+            return Err(ConnectionError::ConnectionFailed(
+                "Terminal is already attached to this session".to_string(),
+            ));
+        }
+
         self.terminals.insert(started.terminal_id, started.terminal);
 
         if let Some(session) = self.sessions.get_mut(&started.session_id) {
@@ -1956,13 +2027,11 @@ impl ConnectionManager for DefaultConnectionManager {
                     Ok(session_id)
                 }
                 Ok(Err(e)) => {
-                    session_info.status = ConnectionStatus::Error;
-                    self.sessions.insert(session_id, session_info);
+                    self.sessions.remove(&session_id);
                     Err(ConnectionError::ConnectionFailed(e.to_string()))
                 }
                 Err(_) => {
-                    session_info.status = ConnectionStatus::Error;
-                    self.sessions.insert(session_id, session_info);
+                    self.sessions.remove(&session_id);
                     Err(ConnectionError::ConnectionFailed(
                         "Telnet connection timed out".to_string(),
                     ))
@@ -2164,8 +2233,7 @@ impl ConnectionManager for DefaultConnectionManager {
             Err(e) => {
                 // SSH connection error
                 error!("SSH connection error for session {}: {:?}", session_id, e);
-                session_info.status = ConnectionStatus::Error;
-                self.sessions.insert(session_id, session_info);
+                self.sessions.remove(&session_id);
                 Err(ConnectionError::ConnectionFailed(format!("{:?}", e)))
             }
         }
@@ -2201,10 +2269,7 @@ impl ConnectionManager for DefaultConnectionManager {
             debug!("Telnet connection removed for session: {}", session_id);
         }
 
-        // Update session status
-        if let Some(session) = self.sessions.get_mut(session_id) {
-            session.status = ConnectionStatus::Disconnected;
-        }
+        self.sessions.remove(session_id);
         info!("Session disconnected: {}", session_id);
 
         Ok(())
@@ -2940,7 +3005,7 @@ impl ConnectionManager for DefaultConnectionManager {
         // Send data command
         let sender = terminal.sender.clone();
         let send_start = std::time::Instant::now();
-        match sender.blocking_send(TerminalCommand::Data(data_bytes)) {
+        match try_send_terminal_command(&sender, TerminalCommand::Data(data_bytes)) {
             Ok(_) => {
                 let send_ms = send_start.elapsed().as_millis();
                 if send_ms > 10 {
@@ -2953,10 +3018,7 @@ impl ConnectionManager for DefaultConnectionManager {
             }
             Err(e) => {
                 error!("Failed to send terminal data: {}", e);
-                Err(ConnectionError::ConnectionFailed(format!(
-                    "Failed to send data: {}",
-                    e
-                )))
+                Err(e)
             }
         }
     }
@@ -2976,7 +3038,10 @@ impl ConnectionManager for DefaultConnectionManager {
 
         // Send resize command
         let sender = terminal.sender.clone();
-        let _ = sender.blocking_send(TerminalCommand::Resize(width as u32, height as u32));
+        try_send_terminal_command(
+            &sender,
+            TerminalCommand::Resize(width as u32, height as u32),
+        )?;
 
         debug!("Resizing terminal to {}x{}", width, height);
         Ok(())
@@ -2998,7 +3063,12 @@ impl ConnectionManager for DefaultConnectionManager {
 
         // Send close command
         let sender = terminal.sender.clone();
-        let _ = sender.blocking_send(TerminalCommand::Close);
+        if let Err(err) = try_send_terminal_command(&sender, TerminalCommand::Close) {
+            warn!(
+                "Failed to queue terminal close for session {}: {}",
+                session_id, err
+            );
+        }
 
         // Update session info
         if let Some(session) = self.sessions.get_mut(session_id) {
@@ -3155,6 +3225,28 @@ fn auth_method_to_auth_type(auth_method: AuthMethod) -> ssh_impl::AuthType {
 mod tests {
     use super::*;
     use russh::client::Prompt;
+    use tokio::net::{TcpListener, TcpStream};
+
+    fn telnet_artifacts() -> TelnetConnection {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_io()
+            .build()
+            .expect("failed to create runtime");
+        runtime.block_on(async {
+            let listener = TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("failed to bind listener");
+            let addr = listener.local_addr().expect("failed to read listener addr");
+            let client = TcpStream::connect(addr);
+            let server = listener.accept();
+            let (client, server) = tokio::join!(client, server);
+            let client = client.expect("failed to connect client");
+            let (server, _) = server.expect("failed to accept client");
+            let _client = client;
+            let (read, write) = server.into_split();
+            TelnetConnection { read, write }
+        })
+    }
 
     #[test]
     fn test_connection_config_validation() {
@@ -3264,5 +3356,141 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(coordinator.pending_len_for_test(), 0);
+    }
+
+    #[test]
+    fn test_finish_connect_success_does_not_revive_disconnected_session() {
+        let mut manager = DefaultConnectionManager::new();
+        let config_id = Uuid::new_v4();
+        let session_id = Uuid::new_v4();
+        manager.sessions.insert(
+            session_id,
+            SessionInfo {
+                id: session_id,
+                connection_id: config_id,
+                status: ConnectionStatus::Disconnected,
+                terminal_id: None,
+                created_at: Utc::now(),
+                last_active: Utc::now(),
+            },
+        );
+
+        let result = manager.finish_connect_success(ConnectCompletion {
+            session_id,
+            connection_id: config_id,
+            artifacts: ConnectArtifacts::Telnet(telnet_artifacts()),
+        });
+
+        assert!(result.is_err());
+        assert_eq!(
+            manager.sessions.get(&session_id).map(|s| &s.status),
+            Some(&ConnectionStatus::Disconnected)
+        );
+        assert!(!manager.telnet_connections.contains_key(&session_id));
+    }
+
+    #[test]
+    fn test_finish_start_terminal_does_not_attach_to_disconnected_session() {
+        let mut manager = DefaultConnectionManager::new();
+        let session_id = Uuid::new_v4();
+        manager.sessions.insert(
+            session_id,
+            SessionInfo {
+                id: session_id,
+                connection_id: Uuid::new_v4(),
+                status: ConnectionStatus::Disconnected,
+                terminal_id: None,
+                created_at: Utc::now(),
+                last_active: Utc::now(),
+            },
+        );
+
+        let terminal_id = Uuid::new_v4();
+        let (sender, _receiver) = mpsc::channel(1);
+        let result = manager.finish_start_terminal(StartedTerminal {
+            session_id,
+            terminal_id,
+            terminal: TerminalSession {
+                id: terminal_id,
+                session_id,
+                sender,
+            },
+        });
+
+        assert!(result.is_err());
+        assert!(!manager.terminals.contains_key(&terminal_id));
+        assert_eq!(
+            manager
+                .sessions
+                .get(&session_id)
+                .and_then(|s| s.terminal_id),
+            None
+        );
+    }
+
+    #[test]
+    fn test_send_terminal_data_fails_fast_when_queue_is_full() {
+        let mut manager = DefaultConnectionManager::new();
+        let session_id = Uuid::new_v4();
+        let terminal_id = Uuid::new_v4();
+        let (sender, _receiver) = mpsc::channel(1);
+        sender
+            .try_send(TerminalCommand::Data(vec![1]))
+            .expect("failed to seed queue");
+        manager.terminals.insert(
+            terminal_id,
+            TerminalSession {
+                id: terminal_id,
+                session_id,
+                sender,
+            },
+        );
+
+        let result = manager.send_terminal_data(&session_id, "queued");
+
+        assert!(
+            matches!(result, Err(ConnectionError::ConnectionFailed(message)) if message.contains("queue is full"))
+        );
+    }
+
+    #[test]
+    fn test_finish_connect_failure_removes_connecting_session() {
+        let mut manager = DefaultConnectionManager::new();
+        let session_id = Uuid::new_v4();
+        manager.sessions.insert(
+            session_id,
+            SessionInfo {
+                id: session_id,
+                connection_id: Uuid::new_v4(),
+                status: ConnectionStatus::Connecting,
+                terminal_id: None,
+                created_at: Utc::now(),
+                last_active: Utc::now(),
+            },
+        );
+
+        manager.finish_connect_failure(session_id);
+
+        assert!(!manager.sessions.contains_key(&session_id));
+    }
+
+    #[test]
+    fn test_disconnect_removes_session_entry() {
+        let mut manager = DefaultConnectionManager::new();
+        let session_id = Uuid::new_v4();
+        manager.sessions.insert(
+            session_id,
+            SessionInfo {
+                id: session_id,
+                connection_id: Uuid::new_v4(),
+                status: ConnectionStatus::Connected,
+                terminal_id: None,
+                created_at: Utc::now(),
+                last_active: Utc::now(),
+            },
+        );
+
+        assert!(manager.disconnect(&session_id).is_ok());
+        assert!(!manager.sessions.contains_key(&session_id));
     }
 }

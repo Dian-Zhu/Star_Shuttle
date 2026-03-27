@@ -1,5 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 
+const RISK_ORDER = { LOW: 0, MEDIUM: 1, HIGH: 2, CRITICAL: 3 } as const;
+
 // High-risk command patterns for SSH auditing
 const HIGH_RISK_PATTERNS = [
   // Destructive file operations
@@ -99,9 +101,8 @@ export class AuditService {
         descriptions.push(description);
         
         // Update highest risk
-        const riskOrder = { LOW: 0, MEDIUM: 1, HIGH: 2, CRITICAL: 3 } as const;
-        type RiskKey = keyof typeof riskOrder;
-        if (riskOrder[risk as RiskKey] > riskOrder[highestRisk]) {
+        type RiskKey = keyof typeof RISK_ORDER;
+        if (RISK_ORDER[risk as RiskKey] > RISK_ORDER[highestRisk]) {
           highestRisk = risk as 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
         }
       }
@@ -115,8 +116,11 @@ export class AuditService {
   }
 
   shouldPrompt(riskLevel: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'): boolean {
-    const riskOrder = { LOW: 0, MEDIUM: 1, HIGH: 2, CRITICAL: 3 } as const;
-    return riskOrder[riskLevel] >= riskOrder[this.warningThreshold];
+    return RISK_ORDER[riskLevel] >= RISK_ORDER[this.warningThreshold];
+  }
+
+  requiresConfirmation(riskLevel: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'): boolean {
+    return RISK_ORDER[riskLevel] >= RISK_ORDER.HIGH;
   }
 
   createEvent(params: {
@@ -228,8 +232,7 @@ export class AuditService {
    */
   shouldBlock(command: string): boolean {
     const event = this.analyzeCommand(command);
-    const riskOrder = { LOW: 0, MEDIUM: 1, HIGH: 2, CRITICAL: 3 };
-    return riskOrder[event.riskLevel] >= riskOrder[this.warningThreshold];
+    return RISK_ORDER[event.riskLevel] >= RISK_ORDER[this.warningThreshold];
   }
 }
 

@@ -1,10 +1,10 @@
 use anyhow::anyhow;
-use dirs::home_dir;
+use dirs::{data_local_dir, home_dir};
 use log::{debug, info};
 use russh_keys::key::PublicKey;
 use russh_keys::PublicKeyBase64;
 use std::collections::HashMap;
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, Write};
 use std::path::Path;
 
@@ -24,13 +24,7 @@ pub struct KnownHostsManager {
 impl KnownHostsManager {
     /// Create a new KnownHostsManager instance
     pub fn new() -> Result<Self, anyhow::Error> {
-        // Get the default known_hosts path
-        let known_hosts_path = home_dir()
-            .ok_or_else(|| anyhow!("Failed to get home directory"))?
-            .join(".ssh")
-            .join("known_hosts")
-            .to_string_lossy()
-            .to_string();
+        let known_hosts_path = storage_path()?;
 
         info!("Using known_hosts file at: {}", known_hosts_path);
 
@@ -104,10 +98,19 @@ impl KnownHostsManager {
         // Create parent directory if it doesn't exist
         if let Some(parent) = Path::new(&self.known_hosts_path).parent() {
             fs::create_dir_all(parent)?;
+            ensure_private_dir_permissions(parent)?;
         }
 
         // Open file for writing
-        let mut file = File::create(&self.known_hosts_path)?;
+        let mut options = OpenOptions::new();
+        options.create(true).write(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&self.known_hosts_path)?;
+        ensure_private_file_permissions(Path::new(&self.known_hosts_path))?;
 
         // Write each host and its keys to the file
         for (host, keys) in &self.known_hosts {
@@ -187,6 +190,10 @@ impl KnownHostsManager {
         key_base64: String,
         replace: bool,
     ) -> Result<(), anyhow::Error> {
+        validate_host_component("host", host)?;
+        validate_token_component("key_type", &key_type)?;
+        validate_token_component("key_base64", &key_base64)?;
+
         let host_pattern = format!("[{}]:{}", host, port);
 
         if replace {
@@ -216,16 +223,16 @@ impl KnownHostsManager {
     pub fn remove_host_key(&mut self, host: &str) -> Result<(), anyhow::Error> {
         info!("Removing host: {}", host);
 
-        // Remove all host patterns for this host
-        let host_patterns = [
-            host.to_string(),
-            format!("[{}]:*", host), // Remove all port variants
-        ];
+        let host_patterns: Vec<String> = self
+            .known_hosts
+            .keys()
+            .filter(|pattern| host_pattern_matches_host(pattern, host))
+            .cloned()
+            .collect();
 
         for host_pattern in host_patterns {
-            if self.known_hosts.remove(&host_pattern).is_some() {
-                info!("Successfully removed host pattern: {}", host_pattern);
-            }
+            self.known_hosts.remove(&host_pattern);
+            info!("Successfully removed host pattern: {}", host_pattern);
         }
 
         // Save changes to file
@@ -249,6 +256,230 @@ impl KnownHostsManager {
     }
 }
 
+fn storage_path() -> Result<String, anyhow::Error> {
+    #[cfg(test)]
+    if let Ok(path) = std::env::var("STAR_SHUTTLE_KNOWN_HOSTS_PATH") {
+        return Ok(path);
+    }
+
+    let base_dir = data_local_dir().or_else(|| {
+        home_dir().map(|mut path| {
+            path.push(".local");
+            path.push("share");
+            path
+        })
+    });
+
+    let path = base_dir
+        .ok_or_else(|| anyhow!("Failed to determine application data directory"))?
+        .join("star_shuttle")
+        .join("ssh")
+        .join("known_hosts");
+
+    Ok(path.to_string_lossy().to_string())
+}
+
+fn ensure_private_dir_permissions(path: &Path) -> Result<(), anyhow::Error> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
+}
+
+fn ensure_private_file_permissions(path: &Path) -> Result<(), anyhow::Error> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
+}
+
+fn validate_host_component(name: &str, value: &str) -> Result<(), anyhow::Error> {
+    if value.is_empty() {
+        return Err(anyhow!("{name} cannot be empty"));
+    }
+
+    if value.chars().any(char::is_whitespace) || value.contains('[') || value.contains(']') {
+        return Err(anyhow!("{name} contains invalid characters"));
+    }
+
+    Ok(())
+}
+
+fn validate_token_component(name: &str, value: &str) -> Result<(), anyhow::Error> {
+    if value.is_empty() {
+        return Err(anyhow!("{name} cannot be empty"));
+    }
+
+    if value.chars().any(char::is_whitespace) {
+        return Err(anyhow!("{name} contains invalid whitespace"));
+    }
+
+    Ok(())
+}
+
+fn host_pattern_matches_host(pattern: &str, host: &str) -> bool {
+    pattern == host
+        || pattern
+            .strip_prefix('[')
+            .and_then(|rest| rest.split_once(']'))
+            .is_some_and(|(pattern_host, remainder)| pattern_host == host && remainder.starts_with(':'))
+}
+
 fn public_key_parts(key: &PublicKey) -> Result<(String, String), anyhow::Error> {
     Ok((key.name().to_string(), key.public_key_base64()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn temp_known_hosts_path() -> std::path::PathBuf {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time went backwards")
+            .as_nanos();
+        std::env::temp_dir()
+            .join(format!("star-shuttle-known-hosts-test-{}", suffix))
+            .join("known_hosts")
+    }
+
+    #[test]
+    fn uses_app_private_store_path_override() {
+        let _guard = env_lock().lock().expect("env lock should be available");
+        let path = temp_known_hosts_path();
+        std::env::set_var(
+            "STAR_SHUTTLE_KNOWN_HOSTS_PATH",
+            path.to_string_lossy().to_string(),
+        );
+        let manager = KnownHostsManager::new().expect("manager should initialize");
+        assert_eq!(manager.known_hosts_path, path.to_string_lossy());
+        std::env::remove_var("STAR_SHUTTLE_KNOWN_HOSTS_PATH");
+    }
+
+    #[test]
+    fn saves_host_keys_to_private_store() {
+        let _guard = env_lock().lock().expect("env lock should be available");
+        let path = temp_known_hosts_path();
+        if let Some(parent) = path.parent() {
+            let _ = fs::remove_dir_all(parent);
+        }
+
+        std::env::set_var(
+            "STAR_SHUTTLE_KNOWN_HOSTS_PATH",
+            path.to_string_lossy().to_string(),
+        );
+
+        let mut manager = KnownHostsManager::new().expect("manager should initialize");
+        manager
+            .upsert_host_key_parts(
+                "example.com",
+                22,
+                "ssh-ed25519".to_string(),
+                "AAAAC3NzaC1lZDI1NTE5AAAAIBASE64".to_string(),
+                false,
+            )
+            .expect("save should succeed");
+
+        let saved = fs::read_to_string(&path).expect("saved known_hosts should exist");
+        assert!(saved.contains("[example.com]:22 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBASE64"));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let file_mode = fs::metadata(&path)
+                .expect("metadata should exist")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(file_mode, 0o600);
+
+            let dir_mode = fs::metadata(path.parent().expect("path should have parent"))
+                .expect("parent metadata should exist")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(dir_mode, 0o700);
+        }
+
+        std::env::remove_var("STAR_SHUTTLE_KNOWN_HOSTS_PATH");
+        if let Some(parent) = path.parent() {
+            let _ = fs::remove_dir_all(parent);
+        }
+    }
+
+    #[test]
+    fn rejects_injected_tokens() {
+        let _guard = env_lock().lock().expect("env lock should be available");
+        let path = temp_known_hosts_path();
+        std::env::set_var(
+            "STAR_SHUTTLE_KNOWN_HOSTS_PATH",
+            path.to_string_lossy().to_string(),
+        );
+
+        let mut manager = KnownHostsManager::new().expect("manager should initialize");
+        let error = manager
+            .upsert_host_key_parts(
+                "example.com",
+                22,
+                "ssh-ed25519\nssh-rsa".to_string(),
+                "AAAAC3NzaC1lZDI1NTE5AAAAIBASE64".to_string(),
+                false,
+            )
+            .expect_err("invalid token should be rejected");
+        assert!(error.to_string().contains("invalid whitespace"));
+
+        std::env::remove_var("STAR_SHUTTLE_KNOWN_HOSTS_PATH");
+    }
+
+    #[test]
+    fn remove_host_key_clears_all_port_variants() {
+        let _guard = env_lock().lock().expect("env lock should be available");
+        let path = temp_known_hosts_path();
+        std::env::set_var(
+            "STAR_SHUTTLE_KNOWN_HOSTS_PATH",
+            path.to_string_lossy().to_string(),
+        );
+
+        let mut manager = KnownHostsManager::new().expect("manager should initialize");
+        manager
+            .upsert_host_key_parts(
+                "example.com",
+                22,
+                "ssh-ed25519".to_string(),
+                "AAAAC3NzaC1lZDI1NTE5AAAAIBASE64".to_string(),
+                false,
+            )
+            .expect("first save should succeed");
+        manager
+            .upsert_host_key_parts(
+                "example.com",
+                2222,
+                "ssh-ed25519".to_string(),
+                "AAAAC3NzaC1lZDI1NTE5AAAAIBASE65".to_string(),
+                false,
+            )
+            .expect("second save should succeed");
+        manager
+            .known_hosts
+            .insert("example.com".to_string(), Vec::new());
+
+        manager
+            .remove_host_key("example.com")
+            .expect("remove should succeed");
+
+        assert!(manager.known_hosts.is_empty());
+
+        std::env::remove_var("STAR_SHUTTLE_KNOWN_HOSTS_PATH");
+    }
 }

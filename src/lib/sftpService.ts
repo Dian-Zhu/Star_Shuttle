@@ -17,6 +17,19 @@ export class SftpService {
     return data instanceof ArrayBuffer ? new Uint8Array(data) : Uint8Array.from(data);
   }
 
+  private normalizeWriteOptions(
+    options: boolean | { append?: boolean; offset?: number; truncate?: boolean }
+  ): { append: boolean; offset?: number; truncate?: boolean } {
+    if (typeof options === 'boolean') {
+      return { append: options };
+    }
+    return {
+      append: options.append ?? false,
+      offset: options.offset,
+      truncate: options.truncate,
+    };
+  }
+
   async listDirectory(sessionId: string, path: string): Promise<FileEntry[]> {
     const entries = await invoke<BackendFileEntry[]>('sftp_ls', { sessionId, path });
     return entries.map(e => ({
@@ -53,12 +66,20 @@ export class SftpService {
     return this.decodeBinaryPayload(data);
   }
 
-  async writeFile(sessionId: string, path: string, content: Uint8Array, append: boolean = false): Promise<void> {
+  async writeFile(
+    sessionId: string,
+    path: string,
+    content: Uint8Array,
+    options: boolean | { append?: boolean; offset?: number; truncate?: boolean } = false
+  ): Promise<void> {
+    const normalized = this.normalizeWriteOptions(options);
     await invoke('sftp_write', content, {
       headers: {
         'session-id': sessionId,
         path,
-        append: String(append)
+        append: String(normalized.append),
+        ...(normalized.offset !== undefined ? { offset: String(normalized.offset) } : {}),
+        ...(normalized.truncate !== undefined ? { truncate: String(normalized.truncate) } : {}),
       }
     });
   }

@@ -18,6 +18,8 @@
   let fetchVersion = 0;
   let currentSessionId = '';
   let mounted = false;
+  let lastProcCpuSample: { idle: number; total: number } | null = null;
+  const POLL_INTERVAL_MS = 8000;
 
   // Stats
   let stats = {
@@ -148,12 +150,51 @@
       return false;
   }
 
+  function parseProcMeminfo(output: string): boolean {
+      const totalMatch = output.match(/^MemTotal:\s+(\d+)/m);
+      const availableMatch = output.match(/^MemAvailable:\s+(\d+)/m);
+      const freeMatch = output.match(/^MemFree:\s+(\d+)/m);
+      const totalKb = totalMatch ? parseInt(totalMatch[1], 10) : NaN;
+      if (!Number.isFinite(totalKb) || totalKb <= 0) return false;
+
+      const availableKb = availableMatch
+        ? parseInt(availableMatch[1], 10)
+        : (freeMatch ? parseInt(freeMatch[1], 10) : NaN);
+      if (!Number.isFinite(availableKb)) return false;
+
+      const usedKb = Math.max(0, totalKb - availableKb);
+      stats.memTotal = Math.round(totalKb / 1024);
+      stats.memUsed = Math.round(usedKb / 1024);
+      stats.memFree = Math.round(availableKb / 1024);
+      return stats.memTotal > 0;
+  }
+
   // Helper to parse top/cpu
   // %Cpu(s):  0.3 us,  0.2 sy,  0.0 ni, 99.5 id,  0.0 wa,  0.0 hi,  0.0 si,  0.0 st
   function parseCpu(output: string): boolean {
       stats.cpuUsage = 0;
       if (!output.trim()) return false;
       try {
+          const procStatLine = output.trim();
+          if (procStatLine.startsWith('cpu ')) {
+              const parts = procStatLine.split(/\s+/).slice(1).map(part => Number(part));
+              if (parts.length >= 4 && parts.every(part => Number.isFinite(part))) {
+                  const idle = (parts[3] ?? 0) + (parts[4] ?? 0);
+                  const total = parts.reduce((sum, value) => sum + value, 0);
+                  if (lastProcCpuSample) {
+                      const deltaTotal = total - lastProcCpuSample.total;
+                      const deltaIdle = idle - lastProcCpuSample.idle;
+                      if (deltaTotal > 0) {
+                          stats.cpuUsage = Math.max(0, Math.round((1 - deltaIdle / deltaTotal) * 1000) / 10);
+                          lastProcCpuSample = { idle, total };
+                          return true;
+                      }
+                  }
+                  lastProcCpuSample = { idle, total };
+                  return false;
+              }
+          }
+
           // Try to match "id" (idle) percentage
           const match = output.match(/(\d+(?:\.\d+)?)\s*id\b/i) ?? output.match(/(\d+(?:\.\d+)?)%\s*idle\b/i);
           if (match) {
@@ -215,20 +256,25 @@
       const version = ++fetchVersion;
       const requestedSessionId = sessionId;
       try {
-          // Run commands in parallel with per-command fallback to avoid whole-view failure.
-          const [uptimeOut, freeOut, cpuOut, dfOut] = await Promise.all([
-              execMonitorCommand('uptime 2>/dev/null || true'),
-              execMonitorCommand('(free -m 2>/dev/null || vm_stat 2>/dev/null || true)'),
-              execMonitorCommand('((top -bn1 | grep "Cpu(s)") 2>/dev/null || (top -l 1 | grep "CPU usage") 2>/dev/null || true)'),
-              execMonitorCommand('(df -h 2>/dev/null | head -n 6 || true)')
-          ]);
+          const combinedCommand = [
+              '(uptime 2>/dev/null || true)',
+              'echo "---STAR_SHUTTLE_SPLIT---"',
+              '(cat /proc/meminfo 2>/dev/null || free -m 2>/dev/null || vm_stat 2>/dev/null || true)',
+              'echo "---STAR_SHUTTLE_SPLIT---"',
+              '(head -n 1 /proc/stat 2>/dev/null || (top -bn1 | grep "Cpu(s)") 2>/dev/null || (top -l 1 | grep "CPU usage") 2>/dev/null || true)',
+              'echo "---STAR_SHUTTLE_SPLIT---"',
+              '(df -h 2>/dev/null | head -n 6 || true)'
+          ].join('; ');
+          const combinedOutput = await execMonitorCommand(combinedCommand);
+          const parts = combinedOutput.split('---STAR_SHUTTLE_SPLIT---');
+          const [uptimeOut = '', freeOut = '', cpuOut = '', dfOut = ''] = parts;
 
           if (version !== fetchVersion || requestedSessionId !== sessionId) {
             return;
           }
 
           const uptimeOk = parseUptime(uptimeOut);
-          const freeOk = parseFree(freeOut);
+          const freeOk = parseProcMeminfo(freeOut) || parseFree(freeOut);
           const cpuOk = parseCpu(cpuOut);
           const diskOk = parseDf(dfOut);
           const anyMetricAvailable = uptimeOk || freeOk || cpuOk || diskOk;
@@ -264,7 +310,7 @@
       mounted = true;
       currentSessionId = sessionId;
       fetchData();
-      intervalId = setInterval(() => void fetchData(), 3000);
+      intervalId = setInterval(() => void fetchData(), POLL_INTERVAL_MS);
   });
 
   onDestroy(() => {
@@ -283,9 +329,10 @@
       loading = true;
       error = null;
       lastUpdated = null;
+      lastProcCpuSample = null;
       resetStats();
       if (intervalId) clearInterval(intervalId);
-      intervalId = setInterval(() => void fetchData(), 3000);
+      intervalId = setInterval(() => void fetchData(), POLL_INTERVAL_MS);
       void fetchData();
   }
 

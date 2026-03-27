@@ -2,7 +2,6 @@
   import { onMount } from 'svelte';
   import { get } from 'svelte/store';
   import { save } from '@tauri-apps/plugin-dialog';
-  import { writeFile as writeLocalFile } from '@tauri-apps/plugin-fs';
   import { sftpService } from '../../lib/sftpService';
   import { localFsService } from '../../lib/localFsService';
   import { fileClipboard, settings } from '../../lib/store';
@@ -27,7 +26,6 @@
   let contextMenu = { x: 0, y: 0, show: false, file: null as FileEntry | null };
   let fileInput: HTMLInputElement;
   let isDragging = false;
-  let isCrossDragging = false;
 
   let editorOpen = false;
   let editorFile: FileEntry | null = null;
@@ -263,53 +261,6 @@
     }
   }
 
-  async function uploadLocalPathInChunks(
-    localPath: string,
-    remotePath: string,
-    targetSessionId: string
-  ): Promise<void> {
-    const totalSize = await localFsService.getFileSize(localPath);
-    if (totalSize === 0) {
-      try {
-        ensureSessionUnchanged(targetSessionId);
-        await sftpService.writeFile(targetSessionId, remotePath, new Uint8Array(0), false);
-      } catch (e) {
-        await sftpService.scpUpload(targetSessionId, remotePath, new Uint8Array(0));
-      }
-      return;
-    }
-
-    let handle: any = null;
-    let offset = 0;
-    let append = false;
-    try {
-      handle = await localFsService.openFile(localPath);
-      while (offset < totalSize) {
-        ensureSessionUnchanged(targetSessionId);
-        const remaining = totalSize - offset;
-        const chunk = await localFsService.readChunk(handle, Math.min(FILE_TRANSFER_CHUNK_SIZE, remaining));
-        if (chunk.length === 0) break;
-        await sftpService.writeFile(targetSessionId, remotePath, chunk, append);
-        append = true;
-        offset += chunk.length;
-      }
-      if (offset < totalSize) {
-        throw new Error('读取本地文件时提前结束');
-      }
-    } catch (e) {
-      if (totalSize > MAX_IN_MEMORY_FALLBACK_BYTES) {
-        throw new Error(`上传失败：为避免内存占用，已禁用超大文件整块回退（${formatSize(totalSize)}）`);
-      }
-      const content = await localFsService.readFile(localPath);
-      ensureSessionUnchanged(targetSessionId);
-      await sftpService.scpUpload(targetSessionId, remotePath, content);
-    } finally {
-      if (handle) {
-        await localFsService.closeFile(handle);
-      }
-    }
-  }
-
   async function copyRemoteFileInChunks(
     sourceSessionId: string,
     sourcePath: string,
@@ -326,6 +277,58 @@
       append = true;
       offset += chunk.length;
     }
+  }
+
+  async function downloadRemoteFileInChunks(
+    sourceSessionId: string,
+    sourcePath: string,
+    localPath: string
+  ): Promise<void> {
+    let handle: any = null;
+    let offset = 0;
+    try {
+      handle = await localFsService.openWriteFile(localPath, true);
+      while (true) {
+        ensureSessionUnchanged(sourceSessionId);
+        const chunk = await sftpService.readChunk(sourceSessionId, sourcePath, offset, FILE_TRANSFER_CHUNK_SIZE);
+        if (chunk.length === 0) break;
+        await localFsService.writeChunk(handle, chunk);
+        offset += chunk.length;
+      }
+    } finally {
+      if (handle) {
+        await localFsService.closeFile(handle);
+      }
+    }
+  }
+
+  async function readRemoteFileToMemoryInChunks(
+    sourceSessionId: string,
+    sourcePath: string,
+    maxBytes: number
+  ): Promise<Uint8Array> {
+    const chunks: Uint8Array[] = [];
+    let offset = 0;
+    let total = 0;
+    while (true) {
+      ensureSessionUnchanged(sourceSessionId);
+      const chunk = await sftpService.readChunk(sourceSessionId, sourcePath, offset, FILE_TRANSFER_CHUNK_SIZE);
+      if (chunk.length === 0) break;
+      total += chunk.length;
+      if (total > maxBytes) {
+        throw new Error(`文件过大，暂不支持直接编辑（> ${Math.floor(maxBytes / (1024 * 1024))} MB）`);
+      }
+      chunks.push(chunk);
+      offset += chunk.length;
+    }
+
+    const content = new Uint8Array(total);
+    let cursor = 0;
+    for (const chunk of chunks) {
+      content.set(chunk, cursor);
+      cursor += chunk.length;
+    }
+    return content;
   }
 
   function sortFiles(list: FileEntry[]) {
@@ -594,8 +597,11 @@
     }
   }
 
-  function handleDragOver() {
+  function handleDragOver(e: DragEvent) {
     isDragging = true;
+    if (e.dataTransfer) {
+      e.dataTransfer.dropEffect = 'copy';
+    }
   }
 
   function handleDragLeave() {
@@ -606,28 +612,6 @@
     isDragging = false;
     const targetSessionId = sessionId;
     const targetPath = currentPath;
-    const payload = e.dataTransfer?.getData('application/x-starshuttle-file');
-    if (payload) {
-      try {
-        const data = JSON.parse(payload);
-        if (data?.source === 'local' && data?.path && data?.name) {
-          loading = true;
-          try {
-            const remotePath = targetPath === '/' ? `/${data.name}` : `${targetPath}/${data.name}`.replace('//', '/');
-            await uploadLocalPathInChunks(data.path, remotePath, targetSessionId);
-            if (targetSessionId === sessionId) {
-              invalidateCache(targetPath);
-              await loadFiles(targetPath, { force: true });
-            }
-          } finally {
-            loading = false;
-          }
-          return;
-        }
-      } catch {
-        isCrossDragging = false;
-      }
-    }
 
     const items = e.dataTransfer?.files;
     if (!items || items.length === 0) return;
@@ -706,14 +690,6 @@
     loading = true;
     try {
       const targetSessionId = sessionId;
-      let content: Uint8Array;
-      try {
-        content = await sftpService.readFile(targetSessionId, file.path);
-      } catch (e) {
-        content = await sftpService.scpDownload(targetSessionId, file.path);
-      }
-
-      // 使用保存对话框让用户选择保存位置
       const filePath = await save({
         filters: [{
           name: file.name.split('.').pop() || 'All Files',
@@ -726,7 +702,7 @@
         return; // 用户取消了保存
       }
 
-      await writeLocalFile(filePath, content);
+      await downloadRemoteFileInChunks(targetSessionId, file.path, filePath);
 
     } catch (e: any) {
       error = e.toString();
@@ -792,12 +768,8 @@
         
         const destPath = joinPath(destDir, entry.name);
 
-        if (item.source === 'local') {
-          await uploadLocalPathInChunks(entry.path, destPath, targetSessionId);
-        } else {
-          if (!item.sessionId) continue;
-          await copyRemoteFileInChunks(item.sessionId, entry.path, targetSessionId, destPath);
-        }
+        if (!item.sessionId) continue;
+        await copyRemoteFileInChunks(item.sessionId, entry.path, targetSessionId, destPath);
       }
 
       if (targetSessionId === sessionId) {
@@ -991,21 +963,6 @@
     e.dataTransfer?.setDragImage?.(document.createElement('div'), 0, 0);
   }
 
-  function handleDragEnter(e: DragEvent) {
-    const payload = e.dataTransfer?.getData('application/x-starshuttle-file');
-    if (!payload) return;
-    try {
-      const data = JSON.parse(payload);
-      if (data?.source === 'local') isCrossDragging = true;
-    } catch {
-      isCrossDragging = false;
-    }
-  }
-
-  function handleDragLeaveCross() {
-    isCrossDragging = false;
-  }
-
   async function openEditor(file: FileEntry) {
     if (file.isDirectory) {
       handleNavigate(file.path);
@@ -1019,16 +976,12 @@
     editorLoading = true;
     const targetSessionId = sessionId;
     try {
-      let content: Uint8Array;
-      try {
-        content = await sftpService.readFile(targetSessionId, file.path);
-      } catch (e) {
-        content = await sftpService.scpDownload(targetSessionId, file.path);
-      }
-      ensureSessionUnchanged(targetSessionId);
-      if (content.byteLength > 2 * 1024 * 1024) {
+      const maxEditorBytes = 2 * 1024 * 1024;
+      if (file.size > maxEditorBytes) {
         throw new Error('文件过大，暂不支持直接编辑（> 2MB）');
       }
+      const content = await readRemoteFileToMemoryInChunks(targetSessionId, file.path, maxEditorBytes);
+      ensureSessionUnchanged(targetSessionId);
       if (content.includes(0)) {
         throw new Error('疑似二进制文件，暂不支持直接编辑');
       }
@@ -1082,10 +1035,8 @@
   on:contextmenu|preventDefault={(e) => handleContextMenu(e, null)} 
   role="presentation"
   on:dragover|preventDefault={handleDragOver}
-  on:dragenter|preventDefault={handleDragEnter}
   on:dragleave={handleDragLeave}
   on:drop|preventDefault={handleDrop}
-  on:dragleave|self={handleDragLeaveCross}
 >
   {#if editorOpen}
     <div class="fixed inset-0 z-50 flex items-center justify-center" role="presentation">
@@ -1116,11 +1067,6 @@
   {#if isDragging}
     <div class="absolute inset-0 bg-primary-500/20 flex items-center justify-center z-50 pointer-events-none">
       <div class="text-2xl font-bold text-primary-600 dark:text-primary-200">Drop files to upload</div>
-    </div>
-  {/if}
-  {#if isCrossDragging}
-    <div class="absolute inset-0 bg-primary-500/10 flex items-center justify-center z-40 pointer-events-none">
-      <div class="text-lg font-semibold text-primary-600 dark:text-primary-200">拖拽到此处上传到远程</div>
     </div>
   {/if}
   <!-- Toolbar -->

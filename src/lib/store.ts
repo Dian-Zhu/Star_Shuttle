@@ -101,7 +101,7 @@ export interface SplitConfig {
 }
 
 export type FileClipboardItem = {
-  source: 'local' | 'remote';
+  source: 'remote';
   sessionId?: string;
   entries: { path: string; name: string; isDirectory: boolean }[];
   operation: 'copy';

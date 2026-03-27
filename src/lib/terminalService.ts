@@ -26,6 +26,7 @@ import {
   showErrorMessage,
   showSuccessMessage,
 } from './store';
+import { auditService } from './auditService';
 import { terminalPool } from './terminalPool';
 import { TerminalInstance } from './terminalInstance';
 import 'xterm/css/xterm.css';
@@ -247,6 +248,7 @@ type InputSendState = {
 
 const outputWriteStates = new Map<string, OutputWriteState>();
 const inputSendStates = new Map<string, InputSendState>();
+const commandAuditBuffers = new Map<string, string>();
 
 function cleanupBufferedTerminalState(sessionId: string) {
   markTerminalStopped(sessionId);
@@ -267,6 +269,8 @@ function cleanupBufferedTerminalState(sessionId: string) {
     }
     inputSendStates.delete(sessionId);
   }
+
+  commandAuditBuffers.delete(sessionId);
 }
 
 function cleanupTerminalListeners(sessionId: string) {
@@ -602,10 +606,10 @@ async function connectWithKnownHostsPrompt(connection: any): Promise<string> {
         payload.reason ? `Reason: ${payload.reason}` : null,
         '',
         type === 'unknown'
-          ? '是否信任该主机并保存到 known_hosts？'
+          ? '是否信任该主机并保存到应用信任库？'
           : type === 'mismatch'
-            ? '这可能是中间人攻击或服务器重装导致。仍要信任并替换 known_hosts 记录吗？'
-            : 'known_hosts 文件不可用。仍要信任并保存到 known_hosts 吗？'
+            ? '这可能是中间人攻击或服务器重装导致。仍要信任并替换应用信任库记录吗？'
+            : '应用信任库当前不可用。仍要信任并保存吗？'
       ].filter(Boolean);
 
       const confirmed = window.confirm(messageLines.join('\n'));
@@ -1060,6 +1064,104 @@ function sendTerminalDataBuffered(sessionId: string, data: string, immediate: bo
 }
 
 function handleTerminalInputSingle(sessionId: string, data: string) {
+  void handleTerminalInputSingleAsync(sessionId, data);
+}
+
+function extractCommandsForAudit(sessionId: string, data: string): string[] {
+  let buffer = commandAuditBuffers.get(sessionId) ?? '';
+  const commands: string[] = [];
+
+  for (const ch of data) {
+    if (ch === '\r' || ch === '\n') {
+      const command = buffer.trim();
+      if (command) {
+        commands.push(command);
+      }
+      buffer = '';
+      continue;
+    }
+
+    if (ch === '\u007f' || ch === '\b') {
+      buffer = buffer.slice(0, -1);
+      continue;
+    }
+
+    if (ch === '\u0015') {
+      buffer = '';
+      continue;
+    }
+
+    if (ch === '\u0003' || ch === '\u001b') {
+      buffer = '';
+      continue;
+    }
+
+    if (ch >= ' ' || ch === '\t') {
+      buffer += ch;
+    }
+  }
+
+  commandAuditBuffers.set(sessionId, buffer);
+  return commands;
+}
+
+async function auditTerminalCommands(sessionId: string, data: string): Promise<boolean> {
+  const commands = extractCommandsForAudit(sessionId, data);
+  for (const command of commands) {
+    const analysis = auditService.analyzeCommand(command);
+    if (auditService.requiresConfirmation(analysis.riskLevel)) {
+      const confirmed = window.confirm(
+        [
+          `检测到高风险命令: ${command}`,
+          `风险等级: ${analysis.riskLevel}`,
+          `原因: ${analysis.description}`,
+          '',
+          '确认继续执行吗？'
+        ].join('\n')
+      );
+
+      await auditService.recordEvent(
+        auditService.createEvent({
+          command,
+          sessionId,
+          action: confirmed ? 'WARNED' : 'BLOCKED',
+          details: {
+            source: 'terminal-input',
+            riskLevel: analysis.riskLevel,
+            detectedPatterns: analysis.detectedPatterns,
+          },
+        })
+      );
+
+      if (!confirmed) {
+        showErrorMessage(`已阻止高风险命令: ${command}`, 5000);
+        return false;
+      }
+      continue;
+    }
+
+    await auditService.recordEvent(
+      auditService.createEvent({
+        command,
+        sessionId,
+        action: 'ALLOWED',
+        details: {
+          source: 'terminal-input',
+          riskLevel: analysis.riskLevel,
+          detectedPatterns: analysis.detectedPatterns,
+        },
+      })
+    );
+  }
+
+  return true;
+}
+
+async function handleTerminalInputSingleAsync(sessionId: string, data: string) {
+  if (!(await auditTerminalCommands(sessionId, data))) {
+    return;
+  }
+
   const hasControl =
     data.includes('\r') ||
     data.includes('\n') ||
@@ -1170,19 +1272,7 @@ export async function closeSplitSession(sessionId: string) {
     suppressReconnect(sessionId);
     await closeDetachedTerminal(sessionId);
     await invoke('disconnect', { sessionId });
-    
-    // Clean up listeners
-    const inputListener = inputListeners.get(sessionId);
-    if (inputListener) {
-      inputListener.dispose();
-      inputListeners.delete(sessionId);
-    }
-    
-    const unlisten = outputListeners.get(sessionId);
-    if (unlisten) {
-      unlisten();
-      outputListeners.delete(sessionId);
-    }
+    cleanupTerminalListeners(sessionId);
     
     log.info('TermCleanup', 'Split session closed', { sessionId });
   } catch (e) {
@@ -1365,10 +1455,6 @@ export async function restoreActiveSessions() {
   });
 
   if (entries.length === 0) return;
-
-  for (const entry of entries) {
-    await closeBackendTerminalsBestEffort(entry.sessionId);
-  }
 
   activeTerminals.set(entries);
 
@@ -1569,12 +1655,15 @@ export async function setupTerminalListeners(sessionId: string, term: Terminal) 
             } else {
                 void term.write('\r\n\x1b[36mPress R to reconnect...\x1b[0m\r\n');
 
+                clearReconnectKeyListener(sessionId);
                 const disposable = term.onData(async (data: string) => {
                     if (data === 'r' || data === 'R') {
                         disposable.dispose();
+                        reconnectKeyListeners.delete(sessionId);
                         await reconnectTerminal(sessionId);
                     }
                 });
+                reconnectKeyListeners.set(sessionId, disposable);
             }
         }
     });
@@ -1688,9 +1777,6 @@ async function reconnectTerminalInternal(oldSessionId: string): Promise<boolean>
   const terminalEntry = terminals.find(t => t.sessionId === oldSessionId);
   if (!terminalEntry) return false;
   const term = terminalEntry.terminal;
-  
-  cleanupBufferedTerminalState(oldSessionId);
-  cleanupTerminalListeners(oldSessionId);
 
   void term.write('\r\n\x1b[33mReconnecting...\x1b[0m\r\n');
 
@@ -1778,6 +1864,8 @@ async function reconnectTerminalInternal(oldSessionId: string): Promise<boolean>
       reconnectAttempts.delete(oldSessionId);
       clearReconnectTimer(oldSessionId);
       clearReconnectKeyListener(oldSessionId);
+      cleanupBufferedTerminalState(oldSessionId);
+      cleanupTerminalListeners(oldSessionId);
 
       try {
         await invoke('close_terminal', { sessionId: oldSessionId });

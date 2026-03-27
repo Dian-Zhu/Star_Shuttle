@@ -45,6 +45,10 @@ enum CachedSftpSession {
 
 type SessionGenerationMap = Arc<StdMutex<HashMap<Uuid, u64>>>;
 
+const MAX_SFTP_READ_BYTES: usize = 64 * 1024 * 1024;
+const MAX_SFTP_CHUNK_BYTES: usize = 4 * 1024 * 1024;
+const STREAM_READ_CHUNK_SIZE: usize = 64 * 1024;
+
 #[derive(Clone)]
 struct SftpSessionLease {
     session_id: Uuid,
@@ -61,6 +65,13 @@ fn is_generation_valid(
     let guard = generations.lock().map_err(|e| e.to_string())?;
     let current = guard.get(&session_id).copied().unwrap_or(0);
     Ok(current == generation)
+}
+
+fn ensure_max_bytes(size: usize, limit: usize, label: &str) -> Result<(), String> {
+    if size > limit {
+        return Err(format!("{} exceeds limit of {} bytes", label, limit));
+    }
+    Ok(())
 }
 
 impl SftpSessionLease {
@@ -251,6 +262,7 @@ impl SftpManager {
         loop {
             enum AcquireAction {
                 Wait(Arc<Notify>),
+                Retry,
                 Create {
                     notify: Arc<Notify>,
                     generation: u64,
@@ -264,12 +276,18 @@ impl SftpManager {
                         session,
                         generation,
                     }) => {
-                        return Ok(SftpSessionLease {
-                            session_id,
-                            generation: *generation,
-                            session: session.clone(),
-                            generations: self.generations.clone(),
-                        })
+                        if !self.is_session_still_connected(session_id)? {
+                            sessions.remove(&session_id);
+                            let _ = self.bump_generation(session_id);
+                            AcquireAction::Retry
+                        } else {
+                            return Ok(SftpSessionLease {
+                                session_id,
+                                generation: *generation,
+                                session: session.clone(),
+                                generations: self.generations.clone(),
+                            });
+                        }
                     }
                     Some(CachedSftpSession::Pending { notify, .. }) => {
                         AcquireAction::Wait(notify.clone())
@@ -294,6 +312,7 @@ impl SftpManager {
                     notify.notified().await;
                     continue;
                 }
+                AcquireAction::Retry => continue,
                 AcquireAction::Create { notify, generation } => (notify, generation),
             };
 
@@ -625,9 +644,21 @@ impl SftpManager {
 
         let mut file = session.open(path).await.map_err(|e| e.to_string())?;
         let mut contents = Vec::new();
-        file.read_to_end(&mut contents)
-            .await
-            .map_err(|e| e.to_string())?;
+        let mut buf = vec![0u8; STREAM_READ_CHUNK_SIZE];
+        loop {
+            let n = file.read(&mut buf).await.map_err(|e| e.to_string())?;
+            if n == 0 {
+                break;
+            }
+
+            ensure_max_bytes(
+                contents.len().saturating_add(n),
+                MAX_SFTP_READ_BYTES,
+                "SFTP read",
+            )?;
+            contents.extend_from_slice(&buf[..n]);
+            session_lease.ensure_valid()?;
+        }
 
         Ok(contents)
     }
@@ -638,13 +669,31 @@ impl SftpManager {
         path: String,
         content: Vec<u8>,
         append: bool,
+        offset: Option<u64>,
+        truncate: bool,
     ) -> Result<(), String> {
         let session_lease = self.get_session(session_id).await?;
         session_lease.ensure_valid()?;
         let session = session_lease.lock().await;
         session_lease.ensure_valid()?;
 
-        let mut file = if append {
+        let mut file = if let Some(offset) = offset {
+            use russh_sftp::protocol::OpenFlags;
+            let mut file = if truncate && offset == 0 {
+                session.create(&path).await.map_err(|e| e.to_string())?
+            } else {
+                session
+                    .open_with_flags(&path, OpenFlags::WRITE | OpenFlags::CREATE)
+                    .await
+                    .map_err(|e| e.to_string())?
+            };
+            if offset > 0 {
+                file.seek(SeekFrom::Start(offset))
+                    .await
+                    .map_err(|e| format!("Failed to seek remote file to {}: {}", offset, e))?;
+            }
+            file
+        } else if append {
             use russh_sftp::protocol::OpenFlags;
             session
                 .open_with_flags(
@@ -760,6 +809,7 @@ impl SftpManager {
                     let size_str = parts.next().ok_or("SCP missing size")?;
                     let _name = parts.next().ok_or("SCP missing filename")?;
                     let size = size_str.parse::<usize>().map_err(|e| e.to_string())?;
+                    ensure_max_bytes(size, MAX_SFTP_READ_BYTES, "SCP download")?;
 
                     io.write_all(&[0]).await?;
                     let data = io.read_exact(size).await?;
@@ -863,6 +913,7 @@ pub async fn sftp_read_chunk(
     let path = header_string(&request, "path")?;
     let offset = header_u64(&request, "offset")?;
     let length = header_u64(&request, "length")?;
+    ensure_max_bytes(length as usize, MAX_SFTP_CHUNK_BYTES, "SFTP chunk read")?;
 
     let session_lease = state.get_session(session_id).await?;
     session_lease.ensure_valid()?;
@@ -875,7 +926,9 @@ pub async fn sftp_read_chunk(
 
     // Seek to offset (if supported)
     if offset > 0 {
-        let _ = file.seek(SeekFrom::Start(offset)).await;
+        file.seek(SeekFrom::Start(offset))
+            .await
+            .map_err(|e| format!("Failed to seek remote file to {}: {}", offset, e))?;
     }
 
     let mut buf = vec![0u8; length as usize];
@@ -894,6 +947,17 @@ pub async fn sftp_write(
     ensure_app_unlocked_runtime(db.inner(), app_lock_state.inner())?;
     let session_id = header_uuid(&request)?;
     let path = header_string(&request, "path")?;
+    let offset = request
+        .headers()
+        .get("offset")
+        .and_then(|value: &tauri::http::HeaderValue| value.to_str().ok())
+        .and_then(|value: &str| value.parse::<u64>().ok());
+    let truncate = request
+        .headers()
+        .get("truncate")
+        .and_then(|value: &tauri::http::HeaderValue| value.to_str().ok())
+        .and_then(|value: &str| value.parse::<bool>().ok())
+        .unwrap_or(false);
     let append = request
         .headers()
         .get("append")
@@ -901,7 +965,9 @@ pub async fn sftp_write(
         .and_then(|value: &str| value.parse::<bool>().ok())
         .unwrap_or(false);
     let content = body_bytes(&request)?;
-    state.write_file(session_id, path, content, append).await
+    state
+        .write_file(session_id, path, content, append, offset, truncate)
+        .await
 }
 
 #[tauri::command]
@@ -1018,5 +1084,16 @@ mod tests {
         });
 
         assert_eq!(sftp_manager.current_generation(session_id).unwrap(), 1);
+    }
+
+    #[test]
+    fn test_ensure_max_bytes_allows_values_within_limit() {
+        assert!(ensure_max_bytes(1024, 2048, "read").is_ok());
+    }
+
+    #[test]
+    fn test_ensure_max_bytes_rejects_values_above_limit() {
+        let error = ensure_max_bytes(4097, 4096, "chunk").expect_err("expected limit error");
+        assert!(error.contains("chunk exceeds limit"));
     }
 }

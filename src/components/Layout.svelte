@@ -41,6 +41,18 @@
   let keyboardInteractiveSubmitting = false;
   let unlistenKeyboardInteractive: null | (() => void) = null;
 
+  async function applyAppLock() {
+    try {
+      const enabled = await invoke<boolean>('is_app_lock_enabled');
+      if (!enabled) return;
+
+      await invoke('lock_app');
+      isLocked.set(true);
+    } catch (e) {
+      console.error('Failed to lock app', e);
+    }
+  }
+
   function showNextKeyboardInteractive() {
     if (keyboardInteractiveActive) return;
     const next = keyboardInteractiveQueue.shift() ?? null;
@@ -230,15 +242,7 @@
   async function handleWindowBlur() {
     // Only lock if enabled and not already locked
     if ($settings.security.lockOnBlur && !$isLocked) {
-         // Check if app lock is actually enabled on backend
-         try {
-             const enabled = await invoke('is_app_lock_enabled');
-             if (enabled) {
-                 isLocked.set(true);
-             }
-         } catch (e) {
-             console.error('Failed to check lock status on blur', e);
-         }
+         await applyAppLock();
     }
   }
 
@@ -248,14 +252,8 @@
       const minutes = $settings.security.autoLockMinutes;
       if (minutes > 0 && !$isLocked) {
           idleTimer = setTimeout(async () => {
-               // Double check lock status
-               try {
-                   const enabled = await invoke('is_app_lock_enabled');
-                   if (enabled && !$isLocked) {
-                       isLocked.set(true);
-                   }
-               } catch (e) {
-                   console.error('Failed to check lock status in idle timer', e);
+               if (!$isLocked) {
+                   await applyAppLock();
                }
           }, minutes * 60 * 1000);
       }

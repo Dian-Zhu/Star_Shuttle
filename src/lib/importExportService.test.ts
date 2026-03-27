@@ -16,9 +16,11 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
   open: mocks.open,
 }));
 
-vi.mock('@tauri-apps/plugin-fs', () => ({
-  writeTextFile: mocks.writeTextFile,
-  readTextFile: mocks.readTextFile,
+vi.mock('./localFsService', () => ({
+  localFsService: {
+    writeTextFile: mocks.writeTextFile,
+    readTextFile: mocks.readTextFile,
+  },
 }));
 
 vi.mock('@tauri-apps/api/core', () => ({
