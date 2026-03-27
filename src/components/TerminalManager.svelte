@@ -356,7 +356,7 @@
   </div>
 
   <!-- Status Bar -->
-  <div class="flex items-center justify-between px-4 py-1.5 bg-app-status-bar border-t border-app-border text-xs text-app-text-secondary">
+  <div class="flex items-center justify-between px-4 py-1.5 bg-app-bg border-t border-app-border text-xs text-app-text-secondary">
     <div class="flex items-center gap-4">
       <div class="flex items-center gap-1">
         <svg class="w-3.5 h-3.5 text-primary-500 dark:text-primary-400" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">

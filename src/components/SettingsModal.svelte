@@ -10,6 +10,7 @@
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { applyScrollbarColor } from '../lib/terminalService';
+  import { getShortcutFromKeyboardEvent, normalizeShortcut } from '../lib/shortcuts';
 
   let activeTab = 'terminal';
 
@@ -34,6 +35,15 @@
 
   let shortcutDrafts: AppSettings['shortcuts'] = { ...$settings.shortcuts };
   let shortcutErrors: Partial<Record<ShortcutKey, string>> = {};
+  let shortcutSnapshot = '';
+
+  $: {
+    const nextSnapshot = JSON.stringify($settings.shortcuts);
+    if (nextSnapshot !== shortcutSnapshot) {
+      shortcutSnapshot = nextSnapshot;
+      shortcutDrafts = { ...$settings.shortcuts };
+    }
+  }
 
   const shortcutLabels: Record<ShortcutKey, string> = {
     commandPalette: '命令面板',
@@ -201,50 +211,6 @@
     }));
   }
 
-  function normalizeShortcut(raw: string): { value: string } | { error: string } {
-    const trimmed = raw.trim();
-    if (!trimmed) return { value: '' };
-    const parts = trimmed.split('+').map(p => p.trim()).filter(Boolean);
-    if (parts.length === 0) return { value: '' };
-    if (parts.length === 1) return { value: formatShortcut([], parts[0]) };
-
-    const key = parts[parts.length - 1];
-    const modifierParts = parts.slice(0, -1);
-
-    const modifiers = new Set<'Ctrl' | 'Shift' | 'Alt' | 'Meta'>();
-    for (const m of modifierParts) {
-      const lower = m.toLowerCase();
-      if (lower === 'ctrl' || lower === 'control') modifiers.add('Ctrl');
-      else if (lower === 'shift') modifiers.add('Shift');
-      else if (lower === 'alt' || lower === 'option') modifiers.add('Alt');
-      else if (lower === 'meta' || lower === 'cmd' || lower === 'command') modifiers.add('Meta');
-      else return { error: '格式错误：只允许修饰键 + 按键' };
-    }
-
-    return { value: formatShortcut(Array.from(modifiers), key) };
-  }
-
-  function formatShortcut(modifiers: Array<'Ctrl' | 'Shift' | 'Alt' | 'Meta'>, keyRaw: string): string {
-    const order: Array<'Ctrl' | 'Shift' | 'Alt' | 'Meta'> = ['Ctrl', 'Shift', 'Alt', 'Meta'];
-    const unique = Array.from(new Set(modifiers));
-    const ordered = order.filter(m => unique.includes(m));
-
-    const key = normalizeKeyToken(keyRaw);
-    if (!ordered.length) return key;
-    return `${ordered.join('+')}+${key}`;
-  }
-
-  function normalizeKeyToken(keyRaw: string): string {
-    const t = keyRaw.trim();
-    if (!t) return '';
-    if (t.length === 1) return t.toUpperCase();
-    const lower = t.toLowerCase();
-    if (lower === 'esc') return 'Escape';
-    if (lower === 'return') return 'Enter';
-    if (lower === 'del') return 'Delete';
-    return t;
-  }
-
   function computeShortcutConflict(
     key: ShortcutKey,
     normalizedValue: string
@@ -279,6 +245,27 @@
 
     shortcutDrafts = { ...shortcutDrafts, [key]: normalized.value };
     updateShortcutSetting(key, normalized.value);
+  }
+
+  function handleShortcutKeydown(key: ShortcutKey, event: KeyboardEvent) {
+    if (event.key === 'Tab') return;
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (event.key === 'Escape' && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
+      const nextErrors = { ...shortcutErrors };
+      delete nextErrors[key];
+      shortcutErrors = nextErrors;
+      shortcutDrafts = { ...shortcutDrafts, [key]: '' };
+      updateShortcutSetting(key, '');
+      return;
+    }
+
+    const captured = getShortcutFromKeyboardEvent(event);
+    if (!captured) return;
+
+    handleShortcutInput(key, captured);
   }
 
   async function checkLockStatus() {
@@ -969,8 +956,9 @@
                   <div class="space-y-1">
                     <input
                       type="text"
+                      readonly
                       value={shortcutDrafts.commandPalette}
-                      on:input={(e) => handleShortcutInput('commandPalette', (e.target as HTMLInputElement).value)}
+                      on:keydown={(e) => handleShortcutKeydown('commandPalette', e)}
                       class="bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text text-sm font-mono focus:border-primary-500 outline-none w-full"
                     />
                     {#if shortcutErrors.commandPalette}
@@ -987,8 +975,9 @@
                   <div class="space-y-1">
                     <input
                       type="text"
+                      readonly
                       value={shortcutDrafts.toggleSidebar}
-                      on:input={(e) => handleShortcutInput('toggleSidebar', (e.target as HTMLInputElement).value)}
+                      on:keydown={(e) => handleShortcutKeydown('toggleSidebar', e)}
                       class="bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text text-sm font-mono focus:border-primary-500 outline-none w-full"
                     />
                     {#if shortcutErrors.toggleSidebar}
@@ -1005,8 +994,9 @@
                   <div class="space-y-1">
                     <input
                       type="text"
+                      readonly
                       value={shortcutDrafts.toggleFileBrowser}
-                      on:input={(e) => handleShortcutInput('toggleFileBrowser', (e.target as HTMLInputElement).value)}
+                      on:keydown={(e) => handleShortcutKeydown('toggleFileBrowser', e)}
                       class="bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text text-sm font-mono focus:border-primary-500 outline-none w-full"
                     />
                     {#if shortcutErrors.toggleFileBrowser}
@@ -1023,8 +1013,9 @@
                   <div class="space-y-1">
                     <input
                       type="text"
+                      readonly
                       value={shortcutDrafts.newConnection}
-                      on:input={(e) => handleShortcutInput('newConnection', (e.target as HTMLInputElement).value)}
+                      on:keydown={(e) => handleShortcutKeydown('newConnection', e)}
                       class="bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text text-sm font-mono focus:border-primary-500 outline-none w-full"
                     />
                     {#if shortcutErrors.newConnection}
@@ -1041,8 +1032,9 @@
                   <div class="space-y-1">
                     <input
                       type="text"
+                      readonly
                       value={shortcutDrafts.settings}
-                      on:input={(e) => handleShortcutInput('settings', (e.target as HTMLInputElement).value)}
+                      on:keydown={(e) => handleShortcutKeydown('settings', e)}
                       class="bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text text-sm font-mono focus:border-primary-500 outline-none w-full"
                     />
                     {#if shortcutErrors.settings}
@@ -1059,8 +1051,9 @@
                   <div class="space-y-1">
                     <input
                       type="text"
+                      readonly
                       value={shortcutDrafts.closeTerminal}
-                      on:input={(e) => handleShortcutInput('closeTerminal', (e.target as HTMLInputElement).value)}
+                      on:keydown={(e) => handleShortcutKeydown('closeTerminal', e)}
                       class="bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text text-sm font-mono focus:border-primary-500 outline-none w-full"
                     />
                     {#if shortcutErrors.closeTerminal}
@@ -1077,8 +1070,9 @@
                   <div class="space-y-1">
                     <input
                       type="text"
+                      readonly
                       value={shortcutDrafts.prevTab}
-                      on:input={(e) => handleShortcutInput('prevTab', (e.target as HTMLInputElement).value)}
+                      on:keydown={(e) => handleShortcutKeydown('prevTab', e)}
                       class="bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text text-sm font-mono focus:border-primary-500 outline-none w-full"
                     />
                     {#if shortcutErrors.prevTab}
@@ -1095,8 +1089,9 @@
                   <div class="space-y-1">
                     <input
                       type="text"
+                      readonly
                       value={shortcutDrafts.nextTab}
-                      on:input={(e) => handleShortcutInput('nextTab', (e.target as HTMLInputElement).value)}
+                      on:keydown={(e) => handleShortcutKeydown('nextTab', e)}
                       class="bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text text-sm font-mono focus:border-primary-500 outline-none w-full"
                     />
                     {#if shortcutErrors.nextTab}
@@ -1113,8 +1108,9 @@
                   <div class="space-y-1">
                     <input
                       type="text"
+                      readonly
                       value={shortcutDrafts.copy}
-                      on:input={(e) => handleShortcutInput('copy', (e.target as HTMLInputElement).value)}
+                      on:keydown={(e) => handleShortcutKeydown('copy', e)}
                       class="bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text text-sm font-mono focus:border-primary-500 outline-none w-full"
                     />
                     {#if shortcutErrors.copy}
@@ -1131,8 +1127,9 @@
                   <div class="space-y-1">
                     <input
                       type="text"
+                      readonly
                       value={shortcutDrafts.paste}
-                      on:input={(e) => handleShortcutInput('paste', (e.target as HTMLInputElement).value)}
+                      on:keydown={(e) => handleShortcutKeydown('paste', e)}
                       class="bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text text-sm font-mono focus:border-primary-500 outline-none w-full"
                     />
                     {#if shortcutErrors.paste}
@@ -1149,8 +1146,9 @@
                   <div class="space-y-1">
                     <input
                       type="text"
+                      readonly
                       value={shortcutDrafts.fileBrowserRefresh}
-                      on:input={(e) => handleShortcutInput('fileBrowserRefresh', (e.target as HTMLInputElement).value)}
+                      on:keydown={(e) => handleShortcutKeydown('fileBrowserRefresh', e)}
                       class="bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text text-sm font-mono focus:border-primary-500 outline-none w-full"
                     />
                     {#if shortcutErrors.fileBrowserRefresh}
@@ -1167,8 +1165,9 @@
                   <div class="space-y-1">
                     <input
                       type="text"
+                      readonly
                       value={shortcutDrafts.fileBrowserNewFolder}
-                      on:input={(e) => handleShortcutInput('fileBrowserNewFolder', (e.target as HTMLInputElement).value)}
+                      on:keydown={(e) => handleShortcutKeydown('fileBrowserNewFolder', e)}
                       class="bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text text-sm font-mono focus:border-primary-500 outline-none w-full"
                     />
                     {#if shortcutErrors.fileBrowserNewFolder}
@@ -1185,8 +1184,9 @@
                   <div class="space-y-1">
                     <input
                       type="text"
+                      readonly
                       value={shortcutDrafts.fileBrowserNewFile}
-                      on:input={(e) => handleShortcutInput('fileBrowserNewFile', (e.target as HTMLInputElement).value)}
+                      on:keydown={(e) => handleShortcutKeydown('fileBrowserNewFile', e)}
                       class="bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text text-sm font-mono focus:border-primary-500 outline-none w-full"
                     />
                     {#if shortcutErrors.fileBrowserNewFile}
@@ -1203,8 +1203,9 @@
                   <div class="space-y-1">
                     <input
                       type="text"
+                      readonly
                       value={shortcutDrafts.fileBrowserRename}
-                      on:input={(e) => handleShortcutInput('fileBrowserRename', (e.target as HTMLInputElement).value)}
+                      on:keydown={(e) => handleShortcutKeydown('fileBrowserRename', e)}
                       class="bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text text-sm font-mono focus:border-primary-500 outline-none w-full"
                     />
                     {#if shortcutErrors.fileBrowserRename}
@@ -1221,8 +1222,9 @@
                   <div class="space-y-1">
                     <input
                       type="text"
+                      readonly
                       value={shortcutDrafts.fileBrowserDelete}
-                      on:input={(e) => handleShortcutInput('fileBrowserDelete', (e.target as HTMLInputElement).value)}
+                      on:keydown={(e) => handleShortcutKeydown('fileBrowserDelete', e)}
                       class="bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text text-sm font-mono focus:border-primary-500 outline-none w-full"
                     />
                     {#if shortcutErrors.fileBrowserDelete}
@@ -1239,8 +1241,9 @@
                   <div class="space-y-1">
                     <input
                       type="text"
+                      readonly
                       value={shortcutDrafts.fileBrowserSelectAll}
-                      on:input={(e) => handleShortcutInput('fileBrowserSelectAll', (e.target as HTMLInputElement).value)}
+                      on:keydown={(e) => handleShortcutKeydown('fileBrowserSelectAll', e)}
                       class="bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text text-sm font-mono focus:border-primary-500 outline-none w-full"
                     />
                     {#if shortcutErrors.fileBrowserSelectAll}
@@ -1257,8 +1260,9 @@
                   <div class="space-y-1">
                     <input
                       type="text"
+                      readonly
                       value={shortcutDrafts.fileBrowserOpen}
-                      on:input={(e) => handleShortcutInput('fileBrowserOpen', (e.target as HTMLInputElement).value)}
+                      on:keydown={(e) => handleShortcutKeydown('fileBrowserOpen', e)}
                       class="bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text text-sm font-mono focus:border-primary-500 outline-none w-full"
                     />
                     {#if shortcutErrors.fileBrowserOpen}
@@ -1275,8 +1279,9 @@
                   <div class="space-y-1">
                     <input
                       type="text"
+                      readonly
                       value={shortcutDrafts.fileBrowserBack}
-                      on:input={(e) => handleShortcutInput('fileBrowserBack', (e.target as HTMLInputElement).value)}
+                      on:keydown={(e) => handleShortcutKeydown('fileBrowserBack', e)}
                       class="bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text text-sm font-mono focus:border-primary-500 outline-none w-full"
                     />
                     {#if shortcutErrors.fileBrowserBack}
@@ -1286,8 +1291,8 @@
                 </div>
               </div>
               
-              <div class="bg-primary-50 dark:bg-primary-900/20 border border-primary-200 dark:border-primary-900/30 rounded-lg p-3 text-xs text-primary-800 dark:text-primary-200">
-               <p>提示：快捷键格式为 "修饰键+按键"，例如 "Ctrl+Shift+P"。支持 Ctrl, Shift, Alt, Meta (Cmd)。</p>
+              <div class="bg-app-surface/80 border border-app-border rounded-lg p-3 text-xs text-app-text-secondary backdrop-blur-sm">
+               <p>提示：点击输入框后直接按下组合键即可录制，按 `Esc` 可清空。支持 Ctrl、Shift、Alt、Meta (Cmd) 和 F 键、Enter、Delete 等特殊键。</p>
              </div>
            </div>
 

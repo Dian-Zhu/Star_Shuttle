@@ -15,6 +15,7 @@
   import { closeAllTerminals, disconnectTerminal, restoreActiveSessions } from '../lib/terminalService';
   import { loadConnections } from '../lib/connectionService';
   import { themeColors, type ThemeColorKey } from '../lib/themeColors';
+  import { isEditableShortcutTarget, matchShortcut } from '../lib/shortcuts';
   import { fade, fly } from 'svelte/transition';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import CloseActionModal from './CloseActionModal.svelte';
@@ -104,6 +105,7 @@
     const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
     const isDark = theme === 'dark' || (theme === 'system' && systemDark);
     const root = document.documentElement;
+    const hasBackgroundImage = Boolean($settings.appearance.backgroundImage);
 
     // Get Opacity
     // Default to 1 (opaque) if not set. 
@@ -113,6 +115,7 @@
 
     // 1. Determine Base Background Color
     let bgHex = isDark ? '#0f172a' : '#ffffff';
+    let statusBarHex = isDark ? '#1e293b' : '#f1f5f9';
 
     // Clear custom properties first (except --color-bg which we will overwrite)
     const customProps = [
@@ -126,9 +129,9 @@
     if (theme === 'custom' && $settings.appearance.customUITheme) {
        const custom = $settings.appearance.customUITheme;
        bgHex = custom.backgroundColor;
+       statusBarHex = custom.statusBarColor || custom.surfaceColor;
        
        root.style.setProperty('--color-surface', custom.surfaceColor);
-       root.style.setProperty('--color-status-bar', custom.statusBarColor || custom.surfaceColor);
        root.style.setProperty('--color-surface-light', custom.surfaceLightColor);
        root.style.setProperty('--color-text', custom.textColor);
        root.style.setProperty('--color-text-secondary', custom.secondaryTextColor);
@@ -146,6 +149,12 @@
 
     // 2. Apply --color-bg with transparency
     root.style.setProperty('--color-bg', hexToRgba(bgHex, opacity));
+    if (theme === 'custom' || hasBackgroundImage) {
+      root.style.setProperty(
+        '--color-status-bar',
+        hasBackgroundImage ? hexToRgba(statusBarHex, opacity) : statusBarHex
+      );
+    }
   }
 
   function updateAccentColor() {
@@ -267,38 +276,11 @@
     void closeAllTerminals();
   }
 
-  function checkShortcut(event: KeyboardEvent, shortcut: string): boolean {
-    if (!shortcut) return false;
-    const parts = shortcut.toLowerCase().split('+');
-    const key = parts.pop();
-    
-    if (!key) return false;
-
-    // Check modifiers
-    const ctrl = parts.includes('ctrl') || parts.includes('control');
-    const shift = parts.includes('shift');
-    const alt = parts.includes('alt') || parts.includes('option');
-    const meta = parts.includes('meta') || parts.includes('cmd') || parts.includes('command');
-
-    if (ctrl !== event.ctrlKey) return false;
-    if (shift !== event.shiftKey) return false;
-    if (alt !== event.altKey) return false;
-    if (meta !== event.metaKey) return false;
-
-    // Check key
-    // event.code is like 'KeyN', 'BracketLeft'. shortcut key usually is 'n', '[', etc.
-    // This is a simple implementation, might need refinement for special keys.
-    const eventKey = event.key.toLowerCase();
-    if (eventKey === key) return true;
-
-    // Fallback for code matching if key doesn't match directly (e.g. for BracketLeft)
-    if (key === '[' && event.code === 'BracketLeft') return true;
-    if (key === ']' && event.code === 'BracketRight') return true;
-
-    return false;
-  }
-
   function handleKeydown(event: KeyboardEvent) {
+    if (isEditableShortcutTarget(event.target, { allowTerminalTextarea: true })) {
+      return;
+    }
+
     if ($settings.security.disableDevToolsShortcuts) {
       const key = event.key.toLowerCase();
       const isWindowsLikeDevTools =
@@ -320,27 +302,27 @@
     const shortcuts = $settings.shortcuts;
 
     // Command Palette
-    if (checkShortcut(event, shortcuts.commandPalette)) {
+    if (matchShortcut(event, shortcuts.commandPalette)) {
       event.preventDefault();
       showCommandPalette.update(v => !v);
       return;
     }
 
-    if (checkShortcut(event, shortcuts.toggleSidebar)) {
+    if (matchShortcut(event, shortcuts.toggleSidebar)) {
       event.preventDefault();
       isSidebarCollapsed.update(v => !v);
       return;
     }
 
     // Toggle File Browser
-    if (checkShortcut(event, shortcuts.toggleFileBrowser)) {
+    if (matchShortcut(event, shortcuts.toggleFileBrowser)) {
       event.preventDefault();
       isRightSidebarOpen.update(v => !v);
       return;
     }
 
     // New Connection
-    if (checkShortcut(event, shortcuts.newConnection)) {
+    if (matchShortcut(event, shortcuts.newConnection)) {
       event.preventDefault();
       editingConnection.set(null);
       showConnectionForm.set(true);
@@ -348,14 +330,14 @@
     }
 
     // Settings
-    if (checkShortcut(event, shortcuts.settings)) {
+    if (matchShortcut(event, shortcuts.settings)) {
       event.preventDefault();
       showSettings.update(v => !v);
       return;
     }
 
     // Close Current Terminal
-    if (checkShortcut(event, shortcuts.closeTerminal)) {
+    if (matchShortcut(event, shortcuts.closeTerminal)) {
       event.preventDefault();
       if ($activeTerminals.length > 0 && $selectedTerminalIndex >= 0 && $selectedTerminalIndex < $activeTerminals.length) {
          const session = $activeTerminals[$selectedTerminalIndex];
@@ -365,7 +347,7 @@
     }
 
     // Previous Tab
-    if (checkShortcut(event, shortcuts.prevTab)) {
+    if (matchShortcut(event, shortcuts.prevTab)) {
       event.preventDefault();
       if ($activeTerminals.length > 1) {
         selectedTerminalIndex.update(idx => (idx - 1 + $activeTerminals.length) % $activeTerminals.length);
@@ -374,7 +356,7 @@
     }
 
     // Next Tab
-    if (checkShortcut(event, shortcuts.nextTab)) {
+    if (matchShortcut(event, shortcuts.nextTab)) {
       event.preventDefault();
       if ($activeTerminals.length > 1) {
         selectedTerminalIndex.update(idx => (idx + 1) % $activeTerminals.length);
@@ -406,44 +388,56 @@
     </div>
   </div>
 {:else}
-  <div class="h-screen w-screen flex bg-app-bg text-app-text overflow-hidden font-sans antialiased selection:bg-blue-500/30 relative pt-[35px]">
-    <TitleBar />
-    <Sidebar />
-    
-    <main class="flex-1 flex overflow-hidden relative">
-      <div class="flex-1 flex flex-col min-w-0 relative">
-        <TerminalManager />
-        
-        <!-- Toast Messages -->
-        <div class="fixed top-12 right-4 z-[1000] flex flex-col gap-2 pointer-events-none">
-          {#if $successMessage}
-            <div 
-              transition:fly={{ y: -20, duration: 300 }}
-              class="bg-green-500/10 border border-green-500/20 text-green-400 px-4 py-3 rounded-lg shadow-xl backdrop-blur-md flex items-center gap-2 pointer-events-auto min-w-[300px]"
-            >
-              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
-              <span class="text-sm font-medium">{$successMessage}</span>
-            </div>
-          {/if}
-          
-          {#if $errorMessage}
-            <div 
-              transition:fly={{ y: -20, duration: 300 }}
-              class="bg-red-500/10 border border-red-500/20 text-red-400 px-4 py-3 rounded-lg shadow-xl backdrop-blur-md flex items-center gap-2 pointer-events-auto min-w-[300px]"
-            >
-              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-              <span class="text-sm font-medium">{$errorMessage}</span>
-            </div>
-          {/if}
-        </div>
-      </div>
+  <div class="h-screen w-screen bg-app-bg text-app-text overflow-hidden font-sans antialiased selection:bg-blue-500/30 relative">
+    {#if $settings.appearance.backgroundImage}
+      <div
+        class="absolute inset-0 z-0 bg-cover bg-center bg-no-repeat pointer-events-none"
+        style:background-image="url('{$settings.appearance.backgroundImage}')"
+        style:opacity={$settings.appearance.backgroundOpacity ?? 0.5}
+        style:filter="blur({$settings.appearance.backgroundBlur ?? 0}px)"
+      ></div>
+    {/if}
 
-      {#if $isRightSidebarOpen}
-        <div transition:fly={{ x: $settings.ui.rightSidebarWidth || 400, duration: 200 }} class="h-full flex-shrink-0 z-20 shadow-lg">
-          <RightSidebar />
+    <TitleBar />
+
+    <div class="relative z-10 flex h-full w-full pt-[35px]">
+      <Sidebar />
+      
+      <main class="flex-1 flex overflow-hidden relative">
+        <div class="flex-1 flex flex-col min-w-0 relative">
+          <TerminalManager />
+          
+          <!-- Toast Messages -->
+          <div class="fixed top-12 right-4 z-[1000] flex flex-col gap-2 pointer-events-none">
+            {#if $successMessage}
+              <div 
+                transition:fly={{ y: -20, duration: 300 }}
+                class="bg-green-500/10 border border-green-500/20 text-green-400 px-4 py-3 rounded-lg shadow-xl backdrop-blur-md flex items-center gap-2 pointer-events-auto min-w-[300px]"
+              >
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+                <span class="text-sm font-medium">{$successMessage}</span>
+              </div>
+            {/if}
+            
+            {#if $errorMessage}
+              <div 
+                transition:fly={{ y: -20, duration: 300 }}
+                class="bg-red-500/10 border border-red-500/20 text-red-400 px-4 py-3 rounded-lg shadow-xl backdrop-blur-md flex items-center gap-2 pointer-events-auto min-w-[300px]"
+              >
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                <span class="text-sm font-medium">{$errorMessage}</span>
+              </div>
+            {/if}
+          </div>
         </div>
-      {/if}
-    </main>
+
+        {#if $isRightSidebarOpen}
+          <div transition:fly={{ x: $settings.ui.rightSidebarWidth || 400, duration: 200 }} class="h-full flex-shrink-0 z-20 shadow-lg">
+            <RightSidebar />
+          </div>
+        {/if}
+      </main>
+    </div>
   </div>
 {/if}
 

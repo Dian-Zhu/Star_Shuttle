@@ -398,7 +398,7 @@
   }
 </script>
 
-<div class="flex flex-col w-full h-full overflow-hidden group relative" style="background-color: var(--terminal-bg, transparent);">
+<div class="flex flex-col w-full h-full overflow-hidden group relative bg-app-bg">
   <!-- Terminal Header -->
   <div class="flex items-center justify-start h-[24px] select-none flex-shrink-0 relative z-10 px-2" style="background-color: transparent;">
     <div class="flex items-center gap-2 rounded-full px-2.5 py-0.5 border border-app-border/50 max-w-[90%]" style="background-color: transparent;">
@@ -420,16 +420,6 @@
   </div>
 
   <div class="relative flex-1 w-full min-h-0 overflow-hidden">
-    <!-- Background Image Layer -->
-    {#if $settings.appearance.backgroundImage}
-      <div 
-        class="absolute inset-0 z-0 bg-cover bg-center bg-no-repeat pointer-events-none"
-        style:background-image="url('{$settings.appearance.backgroundImage}')"
-        style:opacity={$settings.appearance.backgroundOpacity ?? 0.5}
-        style:filter="blur({$settings.appearance.backgroundBlur ?? 0}px)"
-      ></div>
-    {/if}
-
     <div
       bind:this={container}
       class="relative z-0 w-full h-full overflow-hidden"

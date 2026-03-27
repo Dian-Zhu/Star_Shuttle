@@ -5,6 +5,7 @@
   import { sftpService } from '../../lib/sftpService';
   import { localFsService } from '../../lib/localFsService';
   import { fileClipboard, settings } from '../../lib/store';
+  import { isEditableShortcutTarget, matchShortcut } from '../../lib/shortcuts';
   import ContextMenu from '../ui/ContextMenu.svelte';
   import ContextMenuItem from '../ui/ContextMenuItem.svelte';
   import ContextMenuDivider from '../ui/ContextMenuDivider.svelte';
@@ -172,50 +173,6 @@
 
     // 默认文件图标
     return 'file';
-  }
-
-  // 解析快捷键为修饰键和主键
-  function parseShortcut(shortcut: string): { ctrl: boolean; meta: boolean; shift: boolean; alt: boolean; key: string } | null {
-    if (!shortcut) return null;
-    const parts = shortcut.split('+').map(p => p.trim()).filter(Boolean);
-    if (parts.length === 0) return null;
-
-    const modifiers = { ctrl: false, meta: false, shift: false, alt: false };
-    let keyPart = '';
-
-    for (const part of parts) {
-      const lower = part.toLowerCase();
-      if (lower === 'ctrl' || lower === 'control') modifiers.ctrl = true;
-      else if (lower === 'meta' || lower === 'cmd' || lower === 'command') modifiers.meta = true;
-      else if (lower === 'shift') modifiers.shift = true;
-      else if (lower === 'alt' || lower === 'option') modifiers.alt = true;
-      else keyPart = part;
-    }
-
-    if (!keyPart) return null;
-    return { ...modifiers, key: keyPart.toLowerCase() };
-  }
-
-  // 检查键盘事件是否匹配快捷键
-  function matchesShortcut(e: KeyboardEvent, shortcut: string): boolean {
-    const parsed = parseShortcut(shortcut);
-    if (!parsed) return false;
-
-    const eventKey = e.key.toLowerCase();
-    const eventModifiers = {
-      ctrl: e.ctrlKey,
-      meta: e.metaKey,
-      shift: e.shiftKey,
-      alt: e.altKey
-    };
-
-    return (
-      eventKey === parsed.key &&
-      eventModifiers.ctrl === parsed.ctrl &&
-      eventModifiers.meta === parsed.meta &&
-      eventModifiers.shift === parsed.shift &&
-      eventModifiers.alt === parsed.alt
-    );
   }
 
   function getMenuTargetDirectory() {
@@ -785,11 +742,7 @@
 
   function handleKeydown(e: KeyboardEvent) {
     if (editorOpen) return;
-    const target = e.target as HTMLElement | null;
-    if (
-      target &&
-      (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || (target as any).isContentEditable)
-    ) {
+    if (isEditableShortcutTarget(e.target)) {
       return;
     }
 
@@ -801,7 +754,7 @@
     const backShortcut = $settings.shortcuts.fileBrowserBack;
     const selectAllShortcut = $settings.shortcuts.fileBrowserSelectAll;
 
-    if (matchesShortcut(e, selectAllShortcut)) {
+    if (matchShortcut(e, selectAllShortcut)) {
       e.preventDefault();
       selectedPaths.clear();
       files.forEach(f => selectedPaths.add(f.path));
@@ -809,13 +762,13 @@
       return;
     }
 
-    if (matchesShortcut(e, copyShortcut)) {
+    if (matchShortcut(e, copyShortcut)) {
       e.preventDefault();
       handleCopy();
       return;
     }
 
-    if (matchesShortcut(e, pasteShortcut)) {
+    if (matchShortcut(e, pasteShortcut)) {
       e.preventDefault();
       void handlePaste();
       return;
@@ -825,37 +778,37 @@
     const newFolderShortcut = $settings.shortcuts.fileBrowserNewFolder;
     const newFileShortcut = $settings.shortcuts.fileBrowserNewFile;
 
-    if (matchesShortcut(e, refreshShortcut)) {
+    if (matchShortcut(e, refreshShortcut)) {
       e.preventDefault();
       loadFiles(currentPath, { force: true });
       return;
     }
 
-    if (matchesShortcut(e, newFolderShortcut)) {
+    if (matchShortcut(e, newFolderShortcut)) {
       e.preventDefault();
       void handleCreateFolder();
       return;
     }
 
-    if (matchesShortcut(e, newFileShortcut)) {
+    if (matchShortcut(e, newFileShortcut)) {
       e.preventDefault();
       void handleCreateFile();
       return;
     }
 
-    if (matchesShortcut(e, renameShortcut)) {
+    if (matchShortcut(e, renameShortcut)) {
       e.preventDefault();
       void handleRename();
       return;
     }
 
-    if (matchesShortcut(e, deleteShortcut)) {
+    if (matchShortcut(e, deleteShortcut)) {
       e.preventDefault();
       void handleDelete();
       return;
     }
 
-    if (matchesShortcut(e, openShortcut)) {
+    if (matchShortcut(e, openShortcut)) {
       e.preventDefault();
       if (selectedPaths.size === 1) {
         const path = Array.from(selectedPaths)[0];
@@ -867,7 +820,7 @@
       return;
     }
 
-    if (matchesShortcut(e, backShortcut)) {
+    if (matchShortcut(e, backShortcut)) {
       e.preventDefault();
       if (currentPath !== '/' && currentPath !== '') {
         loadFiles(parentPath(currentPath));

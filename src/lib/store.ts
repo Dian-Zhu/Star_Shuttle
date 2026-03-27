@@ -2,6 +2,7 @@ import { writable, derived } from 'svelte/store';
 import type { ITheme, Terminal } from 'xterm';
 import type { FitAddon } from 'xterm-addon-fit';
 import type { SearchAddon } from 'xterm-addon-search';
+import { normalizeShortcut } from './shortcuts';
 
 export type ConnectionAuthMethod = {
   Password?: {
@@ -430,13 +431,18 @@ const loadSettings = (): AppSettings => {
         sanitizedShortcuts[key] = '';
         continue;
       }
-      const normalized = value.toLowerCase().replace(/\s+/g, '');
+      const parsed = normalizeShortcut(value);
+      if ('error' in parsed || !parsed.value) {
+        sanitizedShortcuts[key] = '';
+        continue;
+      }
+      const normalized = parsed.value.toLowerCase().replace(/\s+/g, '');
       const existing = seen.get(normalized);
       if (existing) {
         sanitizedShortcuts[key] = '';
         continue;
       }
-      sanitizedShortcuts[key] = value;
+      sanitizedShortcuts[key] = parsed.value;
       seen.set(normalized, key);
     }
     merged.shortcuts = sanitizedShortcuts;

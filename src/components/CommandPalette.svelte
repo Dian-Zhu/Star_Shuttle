@@ -13,6 +13,7 @@
   } from '../lib/store';
   import { connectAndOpen } from '../lib/terminalService';
   import { importConnections, exportConnections } from '../lib/importExportService';
+  import { matchShortcut } from '../lib/shortcuts';
   
   import ServerIcon from './icons/ServerIcon.svelte';
   import SettingsIcon from './icons/SettingsIcon.svelte';
@@ -143,61 +144,38 @@
     showCommandPalette.set(false);
   }
 
-  function checkShortcut(event: KeyboardEvent, shortcut: string): boolean {
-    if (!shortcut) return false;
-    const parts = shortcut.toLowerCase().split('+');
-    const key = parts.pop();
-    if (!key) return false;
-
-    const ctrl = parts.includes('ctrl') || parts.includes('control');
-    const shift = parts.includes('shift');
-    const alt = parts.includes('alt') || parts.includes('option');
-    const meta = parts.includes('meta') || parts.includes('cmd') || parts.includes('command');
-
-    if (ctrl !== event.ctrlKey) return false;
-    if (shift !== event.shiftKey) return false;
-    if (alt !== event.altKey) return false;
-    if (meta !== event.metaKey) return false;
-
-    const eventKey = event.key.toLowerCase();
-    if (eventKey === key) return true;
-    if (key === '[' && event.code === 'BracketLeft') return true;
-    if (key === ']' && event.code === 'BracketRight') return true;
-    return false;
-  }
-
   function handleKeydown(e: KeyboardEvent) {
     const shortcuts = $appSettings.shortcuts;
 
-    if (checkShortcut(e, shortcuts.commandPalette)) {
+    if (matchShortcut(e, shortcuts.commandPalette)) {
       e.preventDefault();
       e.stopPropagation();
       close();
       return;
     }
 
-    if (checkShortcut(e, shortcuts.newConnection)) {
+    if (matchShortcut(e, shortcuts.newConnection)) {
       e.preventDefault();
       e.stopPropagation();
       executeCommand(allCommands.find(c => c.id === 'new-connection'));
       return;
     }
 
-    if (checkShortcut(e, shortcuts.settings)) {
+    if (matchShortcut(e, shortcuts.settings)) {
       e.preventDefault();
       e.stopPropagation();
       executeCommand(allCommands.find(c => c.id === 'open-settings'));
       return;
     }
 
-    if (checkShortcut(e, shortcuts.toggleSidebar)) {
+    if (matchShortcut(e, shortcuts.toggleSidebar)) {
       e.preventDefault();
       e.stopPropagation();
       executeCommand(allCommands.find(c => c.id === 'toggle-sidebar'));
       return;
     }
 
-    if (checkShortcut(e, shortcuts.toggleFileBrowser)) {
+    if (matchShortcut(e, shortcuts.toggleFileBrowser)) {
       e.preventDefault();
       e.stopPropagation();
       executeCommand(allCommands.find(c => c.id === 'toggle-file-browser'));
