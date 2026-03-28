@@ -2,14 +2,26 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('./store', () => ({
   connectionGroups: {
+    subscribe: vi.fn((run: (value: unknown[]) => void) => {
+      run([]);
+      return () => {};
+    }),
     update: vi.fn(),
     set: vi.fn(),
   },
   connections: {
+    subscribe: vi.fn((run: (value: unknown[]) => void) => {
+      run([]);
+      return () => {};
+    }),
     set: vi.fn(),
     update: vi.fn(),
   },
   loading: {
+    subscribe: vi.fn((run: (value: boolean) => void) => {
+      run(false);
+      return () => {};
+    }),
     set: vi.fn(),
   },
   getGroupIdByPath: vi.fn(() => null),
@@ -29,7 +41,13 @@ vi.mock('@tauri-apps/api/core', () => ({
 import { __connectionServiceTestHooks } from './connectionService';
 import type { Connection } from './store';
 
-const { normalizeConnectionsPayload, toBackendConnectionConfig, parseBackendAuthMethod, parseBackendProxyType } =
+const {
+  createBackendConfig,
+  normalizeConnectionsPayload,
+  toBackendConnectionConfig,
+  parseBackendAuthMethod,
+  parseBackendProxyType,
+} =
   __connectionServiceTestHooks;
 
 function backendConnection(
@@ -154,5 +172,77 @@ describe('connectionService normalization contract', () => {
       },
     });
     expect(proxy.ok).toBe(true);
+  });
+
+  it('preserves stored proxy password on edit when the password field is untouched', async () => {
+    const created = await createBackendConfig({
+      id: 'conn-1',
+      name: 'demo',
+      protocol: 'Ssh',
+      host: '127.0.0.1',
+      port: 22,
+      username: 'root',
+      authMethod: 'password',
+      password: 'secret',
+      savePassword: false,
+      proxyType: 'socks5',
+      proxyHost: 'proxy.example.com',
+      proxyPort: 1080,
+      proxyUsername: 'proxy-user',
+      proxyPassword: '',
+      proxyHasStoredPassword: true,
+      proxyPasswordDirty: false,
+      clearStoredProxyPassword: false,
+      tags: [],
+      local_forwards: [],
+      remote_forwards: [],
+      autoReconnect: false,
+    });
+
+    expect(created.proxy_type).toEqual({
+      Socks5: {
+        host: 'proxy.example.com',
+        port: 1080,
+        username: 'proxy-user',
+        password: null,
+        has_password: true,
+      },
+    });
+  });
+
+  it('clears stored proxy password on edit when explicitly requested', async () => {
+    const created = await createBackendConfig({
+      id: 'conn-1',
+      name: 'demo',
+      protocol: 'Ssh',
+      host: '127.0.0.1',
+      port: 22,
+      username: 'root',
+      authMethod: 'password',
+      password: 'secret',
+      savePassword: false,
+      proxyType: 'http',
+      proxyHost: 'proxy.example.com',
+      proxyPort: 8080,
+      proxyUsername: 'proxy-user',
+      proxyPassword: '',
+      proxyHasStoredPassword: false,
+      proxyPasswordDirty: true,
+      clearStoredProxyPassword: true,
+      tags: [],
+      local_forwards: [],
+      remote_forwards: [],
+      autoReconnect: false,
+    });
+
+    expect(created.proxy_type).toEqual({
+      Http: {
+        host: 'proxy.example.com',
+        port: 8080,
+        username: 'proxy-user',
+        password: null,
+        has_password: false,
+      },
+    });
   });
 });

@@ -122,6 +122,7 @@ impl ChannelTracker {
     }
 
     /// Retrieves statistics for a specific session.
+    #[cfg(test)]
     pub fn get_stats(&self, session_id: &Uuid) -> Option<&ChannelStats> {
         self.stats.get(session_id)
     }

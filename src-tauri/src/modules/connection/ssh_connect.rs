@@ -33,16 +33,19 @@ pub(crate) async fn connect_ssh_via_proxy(
             )
             .await?;
 
-            let local_port = ssh_impl::start_ephemeral_direct_tcpip_listener(
+            let listener_lease = ssh_impl::start_ephemeral_direct_tcpip_listener(
                 jump_connection.handle.clone(),
                 host.clone(),
                 port,
             )
             .await?;
+            let activated_listener = listener_lease.activate()?;
+            let local_stream = activated_listener.connect().await?;
 
-            let target_connection = ssh_impl::connect_ssh_with_known_host(
-                "127.0.0.1",
-                local_port,
+            let target_connection = ssh_impl::connect_ssh_with_known_host_stream(
+                local_stream,
+                &host,
+                port,
                 &host,
                 port,
                 &username,
@@ -61,8 +64,9 @@ pub(crate) async fn connect_ssh_via_proxy(
             port: proxy_port,
             username: proxy_username,
             password: proxy_password,
+            ..
         } => {
-            let local_port = ssh_impl::start_ephemeral_socks5_proxy_dial_listener(
+            let listener_lease = ssh_impl::start_ephemeral_socks5_proxy_dial_listener(
                 proxy_host,
                 proxy_port,
                 proxy_username,
@@ -71,10 +75,13 @@ pub(crate) async fn connect_ssh_via_proxy(
                 port,
             )
             .await?;
+            let activated_listener = listener_lease.activate()?;
+            let local_stream = activated_listener.connect().await?;
 
-            let target_connection = ssh_impl::connect_ssh_with_known_host(
-                "127.0.0.1",
-                local_port,
+            let target_connection = ssh_impl::connect_ssh_with_known_host_stream(
+                local_stream,
+                &host,
+                port,
                 &host,
                 port,
                 &username,
@@ -93,8 +100,9 @@ pub(crate) async fn connect_ssh_via_proxy(
             port: proxy_port,
             username: proxy_username,
             password: proxy_password,
+            ..
         } => {
-            let local_port = ssh_impl::start_ephemeral_http_proxy_dial_listener(
+            let listener_lease = ssh_impl::start_ephemeral_http_proxy_dial_listener(
                 proxy_host,
                 proxy_port,
                 proxy_username,
@@ -103,10 +111,13 @@ pub(crate) async fn connect_ssh_via_proxy(
                 port,
             )
             .await?;
+            let activated_listener = listener_lease.activate()?;
+            let local_stream = activated_listener.connect().await?;
 
-            let target_connection = ssh_impl::connect_ssh_with_known_host(
-                "127.0.0.1",
-                local_port,
+            let target_connection = ssh_impl::connect_ssh_with_known_host_stream(
+                local_stream,
+                &host,
+                port,
                 &host,
                 port,
                 &username,

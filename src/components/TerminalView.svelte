@@ -1,7 +1,7 @@
 <script lang="ts">
 import { onDestroy } from 'svelte';
 import { get } from 'svelte/store';
-import { activeTerminals, type ActiveTerminal, terminalSessionMap, closeSplitRequest } from '../lib/store';
+import { activeTerminals, broadcastSessionIds, type ActiveTerminal, terminalSessionMap, closeSplitRequest } from '../lib/store';
 import { createTerminalSession, closeSplitSession, disconnectTerminal } from '../lib/terminalService';
 import type { LayoutNode, TerminalPaneNode, SplitNode } from '../lib/layout';
 import { generateId, findNode, replaceNode, removeNode, findNodeBySessionId } from '../lib/layout';
@@ -203,6 +203,7 @@ import SplitPane from './terminal/SplitPane.svelte';
         }
          // Remove from activeTerminals
          activeTerminals.update(terms => terms.filter(t => t.sessionId !== targetNode.sessionId));
+         broadcastSessionIds.update(ids => ids.filter(id => id !== targetNode.sessionId));
     }
     
     const newRoot = removeNode(layoutRoot, targetId);

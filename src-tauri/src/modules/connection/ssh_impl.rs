@@ -14,11 +14,13 @@ use russh_keys::PublicKeyBase64;
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
+use tokio::io::{AsyncRead, AsyncWrite};
 #[cfg(test)]
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::lookup_host;
 #[cfg(test)]
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpListener;
+use tokio::net::TcpStream;
 use tokio::sync::{watch, Mutex};
 
 #[cfg(unix)]
@@ -70,6 +72,58 @@ pub trait KeyboardInteractivePrompter: Send + Sync {
 pub struct SshConnection {
     pub handle: Arc<Mutex<Handle<SshHandler>>>,
     lifecycle: Arc<ConnectionLifecycle>,
+}
+
+const MAX_SSH_BANNER_LOG_CHARS: usize = 240;
+
+fn sanitize_ssh_banner_for_log(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    enum EscapeState {
+        None,
+        Started,
+        Csi,
+    }
+    let mut escape_state = EscapeState::None;
+
+    for ch in input.chars() {
+        match escape_state {
+            EscapeState::None => {
+                if ch == '\u{1b}' {
+                    escape_state = EscapeState::Started;
+                    continue;
+                }
+            }
+            EscapeState::Started => {
+                if ch == '[' {
+                    escape_state = EscapeState::Csi;
+                } else {
+                    escape_state = EscapeState::None;
+                }
+                continue;
+            }
+            EscapeState::Csi => {
+                if ('@'..='~').contains(&ch) {
+                    escape_state = EscapeState::None;
+                }
+                continue;
+            }
+        }
+
+        match ch {
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ if ch.is_control() => out.push('?'),
+            _ => out.push(ch),
+        }
+    }
+
+    if out.chars().count() <= MAX_SSH_BANNER_LOG_CHARS {
+        return out;
+    }
+
+    let truncated: String = out.chars().take(MAX_SSH_BANNER_LOG_CHARS).collect();
+    format!("{}...(truncated)", truncated)
 }
 
 struct ConnectionLifecycle {
@@ -213,7 +267,16 @@ impl Handler for SshHandler {
         banner: &str,
         session: russh::client::Session,
     ) -> Result<(Self, russh::client::Session), Self::Error> {
-        info!("SSH Banner: {}", banner);
+        let sanitized_banner = sanitize_ssh_banner_for_log(banner);
+        if sanitized_banner.is_empty() {
+            info!("SSH banner received (bytes={}): <empty>", banner.len());
+        } else {
+            info!(
+                "SSH banner received (bytes={}): {}",
+                banner.len(),
+                sanitized_banner
+            );
+        }
         Ok((self, session))
     }
 
@@ -308,6 +371,70 @@ pub async fn connect_ssh_with_known_host(
     socks_proxy_port: Option<u16>,
     keyboard_interactive_prompter: Option<Arc<dyn KeyboardInteractivePrompter>>,
 ) -> Result<SshConnection, anyhow::Error> {
+    // Validate input parameters
+    if connect_host.is_empty() {
+        error!("Host is required");
+        return Err(anyhow!("Host is required"));
+    }
+
+    if username.is_empty() {
+        error!("Username is required");
+        return Err(anyhow!("Username is required"));
+    }
+
+    if connect_port == 0 {
+        error!("Port must be between 1 and 65535, got {}", connect_port);
+        return Err(anyhow!(
+            "Port must be between 1 and 65535, got {}",
+            connect_port
+        ));
+    }
+
+    let addr_str = format!("{}:{}", connect_host, connect_port);
+    let addr = match lookup_host(&addr_str).await {
+        Ok(mut addrs) => match addrs.next() {
+            Some(addr) => addr,
+            None => return Err(anyhow!("Could not resolve host: {}", connect_host)),
+        },
+        Err(e) => return Err(anyhow!("Could not resolve host {}: {}", connect_host, e)),
+    };
+    let stream = TcpStream::connect(addr)
+        .await
+        .map_err(|e| anyhow!("Connection failed: {}", e))?;
+
+    connect_ssh_with_known_host_stream(
+        stream,
+        connect_host,
+        connect_port,
+        known_hosts_host,
+        known_hosts_port,
+        username,
+        auth_type,
+        local_forwards,
+        remote_forwards,
+        socks_proxy_port,
+        keyboard_interactive_prompter,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn connect_ssh_with_known_host_stream<R>(
+    stream: R,
+    connect_host: &str,
+    connect_port: u16,
+    known_hosts_host: &str,
+    known_hosts_port: u16,
+    username: &str,
+    auth_type: AuthType,
+    local_forwards: &Vec<super::LocalForward>,
+    remote_forwards: &Vec<super::RemoteForward>,
+    socks_proxy_port: Option<u16>,
+    keyboard_interactive_prompter: Option<Arc<dyn KeyboardInteractivePrompter>>,
+) -> Result<SshConnection, anyhow::Error>
+where
+    R: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
     info!(
         "Starting SSH connection to {}:{} as {}",
         connect_host, connect_port, username
@@ -331,16 +458,6 @@ pub async fn connect_ssh_with_known_host(
             connect_port
         ));
     }
-
-    // Parse address
-    let addr_str = format!("{}:{}", connect_host, connect_port);
-    let addr = match lookup_host(&addr_str).await {
-        Ok(mut addrs) => match addrs.next() {
-            Some(addr) => addr,
-            None => return Err(anyhow!("Could not resolve host: {}", connect_host)),
-        },
-        Err(e) => return Err(anyhow!("Could not resolve host {}: {}", connect_host, e)),
-    };
 
     // Load config (known_hosts)
     let known_hosts_manager = match KnownHostsManager::new() {
@@ -373,8 +490,8 @@ pub async fn connect_ssh_with_known_host(
     };
 
     // Connect
-    info!("Connecting to {}", addr);
-    let mut handle = match russh::client::connect(config, addr, handler).await {
+    info!("Connecting to {}:{}", connect_host, connect_port);
+    let mut handle = match russh::client::connect_stream(config, stream, handler).await {
         Ok(h) => h,
         Err(e) => {
             let display = e.to_string();
@@ -389,7 +506,10 @@ pub async fn connect_ssh_with_known_host(
         }
     };
 
-    info!("Connected to {}, authenticating...", addr);
+    info!(
+        "Connected to {}:{}, authenticating...",
+        connect_host, connect_port
+    );
 
     // Authentication
     let auth_res: Result<bool, anyhow::Error> = match auth_type {
@@ -691,5 +811,19 @@ mod tests {
 
             server.await.unwrap();
         });
+    }
+
+    #[test]
+    fn sanitize_ssh_banner_removes_control_and_ansi() {
+        let banner = "\u{1b}[31mNOTICE\u{1b}[0m\r\nHello\tworld\u{0007}";
+        let sanitized = sanitize_ssh_banner_for_log(banner);
+        assert_eq!(sanitized, "NOTICE\\r\\nHello\\tworld?");
+    }
+
+    #[test]
+    fn sanitize_ssh_banner_truncates_long_input() {
+        let banner = "a".repeat(MAX_SSH_BANNER_LOG_CHARS + 64);
+        let sanitized = sanitize_ssh_banner_for_log(&banner);
+        assert!(sanitized.ends_with("...(truncated)"));
     }
 }

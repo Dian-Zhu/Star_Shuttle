@@ -52,12 +52,16 @@ pub enum ProxyType {
         port: u16,
         username: Option<String>,
         password: Option<String>,
+        #[serde(default)]
+        has_password: bool,
     },
     Http {
         host: String,
         port: u16,
         username: Option<String>,
         password: Option<String>,
+        #[serde(default)]
+        has_password: bool,
     },
     JumpHost {
         host: String,

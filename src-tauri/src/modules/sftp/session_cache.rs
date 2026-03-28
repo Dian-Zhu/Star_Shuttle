@@ -1,3 +1,4 @@
+use log::{debug, warn};
 use russh_sftp::client::SftpSession;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -18,6 +19,50 @@ pub enum CachedSftpSession {
         notify: Arc<Notify>,
         generation: u64,
     },
+}
+
+fn summarize_error_for_log(message: &str, max_chars: usize) -> String {
+    let mut out = String::with_capacity(message.len());
+    enum EscapeState {
+        None,
+        Started,
+        Csi,
+    }
+    let mut escape_state = EscapeState::None;
+    for ch in message.chars() {
+        match escape_state {
+            EscapeState::None => {
+                if ch == '\u{1b}' {
+                    escape_state = EscapeState::Started;
+                    continue;
+                }
+            }
+            EscapeState::Started => {
+                if ch == '[' {
+                    escape_state = EscapeState::Csi;
+                } else {
+                    escape_state = EscapeState::None;
+                }
+                continue;
+            }
+            EscapeState::Csi => {
+                if ('@'..='~').contains(&ch) {
+                    escape_state = EscapeState::None;
+                }
+                continue;
+            }
+        }
+        match ch {
+            '\n' | '\r' | '\t' => out.push(' '),
+            _ if ch.is_control() => out.push('?'),
+            _ => out.push(ch),
+        }
+    }
+    if out.chars().count() <= max_chars {
+        return out;
+    }
+    let truncated: String = out.chars().take(max_chars).collect();
+    format!("{}...(truncated)", truncated)
 }
 
 pub fn current_generation(
@@ -136,10 +181,7 @@ pub async fn get_session(
             AcquireAction::Create { notify, generation } => (notify, generation),
         };
 
-        println!(
-            "[SFTP] get_session: Creating new SFTP session for {}",
-            session_id
-        );
+        debug!("SFTP cache miss, creating session {}", session_id);
 
         let create_result: Result<Arc<Mutex<SftpSession>>, String> = async {
             let ssh_conn = {
@@ -154,8 +196,8 @@ pub async fn get_session(
                     ));
                 }
                 cm.get_ssh_connection(&session_id).ok_or_else(|| {
-                    println!(
-                        "[SFTP] get_session failed: SSH session not found for {}",
+                    warn!(
+                        "SFTP session init failed: missing SSH session for {}",
                         session_id
                     );
                     "SSH session not found".to_string()
@@ -164,16 +206,28 @@ pub async fn get_session(
 
             let handle = ssh_conn.handle.lock().await;
             let channel = handle.channel_open_session().await.map_err(|e| {
-                println!("[SFTP] get_session failed: channel open error: {}", e);
+                warn!(
+                    "SFTP session init channel open failed for {}: {}",
+                    session_id,
+                    summarize_error_for_log(&e.to_string(), 160)
+                );
                 e.to_string()
             })?;
             channel.request_subsystem(true, "sftp").await.map_err(|e| {
-                println!("[SFTP] get_session failed: subsystem request error: {}", e);
+                warn!(
+                    "SFTP session init subsystem request failed for {}: {}",
+                    session_id,
+                    summarize_error_for_log(&e.to_string(), 160)
+                );
                 e.to_string()
             })?;
 
             let sftp = SftpSession::new(channel.into_stream()).await.map_err(|e| {
-                println!("[SFTP] get_session failed: sftp init error: {}", e);
+                warn!(
+                    "SFTP session init failed for {}: {}",
+                    session_id,
+                    summarize_error_for_log(&e.to_string(), 160)
+                );
                 e.to_string()
             })?;
 
@@ -204,10 +258,7 @@ pub async fn get_session(
                                     generation: pending_generation,
                                 },
                             );
-                            println!(
-                                "[SFTP] get_session: Successfully created SFTP session for {}",
-                                session_id
-                            );
+                            debug!("SFTP session initialized for {}", session_id);
                             Ok(SftpSessionLease {
                                 session_id,
                                 generation: pending_generation,

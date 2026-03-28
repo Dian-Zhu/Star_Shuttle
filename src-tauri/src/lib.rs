@@ -4,7 +4,9 @@ pub(crate) use crate::modules::app_runtime::{
     enrich_host_key_error_with_challenge, ensure_app_unlocked_runtime, AppLockRuntimeState,
     HostKeyChallengeRuntimeState,
 };
-use crate::modules::connection::{ConnectionConfig, ConnectionProtocol, DefaultConnectionManager};
+use crate::modules::connection::{
+    ConnectionConfig, ConnectionProtocol, ConnectionStatus, DefaultConnectionManager,
+};
 use crate::modules::db::DatabaseManager;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
@@ -19,8 +21,9 @@ pub(crate) mod commands {
     use std::fs::OpenOptions;
     use std::io::Write;
     use std::process::Command;
+    use std::sync::OnceLock;
     use std::thread;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
     use tauri::command;
     use tauri_plugin_dialog::DialogExt;
 
@@ -51,6 +54,97 @@ pub(crate) mod commands {
         app_lock_state: &State<Arc<Mutex<AppLockRuntimeState>>>,
     ) -> Result<(), String> {
         crate::ensure_app_unlocked_runtime(db.inner(), app_lock_state.inner())
+    }
+
+    const APP_LOCK_MIN_PASSWORD_LEN: usize = 8;
+    const APP_LOCK_MAX_FAILED_ATTEMPTS: u32 = 5;
+    const APP_LOCK_LOCKOUT_SECONDS: u64 = 15;
+    const APP_LOCK_COMMON_WEAK_PASSWORDS: &[&str] = &[
+        "password",
+        "password123",
+        "12345678",
+        "123456789",
+        "qwerty123",
+        "admin1234",
+        "11111111",
+    ];
+
+    #[derive(Default)]
+    struct AppLockVerifyThrottleState {
+        failed_attempts: u32,
+        blocked_until: Option<Instant>,
+    }
+
+    static APP_LOCK_VERIFY_THROTTLE: OnceLock<Mutex<AppLockVerifyThrottleState>> = OnceLock::new();
+
+    fn app_lock_verify_throttle_state() -> &'static Mutex<AppLockVerifyThrottleState> {
+        APP_LOCK_VERIFY_THROTTLE.get_or_init(|| Mutex::new(AppLockVerifyThrottleState::default()))
+    }
+
+    fn enforce_app_lock_verify_throttle() -> Result<(), String> {
+        let mut state = app_lock_verify_throttle_state()
+            .lock()
+            .map_err(|e| e.to_string())?;
+
+        if let Some(until) = state.blocked_until {
+            let now = Instant::now();
+            if now < until {
+                let wait_seconds = (until - now).as_secs().max(1);
+                return Err(format!(
+                    "Too many failed attempts. Please retry in {} seconds.",
+                    wait_seconds
+                ));
+            }
+            state.blocked_until = None;
+            state.failed_attempts = 0;
+        }
+        Ok(())
+    }
+
+    fn update_app_lock_verify_throttle(success: bool) {
+        let Ok(mut state) = app_lock_verify_throttle_state().lock() else {
+            return;
+        };
+
+        if success {
+            state.failed_attempts = 0;
+            state.blocked_until = None;
+            return;
+        }
+
+        state.failed_attempts = state.failed_attempts.saturating_add(1);
+        if state.failed_attempts >= APP_LOCK_MAX_FAILED_ATTEMPTS {
+            state.failed_attempts = 0;
+            state.blocked_until =
+                Some(Instant::now() + Duration::from_secs(APP_LOCK_LOCKOUT_SECONDS));
+        }
+    }
+
+    pub(crate) fn validate_app_lock_password_strength(password: &str) -> Result<(), String> {
+        let trimmed = password.trim();
+        if trimmed.is_empty() {
+            return Err("Password cannot be empty".to_string());
+        }
+
+        if trimmed.chars().count() < APP_LOCK_MIN_PASSWORD_LEN {
+            return Err(format!(
+                "Password must be at least {} characters",
+                APP_LOCK_MIN_PASSWORD_LEN
+            ));
+        }
+
+        let has_letter = trimmed.chars().any(|c| c.is_ascii_alphabetic());
+        let has_digit = trimmed.chars().any(|c| c.is_ascii_digit());
+        if !has_letter || !has_digit {
+            return Err("Password must include both letters and digits".to_string());
+        }
+
+        let normalized = trimmed.to_ascii_lowercase();
+        if APP_LOCK_COMMON_WEAK_PASSWORDS.contains(&normalized.as_str()) {
+            return Err("Password is too weak".to_string());
+        }
+
+        Ok(())
     }
 
     pub(crate) fn sanitize_rdp_field(name: &str, value: &str) -> Result<(), String> {
@@ -174,6 +268,7 @@ pub(crate) mod commands {
             return Err("App lock is already enabled".to_string());
         }
 
+        validate_app_lock_password_strength(&password)?;
         let hash = bcrypt::hash(password, bcrypt::DEFAULT_COST).map_err(|e| e.to_string())?;
         db.save_setting("app_lock_hash", &hash)
             .map_err(|e| e.to_string())?;
@@ -199,6 +294,7 @@ pub(crate) mod commands {
             return Err("Current password is incorrect".to_string());
         }
 
+        validate_app_lock_password_strength(&new_password)?;
         let new_hash =
             bcrypt::hash(new_password, bcrypt::DEFAULT_COST).map_err(|e| e.to_string())?;
         db.save_setting("app_lock_hash", &new_hash)
@@ -215,8 +311,10 @@ pub(crate) mod commands {
     ) -> Result<bool, String> {
         let db = db.lock().map_err(|e| e.to_string())?;
         if let Some(hash) = db.get_setting("app_lock_hash").map_err(|e| e.to_string())? {
-            let ok = bcrypt::verify(password, &hash).map_err(|e| e.to_string())?;
             drop(db);
+            enforce_app_lock_verify_throttle()?;
+            let ok = bcrypt::verify(password, &hash).map_err(|e| e.to_string())?;
+            update_app_lock_verify_throttle(ok);
             if ok {
                 set_unlock_state(&app_lock_state, true)?;
             } else {
@@ -456,13 +554,34 @@ pub(crate) mod commands {
         session_id: Uuid,
     ) -> Result<(), String> {
         ensure_app_unlocked(&db, &app_lock_state)?;
-        {
+        let prepared_close = {
             let mut manager = manager
                 .write()
                 .map_err(|e| format!("Failed to acquire write lock: {}", e))?;
             manager
-                .disconnect(&session_id)
-                .map_err(|e: crate::modules::connection::ConnectionError| e.to_string())?;
+                .prepare_disconnect(&session_id)
+                .map_err(|e| e.to_string())?;
+            manager.prepare_close_terminal(&session_id).ok()
+        };
+
+        if let Some(prepared) = prepared_close.as_ref() {
+            if let Err(err) = DefaultConnectionManager::execute_prepared_terminal_close(prepared) {
+                log::warn!(
+                    "Failed to send close command while disconnecting session {}: {}",
+                    session_id,
+                    err
+                );
+            }
+        }
+
+        {
+            let mut manager = manager
+                .write()
+                .map_err(|e| format!("Failed to acquire write lock: {}", e))?;
+            if let Some(prepared) = prepared_close.as_ref() {
+                manager.finish_close_terminal(prepared);
+            }
+            manager.finish_disconnect(&session_id);
         }
 
         sftp_manager.remove_session(session_id).await;
@@ -534,6 +653,15 @@ pub(crate) mod commands {
         let mut manager = manager
             .write()
             .map_err(|e| format!("Failed to acquire write lock: {}", e))?;
+        let has_active_session = manager.get_all_sessions().into_iter().any(|session| {
+            session.connection_id == connection_id
+                && session.status != ConnectionStatus::Disconnected
+        });
+        if has_active_session {
+            return Err(
+                "Cannot delete connection config while sessions are still active".to_string(),
+            );
+        }
         manager
             .delete_connection_config(&connection_id)
             .map_err(|e| e.to_string())
@@ -669,23 +797,54 @@ pub(crate) mod commands {
         session_id: Uuid,
     ) -> Result<(), String> {
         ensure_app_unlocked(&db, &app_lock_state)?;
+        let prepared = {
+            let manager = manager
+                .write()
+                .map_err(|e| format!("Failed to acquire write lock: {}", e))?;
+            manager.prepare_close_terminal(&session_id)
+        }
+        .map_err(|e| e.to_string())?;
+
+        DefaultConnectionManager::execute_prepared_terminal_close(&prepared)
+            .map_err(|e| e.to_string())?;
+
         let mut manager = manager
             .write()
             .map_err(|e| format!("Failed to acquire write lock: {}", e))?;
-        manager
-            .close_terminal(&session_id)
-            .map_err(|e| e.to_string())
+        manager.finish_close_terminal(&prepared);
+        Ok(())
     }
 
     #[command]
-    pub fn exec_command(
+    pub fn exec_audited_command(
         db: State<Arc<Mutex<DatabaseManager>>>,
         app_lock_state: State<Arc<Mutex<AppLockRuntimeState>>>,
         manager: State<Arc<RwLock<DefaultConnectionManager>>>,
         session_id: Uuid,
         command: String,
+        audit_event: crate::modules::db::AuditEvent,
+        execute: bool,
     ) -> Result<String, String> {
         ensure_app_unlocked(&db, &app_lock_state)?;
+        let mut audit_event = audit_event;
+        let action = audit_event.action.clone();
+        if !matches!(action.as_str(), "ALLOWED" | "WARNED" | "BLOCKED") {
+            return Err(format!("Unsupported audit action: {}", action));
+        }
+        if execute && action == "BLOCKED" {
+            return Err("Blocked audit action cannot execute a command".to_string());
+        }
+
+        audit_event.session_id = Some(session_id);
+        {
+            let db = db.lock().map_err(|e| e.to_string())?;
+            db.save_audit_event(&audit_event).map_err(|e| e.to_string())?;
+        }
+
+        if !execute {
+            return Ok(String::new());
+        }
+
         let manager = manager
             .read()
             .map_err(|e| format!("Failed to acquire read lock: {}", e))?;
@@ -874,7 +1033,7 @@ pub fn run() {
             commands::send_terminal_data,
             commands::resize_terminal,
             commands::close_terminal,
-            commands::exec_command,
+            commands::exec_audited_command,
             // App Lock commands
             commands::set_app_lock,
             commands::change_app_lock,
@@ -926,8 +1085,9 @@ pub mod utils;
 #[cfg(test)]
 mod tests {
     use super::{
-        commands::sanitize_rdp_field, enrich_host_key_error_with_challenge,
-        parse_host_key_error_payload, HostKeyChallengeRuntimeState,
+        commands::{sanitize_rdp_field, validate_app_lock_password_strength},
+        enrich_host_key_error_with_challenge, parse_host_key_error_payload,
+        HostKeyChallengeRuntimeState,
     };
     use std::sync::{Arc, Mutex};
 
@@ -936,6 +1096,19 @@ mod tests {
         assert!(sanitize_rdp_field("Host", "rdp-host").is_ok());
         assert!(sanitize_rdp_field("Host", "bad\nhost").is_err());
         assert!(sanitize_rdp_field("Username", "bad\ruser").is_err());
+    }
+
+    #[test]
+    fn app_lock_password_strength_validation_rejects_weak_passwords() {
+        assert!(validate_app_lock_password_strength("").is_err());
+        assert!(validate_app_lock_password_strength("12345678").is_err());
+        assert!(validate_app_lock_password_strength("password123").is_err());
+        assert!(validate_app_lock_password_strength("abcdefgh").is_err());
+    }
+
+    #[test]
+    fn app_lock_password_strength_validation_accepts_reasonable_password() {
+        assert!(validate_app_lock_password_strength("A1secureLock").is_ok());
     }
 
     #[test]

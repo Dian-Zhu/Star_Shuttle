@@ -56,7 +56,7 @@ interface BackendAuditEvent {
   details?: string;
 }
 
-function toBackendEvent(event: AuditEvent): BackendAuditEvent {
+export function toBackendAuditEvent(event: AuditEvent): BackendAuditEvent {
   return {
     id: event.id,
     timestamp: event.timestamp.getTime(),
@@ -113,9 +113,10 @@ export class AuditService {
     sessionId?: string;
     userId?: string;
     action: AuditEvent['action'];
+    analysis?: Pick<AuditEvent, 'riskLevel' | 'detectedPatterns' | 'description'>;
     details?: any;
   }): AuditEvent {
-    const analysis = this.analyzeCommand(params.command);
+    const analysis = params.analysis ?? this.analyzeCommand(params.command);
     return {
       id: crypto.randomUUID(),
       timestamp: new Date(),
@@ -129,16 +130,20 @@ export class AuditService {
       details: params.details
     };
   }
+
+  cacheEvent(event: AuditEvent): void {
+    this.events.push(event);
+  }
   
   async recordEvent(event: AuditEvent): Promise<void> {
     // Send to backend logging system
     try {
-      await invoke('log_audit_event', { event: toBackendEvent(event) });
+      await invoke('log_audit_event', { event: toBackendAuditEvent(event) });
     } catch (error) {
       console.error('Failed to send audit event to backend:', error);
     }
 
-    this.events.push(event);
+    this.cacheEvent(event);
   }
   
   /**

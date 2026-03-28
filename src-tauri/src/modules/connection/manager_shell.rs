@@ -7,6 +7,7 @@ use uuid::Uuid;
 use crate::modules::connection::config_store;
 use crate::modules::connection::credential_sync::{
     fill_saved_credentials, sanitize_config_for_storage, sync_credentials_for_save,
+    PROXY_HTTP_PASSWORD_KIND, PROXY_SOCKS5_PASSWORD_KIND,
 };
 use crate::modules::connection::{ConnectionConfig, ConnectionError, SessionInfo};
 use crate::modules::credential::CredentialManager;
@@ -100,6 +101,8 @@ pub(crate) fn delete_connection_config(
         let _ = credential_manager.delete_passphrase(connection_id);
         let _ = credential_manager.delete_password_kind(connection_id, "jump_password");
         let _ = credential_manager.delete_password_kind(connection_id, "jump_passphrase");
+        let _ = credential_manager.delete_password_kind(connection_id, PROXY_SOCKS5_PASSWORD_KIND);
+        let _ = credential_manager.delete_password_kind(connection_id, PROXY_HTTP_PASSWORD_KIND);
         config_store::persist_connection_configs_to_db(db, connections)?;
         info!(
             "Successfully deleted connection configuration with id: {:?}",

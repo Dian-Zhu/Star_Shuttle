@@ -2,12 +2,274 @@ use anyhow::anyhow;
 use base64::{engine::general_purpose, Engine as _};
 use log::{debug, info};
 use russh::client::Handle;
+use std::fs;
+use std::net::{SocketAddr, SocketAddrV4};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{watch, Mutex};
+use tokio::sync::{oneshot, watch, Mutex};
+use uuid::Uuid;
 
 use super::SshHandler;
+
+const EPHEMERAL_ACTIVATION_TIMEOUT: Duration = Duration::from_secs(10);
+const EPHEMERAL_ACCEPT_TIMEOUT: Duration = Duration::from_secs(5);
+const EPHEMERAL_AUTH_TIMEOUT: Duration = Duration::from_secs(2);
+const EPHEMERAL_AUTH_PREFIX: &str = "STAR_SHUTTLE_AUTH ";
+const EPHEMERAL_AUTH_MAX_LINE_BYTES: usize = 256;
+
+pub struct EphemeralListenerLease {
+    local_port: u16,
+    auth_token: String,
+    auth_tx: Option<oneshot::Sender<String>>,
+}
+
+pub struct ActivatedEphemeralListener {
+    local_port: u16,
+    auth_token: String,
+}
+
+impl EphemeralListenerLease {
+    pub fn activate(mut self) -> Result<ActivatedEphemeralListener, anyhow::Error> {
+        let tx = self
+            .auth_tx
+            .take()
+            .ok_or_else(|| anyhow!("Ephemeral listener lease is already activated"))?;
+        let auth_token = self.auth_token;
+        tx.send(auth_token.clone())
+            .map_err(|_| anyhow!("Ephemeral listener activation channel is closed"))?;
+        Ok(ActivatedEphemeralListener {
+            local_port: self.local_port,
+            auth_token,
+        })
+    }
+}
+
+impl ActivatedEphemeralListener {
+    #[cfg(test)]
+    pub fn local_port(&self) -> u16 {
+        self.local_port
+    }
+
+    pub async fn connect(self) -> Result<TcpStream, anyhow::Error> {
+        let mut stream = TcpStream::connect(("127.0.0.1", self.local_port)).await?;
+        write_ephemeral_auth_line(&mut stream, &self.auth_token).await?;
+        Ok(stream)
+    }
+}
+
+fn create_ephemeral_listener_lease(
+    local_port: u16,
+) -> (EphemeralListenerLease, oneshot::Receiver<String>, String) {
+    let auth_token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+    let (auth_tx, auth_rx) = oneshot::channel();
+    (
+        EphemeralListenerLease {
+            local_port,
+            auth_token: auth_token.clone(),
+            auth_tx: Some(auth_tx),
+        },
+        auth_rx,
+        auth_token,
+    )
+}
+
+async fn wait_for_ephemeral_activation(
+    auth_rx: oneshot::Receiver<String>,
+    expected_token: &str,
+    context: &str,
+) -> Result<(), anyhow::Error> {
+    let received_token = tokio::time::timeout(EPHEMERAL_ACTIVATION_TIMEOUT, auth_rx)
+        .await
+        .map_err(|_| anyhow!("Timed out waiting for activation: {}", context))?
+        .map_err(|_| anyhow!("Activation channel closed: {}", context))?;
+
+    if received_token != expected_token {
+        return Err(anyhow!("Invalid activation token: {}", context));
+    }
+
+    Ok(())
+}
+
+async fn accept_authorized_local_connection(
+    listener: &TcpListener,
+    context: &str,
+    expected_token: &str,
+) -> Result<TcpStream, anyhow::Error> {
+    let deadline = tokio::time::Instant::now() + EPHEMERAL_ACCEPT_TIMEOUT;
+
+    loop {
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            return Err(anyhow!(
+                "Timed out waiting for authorized local connection: {}",
+                context
+            ));
+        }
+
+        let remaining = deadline.duration_since(now);
+        let accepted = tokio::time::timeout(remaining, listener.accept())
+            .await
+            .map_err(|_| anyhow!("Timed out accepting local connection: {}", context))?;
+        let (mut stream, addr) = accepted.map_err(|e| anyhow!(e.to_string()))?;
+
+        if !is_connection_owned_by_current_process(&stream) {
+            debug!(
+                "Rejected unauthorized local client {:?} for {}",
+                addr, context
+            );
+            let _ = stream.shutdown().await;
+            continue;
+        }
+
+        if !authenticate_ephemeral_local_client(&mut stream, expected_token, context).await? {
+            debug!(
+                "Rejected client with invalid ephemeral auth {:?} for {}",
+                addr, context
+            );
+            let _ = stream.shutdown().await;
+            continue;
+        }
+
+        debug!(
+            "Accepted authorized local client {:?} for {}",
+            addr, context
+        );
+        return Ok(stream);
+    }
+}
+
+async fn write_ephemeral_auth_line(
+    stream: &mut TcpStream,
+    auth_token: &str,
+) -> Result<(), anyhow::Error> {
+    let line = format!("{}{}\n", EPHEMERAL_AUTH_PREFIX, auth_token);
+    stream.write_all(line.as_bytes()).await?;
+    stream.flush().await?;
+    Ok(())
+}
+
+async fn authenticate_ephemeral_local_client(
+    stream: &mut TcpStream,
+    expected_token: &str,
+    context: &str,
+) -> Result<bool, anyhow::Error> {
+    let auth_future = async {
+        let mut received = Vec::with_capacity(EPHEMERAL_AUTH_MAX_LINE_BYTES);
+        let mut byte = [0u8; 1];
+        while received.len() < EPHEMERAL_AUTH_MAX_LINE_BYTES {
+            let n = stream.read(&mut byte).await?;
+            if n == 0 {
+                return Ok::<bool, anyhow::Error>(false);
+            }
+            if byte[0] == b'\n' {
+                break;
+            }
+            if byte[0] != b'\r' {
+                received.push(byte[0]);
+            }
+        }
+
+        if received.len() >= EPHEMERAL_AUTH_MAX_LINE_BYTES {
+            return Ok(false);
+        }
+
+        let line = String::from_utf8(received).map_err(|e| anyhow!(e.to_string()))?;
+        let Some(token) = line.strip_prefix(EPHEMERAL_AUTH_PREFIX) else {
+            return Ok(false);
+        };
+        Ok(token == expected_token)
+    };
+
+    tokio::time::timeout(EPHEMERAL_AUTH_TIMEOUT, auth_future)
+        .await
+        .map_err(|_| anyhow!("Timed out authenticating local client: {}", context))?
+}
+
+#[cfg(target_os = "linux")]
+fn is_connection_owned_by_current_process(stream: &TcpStream) -> bool {
+    let local_addr = match stream.local_addr() {
+        Ok(addr) => addr,
+        Err(_) => return false,
+    };
+    let peer_addr = match stream.peer_addr() {
+        Ok(addr) => addr,
+        Err(_) => return false,
+    };
+
+    let (local_v4, peer_v4) = match (local_addr, peer_addr) {
+        (SocketAddr::V4(local), SocketAddr::V4(peer)) => (local, peer),
+        _ => return false,
+    };
+
+    let client_inode = match find_client_socket_inode(peer_v4, local_v4) {
+        Some(inode) => inode,
+        None => return false,
+    };
+
+    current_process_has_socket_inode(&client_inode)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn is_connection_owned_by_current_process(_stream: &TcpStream) -> bool {
+    true
+}
+
+#[cfg(target_os = "linux")]
+fn find_client_socket_inode(
+    client_local: SocketAddrV4,
+    client_remote: SocketAddrV4,
+) -> Option<String> {
+    let content = fs::read_to_string("/proc/net/tcp").ok()?;
+    let local_repr = socket_addr_to_proc_repr(client_local);
+    let remote_repr = socket_addr_to_proc_repr(client_remote);
+
+    for line in content.lines().skip(1) {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.len() <= 9 {
+            continue;
+        }
+
+        if fields[1] == local_repr && fields[2] == remote_repr {
+            return Some(fields[9].to_string());
+        }
+    }
+
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn socket_addr_to_proc_repr(addr: SocketAddrV4) -> String {
+    let ip = addr.ip().octets();
+    format!(
+        "{:02X}{:02X}{:02X}{:02X}:{:04X}",
+        ip[3],
+        ip[2],
+        ip[1],
+        ip[0],
+        addr.port()
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn current_process_has_socket_inode(inode: &str) -> bool {
+    let expected = format!("socket:[{}]", inode);
+    let entries = match fs::read_dir("/proc/self/fd") {
+        Ok(entries) => entries,
+        Err(_) => return false,
+    };
+
+    for entry in entries.flatten() {
+        if let Ok(target) = fs::read_link(entry.path()) {
+            if target.to_string_lossy() == expected {
+                return true;
+            }
+        }
+    }
+
+    false
+}
 
 pub(super) async fn start_socks5_proxy(
     handle: Arc<Mutex<Handle<SshHandler>>>,
@@ -51,9 +313,10 @@ pub async fn start_ephemeral_direct_tcpip_listener(
     handle: Arc<Mutex<Handle<SshHandler>>>,
     remote_host: String,
     remote_port: u16,
-) -> Result<u16, anyhow::Error> {
+) -> Result<EphemeralListenerLease, anyhow::Error> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let local_port = listener.local_addr()?.port();
+    let (lease, auth_rx, expected_token) = create_ephemeral_listener_lease(local_port);
 
     info!(
         "Listening on 127.0.0.1:{} for forwarding to {}:{}",
@@ -61,12 +324,28 @@ pub async fn start_ephemeral_direct_tcpip_listener(
     );
 
     tokio::spawn(async move {
-        let accepted = listener.accept().await;
-        let Ok((mut socket, addr)) = accepted else {
+        if let Err(e) =
+            wait_for_ephemeral_activation(auth_rx, &expected_token, "direct-tcpip listener").await
+        {
+            debug!("Direct-tcpip listener activation failed: {:?}", e);
             return;
+        }
+
+        let mut socket = match accept_authorized_local_connection(
+            &listener,
+            "direct-tcpip listener",
+            &expected_token,
+        )
+        .await
+        {
+            Ok(socket) => socket,
+            Err(e) => {
+                debug!("Direct-tcpip listener accept failed: {:?}", e);
+                return;
+            }
         };
 
-        debug!("Accepted connection from {:?} for jump forwarding", addr);
+        debug!("Accepted authorized connection for jump forwarding");
         let channel_result = {
             let guard = handle.lock().await;
             guard
@@ -114,7 +393,7 @@ pub async fn start_ephemeral_direct_tcpip_listener(
         }
     });
 
-    Ok(local_port)
+    Ok(lease)
 }
 
 pub async fn start_ephemeral_socks5_proxy_dial_listener(
@@ -124,9 +403,10 @@ pub async fn start_ephemeral_socks5_proxy_dial_listener(
     proxy_password: Option<String>,
     remote_host: String,
     remote_port: u16,
-) -> Result<u16, anyhow::Error> {
+) -> Result<EphemeralListenerLease, anyhow::Error> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let local_port = listener.local_addr()?.port();
+    let (lease, auth_rx, expected_token) = create_ephemeral_listener_lease(local_port);
 
     info!(
         "Listening on 127.0.0.1:{} for proxying to {}:{} via SOCKS5 {}:{}",
@@ -134,9 +414,25 @@ pub async fn start_ephemeral_socks5_proxy_dial_listener(
     );
 
     tokio::spawn(async move {
-        let accept = listener.accept().await;
-        let Ok((mut local, _addr)) = accept else {
+        if let Err(e) =
+            wait_for_ephemeral_activation(auth_rx, &expected_token, "socks5 dial listener").await
+        {
+            debug!("SOCKS5 dial listener activation failed: {:?}", e);
             return;
+        }
+
+        let mut local = match accept_authorized_local_connection(
+            &listener,
+            "socks5 dial listener",
+            &expected_token,
+        )
+        .await
+        {
+            Ok(local) => local,
+            Err(e) => {
+                debug!("SOCKS5 dial listener accept failed: {:?}", e);
+                return;
+            }
         };
 
         let proxy_stream = TcpStream::connect(format!("{}:{}", proxy_host, proxy_port)).await;
@@ -191,7 +487,7 @@ pub async fn start_ephemeral_socks5_proxy_dial_listener(
         proxy_stream.shutdown().await.ok();
     });
 
-    Ok(local_port)
+    Ok(lease)
 }
 
 pub async fn start_ephemeral_http_proxy_dial_listener(
@@ -201,9 +497,10 @@ pub async fn start_ephemeral_http_proxy_dial_listener(
     proxy_password: Option<String>,
     remote_host: String,
     remote_port: u16,
-) -> Result<u16, anyhow::Error> {
+) -> Result<EphemeralListenerLease, anyhow::Error> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let local_port = listener.local_addr()?.port();
+    let (lease, auth_rx, expected_token) = create_ephemeral_listener_lease(local_port);
 
     info!(
         "Listening on 127.0.0.1:{} for proxying to {}:{} via HTTP {}:{}",
@@ -211,9 +508,25 @@ pub async fn start_ephemeral_http_proxy_dial_listener(
     );
 
     tokio::spawn(async move {
-        let accept = listener.accept().await;
-        let Ok((mut local, _addr)) = accept else {
+        if let Err(e) =
+            wait_for_ephemeral_activation(auth_rx, &expected_token, "http dial listener").await
+        {
+            debug!("HTTP dial listener activation failed: {:?}", e);
             return;
+        }
+
+        let mut local = match accept_authorized_local_connection(
+            &listener,
+            "http dial listener",
+            &expected_token,
+        )
+        .await
+        {
+            Ok(local) => local,
+            Err(e) => {
+                debug!("HTTP dial listener accept failed: {:?}", e);
+                return;
+            }
         };
 
         let proxy_stream = TcpStream::connect(format!("{}:{}", proxy_host, proxy_port)).await;
@@ -268,7 +581,7 @@ pub async fn start_ephemeral_http_proxy_dial_listener(
         proxy_stream.shutdown().await.ok();
     });
 
-    Ok(local_port)
+    Ok(lease)
 }
 
 async fn handle_socks5_client(
@@ -539,4 +852,100 @@ pub(super) async fn http_proxy_connect(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ephemeral_lease_activation_succeeds_with_matching_token() {
+        let rt = tokio::runtime::Runtime::new().expect("runtime should initialize");
+        rt.block_on(async {
+            let (lease, auth_rx, expected_token) = create_ephemeral_listener_lease(31337);
+            let activated = lease.activate().expect("activation should succeed");
+            assert_eq!(activated.local_port(), 31337);
+            wait_for_ephemeral_activation(auth_rx, &expected_token, "test")
+                .await
+                .expect("token should match");
+        });
+    }
+
+    #[test]
+    fn ephemeral_activation_fails_when_not_activated() {
+        let rt = tokio::runtime::Runtime::new().expect("runtime should initialize");
+        rt.block_on(async {
+            let (lease, auth_rx, expected_token) = create_ephemeral_listener_lease(31338);
+            drop(lease);
+            let result = wait_for_ephemeral_activation(auth_rx, &expected_token, "test").await;
+            assert!(
+                result.is_err(),
+                "activation should fail when sender is dropped"
+            );
+        });
+    }
+
+    #[test]
+    fn accept_authorized_local_connection_accepts_current_process_client() {
+        let rt = tokio::runtime::Runtime::new().expect("runtime should initialize");
+        rt.block_on(async {
+            let listener = TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("listener should bind");
+            let port = listener
+                .local_addr()
+                .expect("listener should have local addr")
+                .port();
+            let expected_token = "token-123";
+
+            let accept_task = tokio::spawn(async move {
+                let stream =
+                    accept_authorized_local_connection(&listener, "test-listener", expected_token)
+                        .await
+                        .expect("self connection should be accepted");
+                stream
+                    .peer_addr()
+                    .expect("accepted stream should have peer addr")
+            });
+
+            let mut client = TcpStream::connect(("127.0.0.1", port))
+                .await
+                .expect("client should connect");
+            write_ephemeral_auth_line(&mut client, expected_token)
+                .await
+                .expect("client should authenticate");
+
+            let peer_addr = accept_task.await.expect("accept task should finish");
+            assert_eq!(peer_addr.ip().to_string(), "127.0.0.1");
+        });
+    }
+
+    #[test]
+    fn activated_listener_connect_sends_auth_line() {
+        let rt = tokio::runtime::Runtime::new().expect("runtime should initialize");
+        rt.block_on(async {
+            let listener = TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("listener should bind");
+            let port = listener
+                .local_addr()
+                .expect("listener should have local addr")
+                .port();
+
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.expect("accept should succeed");
+                let mut buf = vec![0u8; 128];
+                let n = stream.read(&mut buf).await.expect("read should succeed");
+                String::from_utf8(buf[..n].to_vec()).expect("auth line should be utf8")
+            });
+
+            let activated = ActivatedEphemeralListener {
+                local_port: port,
+                auth_token: "token-456".to_string(),
+            };
+            let _stream = activated.connect().await.expect("connect should succeed");
+            let auth_line = server.await.expect("server should finish");
+            assert_eq!(auth_line, "STAR_SHUTTLE_AUTH token-456\n");
+        });
+    }
 }

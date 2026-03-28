@@ -15,6 +15,13 @@ pub struct TerminalSession {
     pub sender: mpsc::Sender<TerminalCommand>,
 }
 
+#[derive(Clone)]
+pub struct PreparedTerminalClose {
+    pub terminal_id: Uuid,
+    pub session_id: Uuid,
+    pub sender: mpsc::Sender<TerminalCommand>,
+}
+
 pub enum TerminalCommand {
     Data(Vec<u8>),
     Resize(u32, u32),
@@ -96,28 +103,43 @@ pub fn close_terminal(
     terminals: &mut HashMap<Uuid, TerminalSession>,
     session_id: &Uuid,
 ) -> Result<(), ConnectionError> {
+    let prepared = prepare_terminal_close(terminals, session_id)?;
+    execute_prepared_terminal_close(&prepared)?;
+    finish_terminal_close(terminals, &prepared);
+    Ok(())
+}
+
+pub fn prepare_terminal_close(
+    terminals: &HashMap<Uuid, TerminalSession>,
+    session_id: &Uuid,
+) -> Result<PreparedTerminalClose, ConnectionError> {
     let terminal = terminals
         .values()
         .find(|t| &t.session_id == session_id)
         .cloned()
         .ok_or(ConnectionError::SessionNotFound(*session_id))?;
 
-    match terminal.sender.try_send(TerminalCommand::Close) {
+    Ok(PreparedTerminalClose {
+        terminal_id: terminal.id,
+        session_id: terminal.session_id,
+        sender: terminal.sender,
+    })
+}
+
+pub fn execute_prepared_terminal_close(
+    prepared: &PreparedTerminalClose,
+) -> Result<(), ConnectionError> {
+    match prepared.sender.try_send(TerminalCommand::Close) {
         Ok(()) => {}
         Err(tokio::sync::mpsc::error::TrySendError::Full(TerminalCommand::Close)) => {
-            terminal
-                .sender
-                .blocking_send(TerminalCommand::Close)
-                .map_err(|_| {
-                    ConnectionError::ConnectionFailed(
-                        "Terminal command channel is closed".to_string(),
-                    )
-                })?;
+            return Err(ConnectionError::ConnectionFailed(
+                "Terminal close command queue is full".to_string(),
+            ));
         }
         Err(tokio::sync::mpsc::error::TrySendError::Closed(TerminalCommand::Close)) => {
             warn!(
                 "Terminal close channel already closed for session {}",
-                session_id
+                prepared.session_id
             );
         }
         Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
@@ -128,13 +150,31 @@ pub fn close_terminal(
         Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
             warn!(
                 "Terminal close channel already closed for session {}",
-                session_id
+                prepared.session_id
             );
         }
     }
 
-    terminals.remove(&terminal.id);
     Ok(())
+}
+
+pub fn finish_terminal_close(
+    terminals: &mut HashMap<Uuid, TerminalSession>,
+    prepared: &PreparedTerminalClose,
+) {
+    terminals.remove(&prepared.terminal_id);
+}
+
+pub fn remove_terminal_by_session(
+    terminals: &mut HashMap<Uuid, TerminalSession>,
+    session_id: &Uuid,
+) -> Option<Uuid> {
+    let terminal_id = terminals
+        .values()
+        .find(|terminal| &terminal.session_id == session_id)
+        .map(|terminal| terminal.id)?;
+    terminals.remove(&terminal_id);
+    Some(terminal_id)
 }
 
 pub fn get_terminal_sender(

@@ -15,45 +15,68 @@
   import ActivityIcon from './icons/ActivityIcon.svelte';
   import { slide, fade } from 'svelte/transition';
 
+  function createDefaultFormData() {
+    return {
+      id: '',
+      name: '',
+      protocol: 'Ssh' as 'Ssh' | 'Rdp' | 'Telnet',
+      host: '',
+      port: 22,
+      username: '',
+      authMethod: 'password' as 'password' | 'keyboardInteractive' | 'privateKey' | 'agent' | 'certificate',
+      password: '',
+      savePassword: false,
+      keyPath: '',
+      passphrase: '',
+      savePassphrase: false,
+      agentPath: '',
+      certificatePath: '',
+      privateKeyPath: '',
+      description: '',
+      tags: '', // Comma separated string for backend compatibility
+      localForwards: [] as { local_host: string; local_port: number; remote_host: string; remote_port: number }[],
+      remoteForwards: [] as { remote_host: string; remote_port: number; local_host: string; local_port: number }[],
+      proxyType: 'none' as 'none' | 'socks5' | 'http' | 'jumpHost',
+      proxyHost: '',
+      proxyPort: 1080,
+      proxyUsername: '',
+      proxyPassword: '',
+      proxyHasStoredPassword: false,
+      proxyPasswordDirty: false,
+      clearStoredProxyPassword: false,
+      jumpHostUsername: '',
+      jumpHostAuthMethod: 'password' as 'password' | 'keyboardInteractive' | 'privateKey' | 'agent' | 'certificate',
+      jumpHostPassword: '',
+      jumpHostSavePassword: false,
+      jumpHostKeyPath: '',
+      jumpHostPassphrase: '',
+      jumpHostSavePassphrase: false,
+      jumpHostAgentPath: '',
+      jumpHostCertificatePath: '',
+      jumpHostPrivateKeyPath: '',
+      socksProxyPort: undefined as number | undefined,
+      autoReconnect: false,
+    };
+  }
+
   // Form state
-  let formData = {
-    id: '',
-    name: '',
-    protocol: 'Ssh' as 'Ssh' | 'Rdp' | 'Telnet',
-    host: '',
-    port: 22,
-    username: '',
-    authMethod: 'password' as 'password' | 'keyboardInteractive' | 'privateKey' | 'agent' | 'certificate',
-    password: '',
-    savePassword: false,
-    keyPath: '',
-    passphrase: '',
-    savePassphrase: false,
-    agentPath: '',
-    certificatePath: '',
-    privateKeyPath: '',
-    description: '',
-    tags: '', // Comma separated string for backend compatibility
-    localForwards: [] as { local_host: string; local_port: number; remote_host: string; remote_port: number }[],
-    remoteForwards: [] as { remote_host: string; remote_port: number; local_host: string; local_port: number }[],
-    proxyType: 'none' as 'none' | 'socks5' | 'http' | 'jumpHost',
-    proxyHost: '',
-    proxyPort: 1080,
-    proxyUsername: '',
-    proxyPassword: '',
-    jumpHostUsername: '',
-    jumpHostAuthMethod: 'password' as 'password' | 'keyboardInteractive' | 'privateKey' | 'agent' | 'certificate',
-    jumpHostPassword: '',
-    jumpHostSavePassword: false,
-    jumpHostKeyPath: '',
-    jumpHostPassphrase: '',
-    jumpHostSavePassphrase: false,
-    jumpHostAgentPath: '',
-    jumpHostCertificatePath: '',
-    jumpHostPrivateKeyPath: '',
-    socksProxyPort: undefined as number | undefined,
-    autoReconnect: false,
-  };
+  let formData = createDefaultFormData();
+  let previousEditingConnectionId: string | null = null;
+  let previousFormVisible = false;
+
+  /*
+   * Maintain explicit reset semantics: opening "new connection" from edit mode
+   * must not keep any stale fields from the previous edit session.
+   */
+  function resetFormData() {
+    formData = createDefaultFormData();
+    activeTab = 'basic';
+    lastProtocol = formData.protocol;
+    tagInput = '';
+    newLocalForward = { local_host: 'localhost', local_port: 0, remote_host: 'localhost', remote_port: 0 };
+    newRemoteForward = { remote_host: 'localhost', remote_port: 0, local_host: 'localhost', local_port: 0 };
+    hostKeyVerification = null;
+  }
 
   function normalizeTagsValue(value: unknown): string[] {
     if (Array.isArray(value)) {
@@ -147,6 +170,9 @@
     formData.proxyPort = 1080;
     formData.proxyUsername = '';
     formData.proxyPassword = '';
+    formData.proxyHasStoredPassword = false;
+    formData.proxyPasswordDirty = false;
+    formData.clearStoredProxyPassword = false;
     formData.jumpHostUsername = '';
     formData.jumpHostAuthMethod = 'password';
     formData.jumpHostPassword = '';
@@ -172,12 +198,20 @@
       formData.proxyPort = asNumber(socksProxy.port, 1080);
       formData.proxyUsername = asString(socksProxy.username);
       formData.proxyPassword = asString(socksProxy.password);
+      formData.proxyHasStoredPassword =
+        Boolean(socksProxy.has_password) || formData.proxyPassword.length > 0;
+      formData.proxyPasswordDirty = false;
+      formData.clearStoredProxyPassword = false;
     } else if (httpProxy) {
       formData.proxyType = 'http';
       formData.proxyHost = asString(httpProxy.host);
       formData.proxyPort = asNumber(httpProxy.port, 8080);
       formData.proxyUsername = asString(httpProxy.username);
       formData.proxyPassword = asString(httpProxy.password);
+      formData.proxyHasStoredPassword =
+        Boolean(httpProxy.has_password) || formData.proxyPassword.length > 0;
+      formData.proxyPasswordDirty = false;
+      formData.clearStoredProxyPassword = false;
     } else if (jumpHostProxy) {
       formData.proxyType = 'jumpHost';
       formData.proxyHost = asString(jumpHostProxy.host);
@@ -213,6 +247,28 @@
     }
   }
 
+  function handleProxyPasswordInput(value: string) {
+    formData.proxyPassword = value;
+    formData.proxyPasswordDirty = true;
+    if (value) {
+      formData.clearStoredProxyPassword = false;
+    }
+  }
+
+  function clearStoredProxyPassword() {
+    formData.proxyPassword = '';
+    formData.proxyPasswordDirty = true;
+    formData.clearStoredProxyPassword = true;
+    formData.proxyHasStoredPassword = false;
+  }
+
+  function restoreStoredProxyPassword() {
+    formData.proxyPassword = '';
+    formData.proxyPasswordDirty = false;
+    formData.clearStoredProxyPassword = false;
+    formData.proxyHasStoredPassword = true;
+  }
+
   function sanitizeConnectConfig(config: unknown): Connection {
     const out = JSON.parse(JSON.stringify(config ?? {})) as Connection;
     if (out?.auth_method?.Password) out.auth_method.Password.password = '';
@@ -220,11 +276,20 @@
     if (out?.auth_method?.Certificate) delete out.auth_method.Certificate.passphrase;
 
     const proxyRecord = asRecord(out?.proxy_type);
+    const socksProxy = asRecord(proxyRecord?.Socks5);
+    const httpProxy = asRecord(proxyRecord?.Http);
     const jumpHost = asRecord(proxyRecord?.JumpHost);
     const jumpAuth = asRecord(jumpHost?.auth_method);
     const jumpPassword = asRecord(jumpAuth?.Password);
     const jumpPrivateKey = asRecord(jumpAuth?.PrivateKey);
     const jumpCertificate = asRecord(jumpAuth?.Certificate);
+
+    if (socksProxy) {
+      socksProxy.password = '';
+    }
+    if (httpProxy) {
+      httpProxy.password = '';
+    }
 
     if (jumpPassword) {
       jumpPassword.password = '';
@@ -306,8 +371,21 @@
   $: hostKeyHint =
     hostKeyVerification ? getHostKeyPromptHint(hostKeyVerification.type) : '首次连接该服务器，请确认指纹后再继续。';
 
-  $: if ($editingConnection) {
-    hydrateFromConnection($editingConnection);
+  $: {
+    const formVisible = $showConnectionForm;
+    const editingId = $editingConnection?.id ?? null;
+    const openedCreate = formVisible && !previousFormVisible && editingId === null;
+    const switchedFromEditToCreate =
+      formVisible && editingId === null && previousEditingConnectionId !== null;
+
+    if (openedCreate || switchedFromEditToCreate) {
+      resetFormData();
+    } else if (formVisible && editingId && editingId !== previousEditingConnectionId && $editingConnection) {
+      hydrateFromConnection($editingConnection);
+    }
+
+    previousFormVisible = formVisible;
+    previousEditingConnectionId = editingId;
   }
 
   async function acceptHostKey() {
@@ -942,12 +1020,42 @@
                             class="w-full bg-app-surface border border-app-border rounded-lg px-3 py-2 text-sm text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all"
                             placeholder="用户名"
                           />
-                          <input
-                            type="password"
-                            bind:value={formData.proxyPassword}
-                            class="w-full bg-app-surface border border-app-border rounded-lg px-3 py-2 text-sm text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all"
-                            placeholder="密码"
-                          />
+                          <div class="space-y-2">
+                            <input
+                              type="password"
+                              value={formData.proxyPassword}
+                              on:input={(event) => handleProxyPasswordInput((event.currentTarget as HTMLInputElement).value)}
+                              class="w-full bg-app-surface border border-app-border rounded-lg px-3 py-2 text-sm text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all"
+                              placeholder={
+                                formData.proxyHasStoredPassword && !formData.proxyPasswordDirty
+                                  ? '已保存密码，留空则保持不变'
+                                  : '密码'
+                              }
+                            />
+                            {#if formData.proxyHasStoredPassword && !formData.proxyPasswordDirty}
+                              <div class="flex items-center justify-between gap-3 text-xs text-app-text-secondary">
+                                <span>已存在保存的代理密码。</span>
+                                <button
+                                  type="button"
+                                  class="text-red-500 hover:text-red-400 transition-colors"
+                                  on:click={clearStoredProxyPassword}
+                                >
+                                  清除已保存密码
+                                </button>
+                              </div>
+                            {:else if formData.clearStoredProxyPassword}
+                              <div class="flex items-center justify-between gap-3 text-xs text-app-text-secondary">
+                                <span>保存时会删除当前代理密码。</span>
+                                <button
+                                  type="button"
+                                  class="text-primary-600 hover:text-primary-500 transition-colors"
+                                  on:click={restoreStoredProxyPassword}
+                                >
+                                  保留已保存密码
+                                </button>
+                              </div>
+                            {/if}
+                          </div>
                         </div>
                       </div>
                       

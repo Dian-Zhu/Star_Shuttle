@@ -1,12 +1,14 @@
 use anyhow::anyhow;
 use dirs::{data_local_dir, home_dir};
+use fs2::FileExt;
 use log::{debug, info};
 use russh_keys::key::PublicKey;
 use russh_keys::PublicKeyBase64;
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct KnownHostKey {
@@ -41,84 +43,34 @@ impl KnownHostsManager {
 
     /// Load known hosts from file
     pub fn load(&mut self) -> Result<(), anyhow::Error> {
-        if !Path::new(&self.known_hosts_path).exists() {
-            info!("Known_hosts file does not exist, will create it when needed");
-            return Ok(());
-        }
-
-        let file = File::open(&self.known_hosts_path)?;
-        let reader = io::BufReader::new(file);
-
         info!("Loading known_hosts from: {}", self.known_hosts_path);
 
-        self.known_hosts.clear();
-
-        for line in reader.lines() {
-            let line = line?;
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-
-            let mut parts = line.split_whitespace().collect::<Vec<_>>();
-            if parts.is_empty() {
-                continue;
-            }
-
-            if parts[0].starts_with('@') {
-                parts.remove(0);
-            }
-
-            if parts.len() < 3 {
-                continue;
-            }
-
-            let hosts = parts[0];
-            let key_type = parts[1];
-            let key_base64 = parts[2];
-
-            for host in hosts.split(',').filter(|h| !h.is_empty()) {
-                self.known_hosts
-                    .entry(host.to_string())
-                    .or_default()
-                    .push(KnownHostKey {
-                        key_type: key_type.to_string(),
-                        key_base64: key_base64.to_string(),
-                    });
-            }
-        }
-
+        let path = Path::new(&self.known_hosts_path);
+        self.known_hosts = read_known_hosts_map(path)?;
         Ok(())
     }
 
     /// Save known hosts to file
-    pub fn save(&self) -> Result<(), anyhow::Error> {
+    pub fn save(&mut self) -> Result<(), anyhow::Error> {
         info!("Saving known_hosts to: {}", self.known_hosts_path);
 
-        // Create parent directory if it doesn't exist
-        if let Some(parent) = Path::new(&self.known_hosts_path).parent() {
-            fs::create_dir_all(parent)?;
-            ensure_private_dir_permissions(parent)?;
-        }
+        let path = Path::new(&self.known_hosts_path);
+        let _lock = lock_known_hosts_file(path)?;
+        let mut merged = read_known_hosts_map(path)?;
+        merge_known_hosts(&mut merged, &self.known_hosts);
+        write_known_hosts_map_atomically(path, &merged)?;
+        self.known_hosts = merged;
+        Ok(())
+    }
 
-        // Open file for writing
-        let mut options = OpenOptions::new();
-        options.create(true).write(true).truncate(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        let mut file = options.open(&self.known_hosts_path)?;
-        ensure_private_file_permissions(Path::new(&self.known_hosts_path))?;
-
-        // Write each host and its keys to the file
-        for (host, keys) in &self.known_hosts {
-            for key in keys {
-                writeln!(file, "{} {} {}", host, key.key_type, key.key_base64)?;
-            }
-        }
-
+    #[cfg(test)]
+    fn remove_host_key_from_latest(&mut self, host: &str) -> Result<(), anyhow::Error> {
+        let path = Path::new(&self.known_hosts_path);
+        let _lock = lock_known_hosts_file(path)?;
+        let mut latest = read_known_hosts_map(path)?;
+        latest.retain(|pattern, _| !host_pattern_matches_host(pattern, host));
+        write_known_hosts_map_atomically(path, &latest)?;
+        self.known_hosts = latest;
         Ok(())
     }
 
@@ -167,31 +119,48 @@ impl KnownHostsManager {
         validate_token_component("key_base64", &key_base64)?;
 
         let host_pattern = format!("[{}]:{}", host, port);
+        let candidate = KnownHostKey {
+            key_type,
+            key_base64,
+        };
 
         if replace {
-            self.known_hosts.insert(
-                host_pattern.clone(),
-                vec![KnownHostKey {
-                    key_type,
-                    key_base64,
-                }],
-            );
-        } else {
-            let keys = self.known_hosts.entry(host_pattern.clone()).or_default();
-            let candidate = KnownHostKey {
-                key_type,
-                key_base64,
-            };
-            if !keys.contains(&candidate) {
-                keys.push(candidate);
-            }
+            self.upsert_host_key_on_latest(host_pattern, candidate, true)?;
+            return Ok(());
+        }
+
+        let keys = self.known_hosts.entry(host_pattern.clone()).or_default();
+        if !keys.contains(&candidate) {
+            keys.push(candidate);
         }
 
         self.save()?;
         Ok(())
     }
 
+    fn upsert_host_key_on_latest(
+        &mut self,
+        host_pattern: String,
+        candidate: KnownHostKey,
+        replace: bool,
+    ) -> Result<(), anyhow::Error> {
+        let path = Path::new(&self.known_hosts_path);
+        let _lock = lock_known_hosts_file(path)?;
+        let mut latest = read_known_hosts_map(path)?;
+
+        if replace {
+            latest.insert(host_pattern, vec![candidate]);
+        } else {
+            append_known_host_key(&mut latest, host_pattern, candidate);
+        }
+
+        write_known_hosts_map_atomically(path, &latest)?;
+        self.known_hosts = latest;
+        Ok(())
+    }
+
     /// Remove a host key from known_hosts
+    #[cfg(test)]
     pub fn remove_host_key(&mut self, host: &str) -> Result<(), anyhow::Error> {
         info!("Removing host: {}", host);
 
@@ -207,12 +176,163 @@ impl KnownHostsManager {
             info!("Successfully removed host pattern: {}", host_pattern);
         }
 
-        // Save changes to file
-        self.save()?;
+        // Save changes to file using lock + latest-state rewrite semantics.
+        self.remove_host_key_from_latest(host)?;
 
         info!("Successfully removed host key from known_hosts");
         Ok(())
     }
+}
+
+fn read_known_hosts_map(path: &Path) -> Result<HashMap<String, Vec<KnownHostKey>>, anyhow::Error> {
+    if !path.exists() {
+        info!("Known_hosts file does not exist, will create it when needed");
+        return Ok(HashMap::new());
+    }
+
+    let file = File::open(path)?;
+    let reader = io::BufReader::new(file);
+    parse_known_hosts_reader(reader)
+}
+
+fn parse_known_hosts_reader<R: BufRead>(
+    reader: R,
+) -> Result<HashMap<String, Vec<KnownHostKey>>, anyhow::Error> {
+    let mut known_hosts = HashMap::new();
+
+    for line in reader.lines() {
+        let line = line?;
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        let mut parts = line.split_whitespace().collect::<Vec<_>>();
+        if parts.is_empty() {
+            continue;
+        }
+
+        if parts[0].starts_with('@') {
+            parts.remove(0);
+        }
+
+        if parts.len() < 3 {
+            continue;
+        }
+
+        let hosts = parts[0];
+        let key_type = parts[1];
+        let key_base64 = parts[2];
+
+        for host in hosts.split(',').filter(|h| !h.is_empty()) {
+            append_known_host_key(
+                &mut known_hosts,
+                host.to_string(),
+                KnownHostKey {
+                    key_type: key_type.to_string(),
+                    key_base64: key_base64.to_string(),
+                },
+            );
+        }
+    }
+
+    Ok(known_hosts)
+}
+
+fn append_known_host_key(
+    known_hosts: &mut HashMap<String, Vec<KnownHostKey>>,
+    host: String,
+    key: KnownHostKey,
+) {
+    let keys = known_hosts.entry(host).or_default();
+    if !keys.contains(&key) {
+        keys.push(key);
+    }
+}
+
+fn merge_known_hosts(
+    base: &mut HashMap<String, Vec<KnownHostKey>>,
+    incoming: &HashMap<String, Vec<KnownHostKey>>,
+) {
+    for (host, keys) in incoming {
+        for key in keys {
+            append_known_host_key(base, host.clone(), key.clone());
+        }
+    }
+}
+
+fn known_hosts_lock_path(path: &Path) -> PathBuf {
+    let mut lock = path.as_os_str().to_os_string();
+    lock.push(".lock");
+    PathBuf::from(lock)
+}
+
+fn lock_known_hosts_file(path: &Path) -> Result<File, anyhow::Error> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+        ensure_private_dir_permissions(parent)?;
+    }
+
+    let lock_path = known_hosts_lock_path(path);
+    let mut options = OpenOptions::new();
+    options.create(true).read(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let lock_file = options.open(&lock_path)?;
+    ensure_private_file_permissions(&lock_path)?;
+    lock_file.lock_exclusive()?;
+    Ok(lock_file)
+}
+
+fn write_known_hosts_map_atomically(
+    path: &Path,
+    map: &HashMap<String, Vec<KnownHostKey>>,
+) -> Result<(), anyhow::Error> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+        ensure_private_dir_permissions(parent)?;
+    }
+
+    let temp_path = temporary_known_hosts_path(path);
+    let mut options = OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&temp_path)?;
+    ensure_private_file_permissions(&temp_path)?;
+
+    for (host, keys) in map {
+        for key in keys {
+            writeln!(file, "{} {} {}", host, key.key_type, key.key_base64)?;
+        }
+    }
+
+    file.flush()?;
+    file.sync_all()?;
+    drop(file);
+
+    fs::rename(&temp_path, path)?;
+    ensure_private_file_permissions(path)?;
+    Ok(())
+}
+
+fn temporary_known_hosts_path(path: &Path) -> PathBuf {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("known_hosts");
+    let temp_name = format!("{}.tmp-{}-{}", file_name, std::process::id(), unique);
+    path.with_file_name(temp_name)
 }
 
 fn storage_path() -> Result<String, anyhow::Error> {
@@ -280,6 +400,7 @@ fn validate_token_component(name: &str, value: &str) -> Result<(), anyhow::Error
     Ok(())
 }
 
+#[cfg(test)]
 fn host_pattern_matches_host(pattern: &str, host: &str) -> bool {
     pattern == host
         || pattern
@@ -297,7 +418,10 @@ fn public_key_parts(key: &PublicKey) -> Result<(String, String), anyhow::Error> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+    use std::sync::{Arc, Barrier};
     use std::sync::{Mutex, OnceLock};
+    use std::thread;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn env_lock() -> &'static Mutex<()> {
@@ -313,6 +437,13 @@ mod tests {
         std::env::temp_dir()
             .join(format!("star-shuttle-known-hosts-test-{}", suffix))
             .join("known_hosts")
+    }
+
+    fn manager_for_path(path: &Path) -> KnownHostsManager {
+        KnownHostsManager {
+            known_hosts_path: path.to_string_lossy().to_string(),
+            known_hosts: HashMap::new(),
+        }
     }
 
     #[test]
@@ -440,7 +571,148 @@ mod tests {
             .expect("remove should succeed");
 
         assert!(manager.known_hosts.is_empty());
+        let saved = fs::read_to_string(&path).expect("saved known_hosts should exist");
+        assert!(!saved.contains("example.com"));
 
         std::env::remove_var("STAR_SHUTTLE_KNOWN_HOSTS_PATH");
+    }
+
+    #[test]
+    fn stale_managers_merge_without_losing_entries() {
+        let path = temp_known_hosts_path();
+        if let Some(parent) = path.parent() {
+            let _ = fs::remove_dir_all(parent);
+        }
+
+        let mut manager_a = manager_for_path(&path);
+        let mut manager_b = manager_for_path(&path);
+        manager_a.load().expect("manager A should load");
+        manager_b.load().expect("manager B should load");
+
+        manager_a
+            .upsert_host_key_parts(
+                "a.example.com",
+                22,
+                "ssh-ed25519".to_string(),
+                "AAAAC3NzaC1lZDI1NTE5AAAAIBASE64A".to_string(),
+                false,
+            )
+            .expect("manager A save should succeed");
+
+        manager_b
+            .upsert_host_key_parts(
+                "b.example.com",
+                22,
+                "ssh-ed25519".to_string(),
+                "AAAAC3NzaC1lZDI1NTE5AAAAIBASE64B".to_string(),
+                false,
+            )
+            .expect("manager B save should succeed");
+
+        let saved = fs::read_to_string(&path).expect("saved known_hosts should exist");
+        assert!(saved.contains("[a.example.com]:22 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBASE64A"));
+        assert!(saved.contains("[b.example.com]:22 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBASE64B"));
+
+        if let Some(parent) = path.parent() {
+            let _ = fs::remove_dir_all(parent);
+        }
+    }
+
+    #[test]
+    fn concurrent_writers_do_not_drop_known_hosts_entries() {
+        let path = temp_known_hosts_path();
+        if let Some(parent) = path.parent() {
+            let _ = fs::remove_dir_all(parent);
+        }
+
+        let barrier = Arc::new(Barrier::new(2));
+        let path_a = path.clone();
+        let barrier_a = barrier.clone();
+        let handle_a = thread::spawn(move || {
+            let mut manager = manager_for_path(&path_a);
+            manager.load().expect("manager A should load");
+            barrier_a.wait();
+            manager
+                .upsert_host_key_parts(
+                    "race-a.example.com",
+                    22,
+                    "ssh-ed25519".to_string(),
+                    "AAAAC3NzaC1lZDI1NTE5AAAAIRACEA".to_string(),
+                    false,
+                )
+                .expect("manager A save should succeed");
+        });
+
+        let path_b = path.clone();
+        let barrier_b = barrier.clone();
+        let handle_b = thread::spawn(move || {
+            let mut manager = manager_for_path(&path_b);
+            manager.load().expect("manager B should load");
+            barrier_b.wait();
+            manager
+                .upsert_host_key_parts(
+                    "race-b.example.com",
+                    22,
+                    "ssh-ed25519".to_string(),
+                    "AAAAC3NzaC1lZDI1NTE5AAAAIRACEB".to_string(),
+                    false,
+                )
+                .expect("manager B save should succeed");
+        });
+
+        handle_a.join().expect("manager A thread should complete");
+        handle_b.join().expect("manager B thread should complete");
+
+        let saved = fs::read_to_string(&path).expect("saved known_hosts should exist");
+        assert!(
+            saved.contains("[race-a.example.com]:22 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIRACEA")
+        );
+        assert!(
+            saved.contains("[race-b.example.com]:22 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIRACEB")
+        );
+
+        if let Some(parent) = path.parent() {
+            let _ = fs::remove_dir_all(parent);
+        }
+    }
+
+    #[test]
+    fn replace_updates_key_without_reintroducing_stale_value() {
+        let path = temp_known_hosts_path();
+        if let Some(parent) = path.parent() {
+            let _ = fs::remove_dir_all(parent);
+        }
+
+        let mut manager = manager_for_path(&path);
+        manager
+            .upsert_host_key_parts(
+                "replace.example.com",
+                22,
+                "ssh-ed25519".to_string(),
+                "AAAAC3NzaC1lZDI1NTE5AAAAIOLDVALUE".to_string(),
+                false,
+            )
+            .expect("initial save should succeed");
+
+        let mut stale_manager = manager_for_path(&path);
+        stale_manager.load().expect("stale manager should load");
+        stale_manager
+            .upsert_host_key_parts(
+                "replace.example.com",
+                22,
+                "ssh-ed25519".to_string(),
+                "AAAAC3NzaC1lZDI1NTE5AAAAINEWVALUE".to_string(),
+                true,
+            )
+            .expect("replace save should succeed");
+
+        let saved = fs::read_to_string(&path).expect("saved known_hosts should exist");
+        assert!(saved
+            .contains("[replace.example.com]:22 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINEWVALUE"));
+        assert!(!saved.contains("AAAAC3NzaC1lZDI1NTE5AAAAIOLDVALUE"));
+
+        if let Some(parent) = path.parent() {
+            let _ = fs::remove_dir_all(parent);
+        }
     }
 }

@@ -1,5 +1,6 @@
 use crate::modules::db::DatabaseManager;
 use crate::{ensure_app_unlocked_runtime, AppLockRuntimeState};
+use log::{debug, warn};
 use russh_sftp::protocol::OpenFlags;
 use std::sync::{Arc, Mutex as StdMutex};
 use tauri::ipc::{InvokeBody, Request, Response};
@@ -12,6 +13,21 @@ use super::common::{
 };
 use super::{FileEntry, SftpManager};
 
+fn classify_sftp_error(message: &str) -> &'static str {
+    let lower = message.to_ascii_lowercase();
+    if lower.contains("not found") || lower.contains("no such file") {
+        "not_found"
+    } else if lower.contains("permission denied") || lower.contains("denied") {
+        "permission_denied"
+    } else if lower.contains("timeout") || lower.contains("timed out") {
+        "timeout"
+    } else if lower.contains("disconnect") || lower.contains("connection") {
+        "connection_error"
+    } else {
+        "operation_failed"
+    }
+}
+
 #[tauri::command]
 pub async fn sftp_ls(
     db: State<'_, Arc<StdMutex<DatabaseManager>>>,
@@ -21,17 +37,27 @@ pub async fn sftp_ls(
     path: String,
 ) -> Result<Vec<FileEntry>, String> {
     ensure_app_unlocked_runtime(db.inner(), app_lock_state.inner())?;
-    println!(
-        "[SFTP] sftp_ls called for session: {}, path: {}",
-        session_id, path
+    debug!(
+        "SFTP ls requested: session={}, path_len={}",
+        session_id,
+        path.len()
     );
     match state.list_directory(session_id, path).await {
         Ok(entries) => {
-            println!("[SFTP] sftp_ls success, entries: {}", entries.len());
+            debug!(
+                "SFTP ls succeeded: session={}, entries={}",
+                session_id,
+                entries.len()
+            );
             Ok(entries)
         }
         Err(e) => {
-            println!("[SFTP] sftp_ls failed: {}", e);
+            warn!(
+                "SFTP ls failed: session={}, error_class={}, error_len={}",
+                session_id,
+                classify_sftp_error(&e),
+                e.len()
+            );
             Err(e)
         }
     }

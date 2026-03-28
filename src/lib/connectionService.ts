@@ -68,6 +68,31 @@ type ParseResult<T> =
       reason: string;
     };
 
+function isSessionStatusActive(status: unknown): boolean {
+  if (typeof status !== 'string') {
+    return true;
+  }
+  return status !== 'Disconnected';
+}
+
+async function hasActiveSessionsForConnection(connectionId: string): Promise<boolean> {
+  try {
+    const payload = await invoke<unknown>('get_all_sessions');
+    if (!Array.isArray(payload)) {
+      return false;
+    }
+    return payload.some((item) => {
+      if (!isRecord(item)) return false;
+      const sessionConnectionId = asString(item.connection_id);
+      if (sessionConnectionId !== connectionId) return false;
+      return isSessionStatusActive(item.status);
+    });
+  } catch (error) {
+    devWarn('connectionService', `Failed to pre-check active sessions before delete: ${error}`);
+    return false;
+  }
+}
+
 type BackendProxyType =
   | 'None'
   | {
@@ -76,6 +101,7 @@ type BackendProxyType =
         port: number;
         username: string | null;
         password: string | null;
+        has_password?: boolean;
       };
     }
   | {
@@ -84,6 +110,7 @@ type BackendProxyType =
         port: number;
         username: string | null;
         password: string | null;
+        has_password?: boolean;
       };
     }
   | {
@@ -154,6 +181,9 @@ export interface ConnectionFormData {
   proxyPort?: number;
   proxyUsername?: string;
   proxyPassword?: string;
+  proxyHasStoredPassword?: boolean;
+  proxyPasswordDirty?: boolean;
+  clearStoredProxyPassword?: boolean;
   jumpHostUsername?: string;
   jumpHostAuthMethod?: AuthMethodKind;
   jumpHostPassword?: string;
@@ -517,6 +547,12 @@ export async function loadConnections() {
 }
 
 export async function deleteConnection(connectionId: string) {
+  const hasActiveSessions = await hasActiveSessionsForConnection(connectionId);
+  if (hasActiveSessions) {
+    showErrorMessage('该连接仍有活动会话，请先断开会话后再删除。', 5000);
+    return;
+  }
+
   const currentConnections = get(connections);
   const restoreIndex = currentConnections.findIndex(c => c.id === connectionId);
   const removedConnection = restoreIndex >= 0 ? currentConnections[restoreIndex] : null;
@@ -538,7 +574,12 @@ export async function deleteConnection(connectionId: string) {
         return next;
       });
     }
-    showErrorMessage(`删除连接失败：${error}`, 5000);
+    const message = String(error ?? '');
+    if (message.includes('sessions are still active')) {
+      showErrorMessage('该连接仍有活动会话，请先断开会话后再删除。', 5000);
+    } else {
+      showErrorMessage(`删除连接失败：${error}`, 5000);
+    }
   }
 }
 
@@ -591,6 +632,7 @@ function parseBackendProxyType(proxyType: unknown): ParseResult<BackendProxyType
           port,
           username: asNullableString(usernameRaw),
           password: asNullableString(passwordRaw),
+          has_password: typeof socks.has_password === 'boolean' ? socks.has_password : undefined,
         },
       },
     };
@@ -625,6 +667,7 @@ function parseBackendProxyType(proxyType: unknown): ParseResult<BackendProxyType
           port,
           username: asNullableString(usernameRaw),
           password: asNullableString(passwordRaw),
+          has_password: typeof http.has_password === 'boolean' ? http.has_password : undefined,
         },
       },
     };
@@ -835,6 +878,16 @@ export async function createBackendConfig(connectionData: ConnectionFormData): P
   const connectionId = connectionData.id || uuidv4();
   const proxyHost = String(connectionData.proxyHost ?? '').trim();
   const proxyPort = Number(connectionData.proxyPort ?? 0);
+  const proxyPassword = String(connectionData.proxyPassword ?? '');
+  const normalizedProxyPassword = proxyPassword.trim();
+  const preserveStoredProxyPassword =
+    isEditing &&
+    connectionData.proxyHasStoredPassword === true &&
+    connectionData.proxyPasswordDirty !== true &&
+    connectionData.clearStoredProxyPassword !== true;
+  const nextProxyHasPassword =
+    preserveStoredProxyPassword ||
+    normalizedProxyPassword.length > 0;
 
   // Construct proxy configuration
   let backendProxyType: BackendProxyType;
@@ -849,7 +902,8 @@ export async function createBackendConfig(connectionData: ConnectionFormData): P
           host: proxyHost,
           port: Number(connectionData.proxyPort || 1080),
           username: connectionData.proxyUsername?.trim() || null,
-          password: connectionData.proxyPassword?.trim() || null,
+          password: normalizedProxyPassword || null,
+          has_password: nextProxyHasPassword,
         },
       };
       break;
@@ -860,7 +914,8 @@ export async function createBackendConfig(connectionData: ConnectionFormData): P
           host: proxyHost,
           port: Number(connectionData.proxyPort || 8080),
           username: connectionData.proxyUsername?.trim() || null,
-          password: connectionData.proxyPassword?.trim() || null,
+          password: normalizedProxyPassword || null,
+          has_password: nextProxyHasPassword,
         },
       };
       break;
@@ -992,6 +1047,7 @@ export async function saveConnection(
 }
 
 export const __connectionServiceTestHooks = {
+  createBackendConfig,
   parseBackendAuthMethod,
   parseBackendProxyType,
   normalizeConnectionsPayload,

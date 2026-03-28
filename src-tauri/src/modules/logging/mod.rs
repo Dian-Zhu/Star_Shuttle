@@ -6,6 +6,12 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+const MAX_LOG_MESSAGE_CHARS: usize = 2048;
+#[cfg(unix)]
+const UNIX_LOG_DIR_MODE: u32 = 0o700;
+#[cfg(unix)]
+const UNIX_LOG_FILE_MODE: u32 = 0o600;
+
 static LOGGER: SimpleLogger = SimpleLogger {
     inner: Mutex::new(None),
 };
@@ -34,6 +40,7 @@ impl log::Log for SimpleLogger {
         if self.enabled(record.metadata()) {
             // Get module path or use "unknown" if not available
             let module = record.module_path().unwrap_or("unknown");
+            let message = sanitize_log_message(&record.args().to_string());
 
             // Format log entry for console (human readable)
             let console_entry = format!(
@@ -41,7 +48,7 @@ impl log::Log for SimpleLogger {
                 chrono::Local::now().format("%H:%M:%S"),
                 record.level(),
                 module,
-                record.args()
+                message
             );
             eprintln!("{}", console_entry);
 
@@ -50,7 +57,7 @@ impl log::Log for SimpleLogger {
                 "timestamp": chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.3f%z").to_string(),
                 "level": record.level().to_string(),
                 "module": module,
-                "message": record.args().to_string(),
+                "message": message,
                 "file": record.file().unwrap_or("unknown"),
                 "line": record.line().unwrap_or(0),
             })
@@ -73,9 +80,7 @@ impl log::Log for SimpleLogger {
                             }
                         }
 
-                        if let Ok(mut file) =
-                            OpenOptions::new().create(true).append(true).open(path)
-                        {
+                        if let Ok(mut file) = open_log_file_for_append(path) {
                             let _ = writeln!(file, "{}", log_entry);
                         }
                     }
@@ -101,14 +106,22 @@ fn rotate_logs(base_path: &Path) -> std::io::Result<()> {
         let src = get_path(i);
         let dst = get_path(i + 1);
         if src.exists() {
-            let _ = fs::rename(src, dst);
+            let _ = fs::rename(&src, &dst);
+            #[cfg(unix)]
+            if dst.exists() {
+                enforce_unix_permissions(&dst, UNIX_LOG_FILE_MODE);
+            }
         }
     }
 
     // Rotate base -> .1
     let dst = get_path(1);
     if base_path.exists() {
-        let _ = fs::rename(base_path, dst);
+        let _ = fs::rename(base_path, &dst);
+        #[cfg(unix)]
+        if dst.exists() {
+            enforce_unix_permissions(&dst, UNIX_LOG_FILE_MODE);
+        }
     }
 
     Ok(())
@@ -126,9 +139,8 @@ impl LogManager {
             .join("star_shuttle")
             .join("logs");
 
-        let _ = fs::create_dir_all(&log_dir);
+        ensure_log_directory(&log_dir);
         let log_file = log_dir.join("app.log");
-        println!("Initializing logger at: {:?}", log_file);
 
         let logs = read_last_lines(&log_file, 1000).unwrap_or_default();
         if let Ok(mut guard) = LOGGER.inner.lock() {
@@ -156,11 +168,7 @@ impl LogManager {
             if let Some(state) = &mut *guard {
                 state.logs.clear();
                 if let Some(path) = &state.log_file {
-                    let _ = OpenOptions::new()
-                        .create(true)
-                        .write(true)
-                        .truncate(true)
-                        .open(path);
+                    let _ = open_log_file_for_truncate(path);
                 }
             }
         }
@@ -209,4 +217,122 @@ fn read_last_lines(path: &Path, max_lines: usize) -> std::io::Result<VecDeque<St
     }
 
     Ok(lines)
+}
+
+fn sanitize_log_message(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    enum EscapeState {
+        None,
+        Started,
+        Csi,
+    }
+    let mut escape_state = EscapeState::None;
+
+    for ch in input.chars() {
+        match escape_state {
+            EscapeState::None => {
+                if ch == '\u{1b}' {
+                    escape_state = EscapeState::Started;
+                    continue;
+                }
+            }
+            EscapeState::Started => {
+                if ch == '[' {
+                    escape_state = EscapeState::Csi;
+                } else {
+                    escape_state = EscapeState::None;
+                }
+                continue;
+            }
+            EscapeState::Csi => {
+                if ('@'..='~').contains(&ch) {
+                    escape_state = EscapeState::None;
+                }
+                continue;
+            }
+        }
+
+        match ch {
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ if ch.is_control() => out.push('?'),
+            _ => out.push(ch),
+        }
+    }
+
+    if out.chars().count() <= MAX_LOG_MESSAGE_CHARS {
+        return out;
+    }
+
+    let truncated: String = out.chars().take(MAX_LOG_MESSAGE_CHARS).collect();
+    format!("{}...(truncated)", truncated)
+}
+
+fn ensure_log_directory(path: &Path) {
+    if fs::create_dir_all(path).is_ok() {
+        #[cfg(unix)]
+        enforce_unix_permissions(path, UNIX_LOG_DIR_MODE);
+    }
+}
+
+fn open_log_file_for_append(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut options = OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(UNIX_LOG_FILE_MODE);
+    }
+    let file = options.open(path)?;
+    #[cfg(unix)]
+    enforce_unix_permissions(path, UNIX_LOG_FILE_MODE);
+    Ok(file)
+}
+
+fn open_log_file_for_truncate(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut options = OpenOptions::new();
+    options.create(true).write(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(UNIX_LOG_FILE_MODE);
+    }
+    let file = options.open(path)?;
+    #[cfg(unix)]
+    enforce_unix_permissions(path, UNIX_LOG_FILE_MODE);
+    Ok(file)
+}
+
+#[cfg(unix)]
+fn enforce_unix_permissions(path: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+
+    if let Ok(metadata) = fs::metadata(path) {
+        let mut permissions = metadata.permissions();
+        if permissions.mode() & 0o777 != mode {
+            permissions.set_mode(mode);
+            let _ = fs::set_permissions(path, permissions);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{sanitize_log_message, MAX_LOG_MESSAGE_CHARS};
+
+    #[test]
+    fn sanitize_log_message_strips_control_and_ansi() {
+        let input = "ok\u{1b}[31mRED\u{1b}[0m\nnext\tline\r\u{0007}";
+        let sanitized = sanitize_log_message(input);
+        assert_eq!(sanitized, "okRED\\nnext\\tline\\r?");
+    }
+
+    #[test]
+    fn sanitize_log_message_truncates_long_messages() {
+        let input = "a".repeat(MAX_LOG_MESSAGE_CHARS + 32);
+        let sanitized = sanitize_log_message(&input);
+        assert!(sanitized.ends_with("...(truncated)"));
+        assert!(sanitized.len() > MAX_LOG_MESSAGE_CHARS);
+    }
 }
