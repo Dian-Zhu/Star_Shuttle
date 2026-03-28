@@ -5,16 +5,27 @@
  * 可以在任何时候挂载到不同的容器
  */
 
-import { Terminal } from 'xterm';
-import { FitAddon } from 'xterm-addon-fit';
-import { SearchAddon } from 'xterm-addon-search';
-import { WebLinksAddon } from 'xterm-addon-web-links';
-import type { ITerminalOptions } from 'xterm';
+import { Terminal } from '@xterm/xterm';
+import { FitAddon } from '@xterm/addon-fit';
+import { SearchAddon } from '@xterm/addon-search';
+import { WebLinksAddon } from '@xterm/addon-web-links';
+import type { ITerminalOptions } from '@xterm/xterm';
 import { containerManager } from './containerManager';
 import { devLog, devWarn } from './devLogger';
 
 type TerminalEventHandler = (...args: unknown[]) => void;
 type TerminalDisposable = { dispose: () => void };
+type DisposableEventFactory<THandler> = (handler: THandler) => TerminalDisposable;
+function getDisposableEventFactory<THandler>(
+  terminal: object,
+  eventName: 'onBinary' | 'onBell' | 'onTitleChange'
+): DisposableEventFactory<THandler> | null {
+  const candidate = (terminal as Record<string, unknown>)[eventName];
+  if (typeof candidate !== 'function') {
+    return null;
+  }
+  return candidate as DisposableEventFactory<THandler>;
+}
 
 export class TerminalInstance {
   private sessionIdValue: string;
@@ -26,7 +37,7 @@ export class TerminalInstance {
   private mountedContainer: HTMLElement | null = null;
   private isDisposed: boolean = false;
 
-  // xterm.js 6.x Disposable 存储映射
+  // xterm.js Disposable 存储映射
   private disposables = new Map<string, Map<TerminalEventHandler, TerminalDisposable>>();
 
   // DOM 事件监听器（用于 focus 事件）
@@ -239,7 +250,7 @@ export class TerminalInstance {
   }
 
   /**
-   * 订阅事件 - 完全使用 xterm.js 6.x API
+   * 订阅事件
    * @param event 事件名称
    * @param handler 事件处理函数
    */
@@ -257,7 +268,7 @@ export class TerminalInstance {
       throw new Error(`Terminal is undefined for session ${this.sessionId}`);
     }
 
-    // xterm.js 6.x 事件 API
+    // xterm.js 事件 API
     switch (event) {
       case 'data': {
         const dataDisposable = this.terminal.onData(handler as (data: string) => void);
@@ -296,22 +307,37 @@ export class TerminalInstance {
       }
 
       case 'binary': {
-        const binaryDisposable = (this.terminal as Terminal & { onBinary: (cb: (data: string) => void) => TerminalDisposable })
-          .onBinary(handler as (data: string) => void);
+        const onBinary = getDisposableEventFactory<(data: string) => void>(this.terminal, 'onBinary');
+        if (!onBinary) {
+          devWarn('TerminalInstance', `binary event unavailable for session=${this.sessionId}`);
+          break;
+        }
+        const binaryDisposable = onBinary(handler as (data: string) => void);
         this._storeDisposable('binary', handler, binaryDisposable);
         break;
       }
 
       case 'bell': {
-        const bellDisposable = (this.terminal as Terminal & { onBell: (cb: () => void) => TerminalDisposable })
-          .onBell(handler as () => void);
+        const onBell = getDisposableEventFactory<() => void>(this.terminal, 'onBell');
+        if (!onBell) {
+          devWarn('TerminalInstance', `bell event unavailable for session=${this.sessionId}`);
+          break;
+        }
+        const bellDisposable = onBell(handler as () => void);
         this._storeDisposable('bell', handler, bellDisposable);
         break;
       }
 
       case 'title': {
-        const titleDisposable = (this.terminal as Terminal & { onTitleChange: (cb: (title: string) => void) => TerminalDisposable })
-          .onTitleChange(handler as (title: string) => void);
+        const onTitleChange = getDisposableEventFactory<(title: string) => void>(
+          this.terminal,
+          'onTitleChange'
+        );
+        if (!onTitleChange) {
+          devWarn('TerminalInstance', `title event unavailable for session=${this.sessionId}`);
+          break;
+        }
+        const titleDisposable = onTitleChange(handler as (title: string) => void);
         this._storeDisposable('title', handler, titleDisposable);
         break;
       }
@@ -410,7 +436,7 @@ export class TerminalInstance {
   }
 
   /**
-   * 存储 xterm.js 6.x Disposable
+   * 存储 xterm.js Disposable
    */
   private _storeDisposable(event: string, handler: TerminalEventHandler, disposable: TerminalDisposable): void {
     if (!this.disposables.has(event)) {
@@ -421,7 +447,7 @@ export class TerminalInstance {
   }
 
   /**
-   * 取消订阅事件 - 完全使用 xterm.js 6.x API
+   * 取消订阅事件
    * @param event 事件名称
    * @param handler 事件处理函数
    */
@@ -430,7 +456,7 @@ export class TerminalInstance {
       return;
     }
 
-    // xterm.js 6.x API 清理
+    // xterm.js API 清理
     switch (event) {
       case 'data':
       case 'key':
@@ -492,7 +518,7 @@ export class TerminalInstance {
   }
 
   /**
-   * 清理所有事件处理函数 - 完全使用 xterm.js 6.x API
+   * 清理所有事件处理函数
    */
   clearEventHandlers(): void {
     if (!this.terminal) {
@@ -500,7 +526,7 @@ export class TerminalInstance {
       return;
     }
 
-    // 清理所有 xterm.js 6.x disposables
+    // 清理所有 xterm.js disposables
     this.disposables.forEach((disposableMap, event) => {
       disposableMap.forEach(disposable => {
         try {
@@ -554,7 +580,7 @@ export class TerminalInstance {
       return;
     }
 
-    // 清理所有事件处理函数（包括 xterm.js 6.x disposables 和 DOM 监听器）
+    // 清理所有事件处理函数（包括 xterm.js disposables 和 DOM 监听器）
     this.clearEventHandlers();
 
     // 卸载

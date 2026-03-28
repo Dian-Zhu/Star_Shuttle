@@ -73,12 +73,13 @@ body {
 
 .xterm,
 .xterm textarea,
-.xterm .xterm-screen {
+.xterm .xterm-screen,
+.xterm .xterm-helper-textarea {
   cursor: text !important;
   transition: none !important;
 }
 
-/* xterm 6.0 fixes */
+/* Terminal viewport fixes */
 .xterm-viewport {
   overflow-y: auto !important;
   background-color: transparent !important;

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { Terminal } from 'xterm';
+import type { Terminal } from '@xterm/xterm';
 import {
   __terminalIoBufferTestHooks,
   cleanupBufferedIoState,

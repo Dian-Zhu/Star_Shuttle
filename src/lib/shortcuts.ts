@@ -179,7 +179,12 @@ export function isEditableShortcutTarget(
   options: { allowTerminalTextarea?: boolean } = {}
 ): boolean {
   if (!(target instanceof HTMLElement)) return false;
-  if (options.allowTerminalTextarea && target.classList.contains('xterm-helper-textarea')) return false;
+  if (
+    options.allowTerminalTextarea &&
+    Array.from(target.classList).some((name) => name.startsWith('xterm-helper-textarea'))
+  ) {
+    return false;
+  }
 
   return (
     target.tagName === 'INPUT' ||

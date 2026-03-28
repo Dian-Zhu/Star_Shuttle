@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount, onDestroy, createEventDispatcher } from 'svelte';
-  import { Terminal } from 'xterm';
-  import { FitAddon } from 'xterm-addon-fit';
-  import { SearchAddon } from 'xterm-addon-search';
+  import { Terminal } from '@xterm/xterm';
+  import { FitAddon } from '@xterm/addon-fit';
+  import { SearchAddon } from '@xterm/addon-search';
   import { settings, getXtermTheme, getBaseXtermTheme, type Connection } from '../../lib/store';
   import { terminalPool } from '../../lib/terminalPool';
   import type { TerminalProxy } from '../../lib/terminalProxy';

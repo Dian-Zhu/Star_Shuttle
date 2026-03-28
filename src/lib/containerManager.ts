@@ -7,6 +7,8 @@
 
 export class ContainerManager {
   private static instance: ContainerManager;
+  private static readonly XTERM_DOM_SELECTORS =
+    '.xterm, .xterm-viewport, .xterm-screen, .xterm-helpers, .xterm-helper-textarea';
 
   private constructor() {}
 
@@ -76,7 +78,7 @@ export class ContainerManager {
     }
 
     // 检查是否有 xterm 相关的子元素
-    const xtermElements = container.querySelectorAll('.xterm, .xterm-viewport, .xterm-screen');
+    const xtermElements = container.querySelectorAll(ContainerManager.XTERM_DOM_SELECTORS);
     if (xtermElements.length > 0) {
       this.cleanupContainer(container);
     }

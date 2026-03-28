@@ -1,10 +1,10 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { Terminal } from 'xterm';
-import { FitAddon } from 'xterm-addon-fit';
-import { SearchAddon } from 'xterm-addon-search';
-import { WebglAddon } from 'xterm-addon-webgl';
-import { WebLinksAddon } from 'xterm-addon-web-links';
+import { Terminal } from '@xterm/xterm';
+import { FitAddon } from '@xterm/addon-fit';
+import { SearchAddon } from '@xterm/addon-search';
+import { WebglAddon } from '@xterm/addon-webgl';
+import { WebLinksAddon } from '@xterm/addon-web-links';
 import { get } from 'svelte/store';
 import {
   activeTerminals,
@@ -82,7 +82,6 @@ import {
   parseHostKeyPrompt,
   saveHostKeyPrompt,
 } from './hostKeyPrompt';
-import 'xterm/css/xterm.css';
 
 const IS_DEV = import.meta.env.DEV;
 

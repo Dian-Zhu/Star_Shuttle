@@ -137,25 +137,25 @@ export async function createTerminalServiceHarness(invokeHandler?: InvokeHandler
     saveHostKeyPrompt: vi.fn(async () => undefined),
   }));
 
-  vi.doMock('xterm', () => ({
+  vi.doMock('@xterm/xterm', () => ({
     Terminal: class Terminal {},
   }));
-  vi.doMock('xterm-addon-fit', () => ({
+  vi.doMock('@xterm/addon-fit', () => ({
     FitAddon: class FitAddon {},
   }));
-  vi.doMock('xterm-addon-search', () => ({
+  vi.doMock('@xterm/addon-search', () => ({
     SearchAddon: class SearchAddon {},
   }));
-  vi.doMock('xterm-addon-webgl', () => ({
+  vi.doMock('@xterm/addon-webgl', () => ({
     WebglAddon: class WebglAddon {
       onContextLoss(): void {}
       dispose(): void {}
     },
   }));
-  vi.doMock('xterm-addon-web-links', () => ({
+  vi.doMock('@xterm/addon-web-links', () => ({
     WebLinksAddon: class WebLinksAddon {},
   }));
-  vi.doMock('xterm/css/xterm.css', () => ({}));
+  vi.doMock('@xterm/xterm/css/xterm.css', () => ({}));
 
   const terminalService = await import('../terminalService');
   const store = await import('../store');

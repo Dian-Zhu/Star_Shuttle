@@ -1,4 +1,4 @@
-import 'xterm/css/xterm.css';  // 先加载 xterm 默认样式
+import '@xterm/xterm/css/xterm.css';
 import './app.css';                   // 再加载我们的覆盖样式
 import App from './App.svelte'
 

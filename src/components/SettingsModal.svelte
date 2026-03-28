@@ -885,7 +885,7 @@
                 id="theme"
                 value={$settings.theme}
                 on:change={(e) => updateTheme(e.currentTarget.value as any)}
-                class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text focus:border-primary-500 outline-none"
+                class="settings-select w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text focus:border-primary-500 outline-none"
               >
                 <option value="system">跟随系统</option>
                 <option value="dark">深色</option>
@@ -901,7 +901,7 @@
               </label>
               <select
                 id="language"
-                class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text focus:border-primary-500 outline-none"
+                class="settings-select w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text focus:border-primary-500 outline-none"
                 disabled
               >
                 <option value="zh-CN">简体中文</option>
@@ -1336,7 +1336,7 @@
                 id="fontFamily"
                 value={$settings.terminal.fontFamily}
                 on:change={(e) => updateTerminalSetting('fontFamily', (e.target as HTMLSelectElement).value)}
-                class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text focus:border-primary-500 outline-none"
+                class="settings-select w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text focus:border-primary-500 outline-none"
               >
                 {#each fontFamilies as font}
                   <option value={font.value}>{font.label}</option>
@@ -1377,7 +1377,7 @@
                 id="cursorStyle"
                 value={$settings.terminal.cursorStyle}
                 on:change={(e) => updateTerminalSetting('cursorStyle', (e.target as HTMLSelectElement).value as 'block' | 'underline' | 'bar')}
-                class="bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text focus:border-primary-500 outline-none"
+                class="settings-select bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text focus:border-primary-500 outline-none"
               >
                 <option value="block">方块</option>
                 <option value="underline">下划线</option>
@@ -1980,6 +1980,35 @@
 </div>
 
 <style>
+  .settings-select {
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    padding-right: 2.5rem;
+    background-color: var(--color-bg);
+    color: var(--color-text);
+    -webkit-text-fill-color: var(--color-text);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none'%3E%3Cpath d='m5 7.5 5 5 5-5' stroke='%2364748b' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-position: right 0.875rem center;
+    background-repeat: no-repeat;
+    background-size: 0.875rem;
+  }
+
+  .settings-select:disabled {
+    cursor: not-allowed;
+    opacity: 0.7;
+  }
+
+  .settings-select option {
+    background-color: var(--color-surface);
+    color: var(--color-text);
+  }
+
+  :global(.dark) .settings-select {
+    color-scheme: dark;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none'%3E%3Cpath d='m5 7.5 5 5 5-5' stroke='%2394a3b8' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  }
+
   .custom-scrollbar::-webkit-scrollbar {
     width: 6px;
   }

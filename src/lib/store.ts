@@ -1,7 +1,7 @@
 import { writable, derived } from 'svelte/store';
-import type { ITheme, Terminal } from 'xterm';
-import type { FitAddon } from 'xterm-addon-fit';
-import type { SearchAddon } from 'xterm-addon-search';
+import type { ITheme, Terminal } from '@xterm/xterm';
+import type { FitAddon } from '@xterm/addon-fit';
+import type { SearchAddon } from '@xterm/addon-search';
 import { normalizeShortcut } from './shortcuts';
 import {
   mergeTerminalSessionState,
