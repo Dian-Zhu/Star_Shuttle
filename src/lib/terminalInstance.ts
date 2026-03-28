@@ -11,9 +11,13 @@ import { SearchAddon } from 'xterm-addon-search';
 import { WebLinksAddon } from 'xterm-addon-web-links';
 import type { ITerminalOptions } from 'xterm';
 import { containerManager } from './containerManager';
+import { devLog, devWarn } from './devLogger';
+
+type TerminalEventHandler = (...args: unknown[]) => void;
+type TerminalDisposable = { dispose: () => void };
 
 export class TerminalInstance {
-  readonly sessionId: string;
+  private sessionIdValue: string;
   readonly terminal: Terminal;
   readonly fitAddon: FitAddon;
   readonly searchAddon: SearchAddon;
@@ -23,14 +27,16 @@ export class TerminalInstance {
   private isDisposed: boolean = false;
 
   // xterm.js 6.x Disposable 存储映射
-  private disposables = new Map<string, Map<Function, any>>();
+  private disposables = new Map<string, Map<TerminalEventHandler, TerminalDisposable>>();
 
   // DOM 事件监听器（用于 focus 事件）
-  private domEventListeners = new Map<string, Array<Function>>();
+  private domEventListeners = new Map<string, TerminalEventHandler[]>();
 
   // Focus 事件监听器
   private focusListener: (() => void) | null = null;
+  private blurListener: (() => void) | null = null;
   private hasFocusListener = false;
+  private hasBlurListener = false;
 
   public constructor(
     sessionId: string,
@@ -39,9 +45,12 @@ export class TerminalInstance {
     existingFitAddon?: FitAddon,
     existingSearchAddon?: SearchAddon
   ) {
-    this.sessionId = sessionId;
+    this.sessionIdValue = sessionId;
 
-    console.log(`[TerminalInstance] constructor called for session ${sessionId}, existingTerminal=${!!existingTerminal}, existingFitAddon=${!!existingFitAddon}, existingSearchAddon=${!!existingSearchAddon}`);
+    devLog(
+      'TerminalInstance',
+      `constructor session=${sessionId}, existingTerminal=${!!existingTerminal}, existingFitAddon=${!!existingFitAddon}, existingSearchAddon=${!!existingSearchAddon}`
+    );
 
     // 如果提供了已经初始化好的组件，直接使用
     if (existingTerminal && existingFitAddon && existingSearchAddon) {
@@ -49,7 +58,7 @@ export class TerminalInstance {
       this.fitAddon = existingFitAddon;
       this.searchAddon = existingSearchAddon;
       this.webLinksAddon = null as any; // WebLinksAddon 不需要重新创建
-      console.log(`[TerminalInstance] using existing terminal, terminal=${!!this.terminal}`);
+      devLog('TerminalInstance', `using existing terminal session=${sessionId}, terminal=${!!this.terminal}`);
     } else {
       // 创建新的 Terminal 实例
       this.terminal = new Terminal({
@@ -66,7 +75,7 @@ export class TerminalInstance {
           selectionBackground: '#264f78',
         },
       });
-      console.log(`[TerminalInstance] new terminal created, terminal=${!!this.terminal}`);
+      devLog('TerminalInstance', `new terminal created session=${sessionId}, terminal=${!!this.terminal}`);
 
       // 创建并加载插件
       this.fitAddon = new FitAddon();
@@ -76,7 +85,7 @@ export class TerminalInstance {
       this.terminal.loadAddon(this.fitAddon);
       this.terminal.loadAddon(this.searchAddon);
       this.terminal.loadAddon(this.webLinksAddon);
-      console.log(`[TerminalInstance] addons loaded`);
+      devLog('TerminalInstance', `addons loaded session=${sessionId}`);
     }
   }
 
@@ -98,13 +107,21 @@ export class TerminalInstance {
     );
   }
 
+  get sessionId(): string {
+    return this.sessionIdValue;
+  }
+
+  renameSession(nextSessionId: string): void {
+    this.sessionIdValue = nextSessionId;
+  }
+
   /**
    * 挂载到容器（幂等操作，可重复调用）
    * @param container 目标容器
    */
   mount(container: HTMLElement): void {
     if (this.isDisposed) {
-      console.warn(`[TerminalInstance] Session ${this.sessionId} is disposed, cannot mount`);
+      devWarn('TerminalInstance', `mount ignored for disposed session=${this.sessionId}`);
       return;
     }
 
@@ -122,7 +139,7 @@ export class TerminalInstance {
     }
 
     // 获取或创建 xterm 元素
-    let xtermElement = container.querySelector('.xterm');
+    const xtermElement = container.querySelector('.xterm');
     
     if (!xtermElement) {
       // 首次挂载，直接 open
@@ -226,9 +243,12 @@ export class TerminalInstance {
    * @param event 事件名称
    * @param handler 事件处理函数
    */
-  on(event: string, handler: Function): void {
+  on(event: string, handler: TerminalEventHandler): void {
     if (this.isDisposed) {
-      console.warn(`[TerminalInstance] Attempt to subscribe to event ${event} on disposed instance ${this.sessionId}`);
+      devWarn(
+        'TerminalInstance',
+        `subscribe ignored event=${event} on disposed session=${this.sessionId}`
+      );
       return;
     }
 
@@ -239,50 +259,62 @@ export class TerminalInstance {
 
     // xterm.js 6.x 事件 API
     switch (event) {
-      case 'data':
+      case 'data': {
         const dataDisposable = this.terminal.onData(handler as (data: string) => void);
         this._storeDisposable('data', handler, dataDisposable);
         break;
+      }
 
-      case 'key':
+      case 'key': {
         const keyDisposable = this.terminal.onKey(handler as (event: { key: string, domEvent: KeyboardEvent }) => void);
         this._storeDisposable('key', handler, keyDisposable);
         break;
+      }
 
-      case 'linefeed':
+      case 'linefeed': {
         const linefeedDisposable = this.terminal.onLineFeed(handler as () => void);
         this._storeDisposable('linefeed', handler, linefeedDisposable);
         break;
+      }
 
-      case 'scroll':
+      case 'scroll': {
         const scrollDisposable = this.terminal.onScroll(handler as (newCursorPosition: number) => void);
         this._storeDisposable('scroll', handler, scrollDisposable);
         break;
+      }
 
-      case 'selection':
+      case 'selection': {
         const selectionDisposable = this.terminal.onSelectionChange(handler as () => void);
         this._storeDisposable('selection', handler, selectionDisposable);
         break;
+      }
 
-      case 'resize':
+      case 'resize': {
         const resizeDisposable = this.terminal.onResize(handler as (size: { cols: number, rows: number }) => void);
         this._storeDisposable('resize', handler, resizeDisposable);
         break;
+      }
 
-      case 'binary':
-        const binaryDisposable = (this.terminal as any).onBinary(handler as (data: string) => void);
+      case 'binary': {
+        const binaryDisposable = (this.terminal as Terminal & { onBinary: (cb: (data: string) => void) => TerminalDisposable })
+          .onBinary(handler as (data: string) => void);
         this._storeDisposable('binary', handler, binaryDisposable);
         break;
+      }
 
-      case 'bell':
-        const bellDisposable = (this.terminal as any).onBell(handler as () => void);
+      case 'bell': {
+        const bellDisposable = (this.terminal as Terminal & { onBell: (cb: () => void) => TerminalDisposable })
+          .onBell(handler as () => void);
         this._storeDisposable('bell', handler, bellDisposable);
         break;
+      }
 
-      case 'title':
-        const titleDisposable = (this.terminal as any).onTitleChange(handler as (title: string) => void);
+      case 'title': {
+        const titleDisposable = (this.terminal as Terminal & { onTitleChange: (cb: (title: string) => void) => TerminalDisposable })
+          .onTitleChange(handler as (title: string) => void);
         this._storeDisposable('title', handler, titleDisposable);
         break;
+      }
 
       case 'focus':
         // Focus 事件通过 DOM 事件监听实现
@@ -295,14 +327,17 @@ export class TerminalInstance {
         break;
 
       default:
-        console.warn(`[TerminalInstance] Event ${event} is not supported in xterm.js 6.x API for session ${this.sessionId}`);
+        devWarn(
+          'TerminalInstance',
+          `unsupported xterm event=${event} for session=${this.sessionId}`
+        );
     }
   }
 
   /**
    * 添加焦点事件处理函数（通过DOM事件）
    */
-  private _addFocusHandler(handler: Function): void {
+  private _addFocusHandler(handler: TerminalEventHandler): void {
     if (!this.domEventListeners.has('focus')) {
       this.domEventListeners.set('focus', []);
     }
@@ -313,7 +348,7 @@ export class TerminalInstance {
   /**
    * 添加失焦事件处理函数（通过DOM事件）
    */
-  private _addBlurHandler(handler: Function): void {
+  private _addBlurHandler(handler: TerminalEventHandler): void {
     if (!this.domEventListeners.has('blur')) {
       this.domEventListeners.set('blur', []);
     }
@@ -344,18 +379,18 @@ export class TerminalInstance {
 
     this.terminal.element.addEventListener('focus', this.focusListener);
     this.hasFocusListener = true;
-    console.log(`[TerminalInstance] Focus listener attached for session ${this.sessionId}`);
+    devLog('TerminalInstance', `focus listener attached session=${this.sessionId}`);
   }
 
   /**
    * 确保失焦事件监听器已设置（通过DOM事件）
    */
   private _ensureBlurListener(): void {
-    if (!this.terminal || !this.terminal.element) {
+    if (this.hasBlurListener || !this.terminal || !this.terminal.element) {
       return;
     }
 
-    const blurListener = () => {
+    this.blurListener = () => {
       const blurHandlers = this.domEventListeners.get('blur');
       if (blurHandlers) {
         blurHandlers.forEach(handler => {
@@ -369,20 +404,20 @@ export class TerminalInstance {
     };
 
     // 保存 blur 监听器引用以便后续清理
-    (this as any).blurListener = blurListener;
-    this.terminal.element.addEventListener('blur', blurListener);
-    console.log(`[TerminalInstance] Blur listener attached for session ${this.sessionId}`);
+    this.terminal.element.addEventListener('blur', this.blurListener);
+    this.hasBlurListener = true;
+    devLog('TerminalInstance', `blur listener attached session=${this.sessionId}`);
   }
 
   /**
    * 存储 xterm.js 6.x Disposable
    */
-  private _storeDisposable(event: string, handler: Function, disposable: any): void {
+  private _storeDisposable(event: string, handler: TerminalEventHandler, disposable: TerminalDisposable): void {
     if (!this.disposables.has(event)) {
       this.disposables.set(event, new Map());
     }
     this.disposables.get(event)!.set(handler, disposable);
-    console.log(`[TerminalInstance] Event ${event} subscribed using xterm.js 6.x API for session ${this.sessionId}`);
+    devLog('TerminalInstance', `event subscribed session=${this.sessionId}, event=${event}`);
   }
 
   /**
@@ -390,7 +425,7 @@ export class TerminalInstance {
    * @param event 事件名称
    * @param handler 事件处理函数
    */
-  off(event: string, handler: Function): void {
+  off(event: string, handler: TerminalEventHandler): void {
     if (this.isDisposed) {
       return;
     }
@@ -405,14 +440,14 @@ export class TerminalInstance {
       case 'resize':
       case 'binary':
       case 'bell':
-      case 'title':
+      case 'title': {
         const eventDisposables = this.disposables.get(event);
         if (eventDisposables) {
           const disposable = eventDisposables.get(handler);
           if (disposable && typeof disposable.dispose === 'function') {
             try {
               disposable.dispose();
-              console.log(`[TerminalInstance] Event ${event} unsubscribed for session ${this.sessionId}`);
+              devLog('TerminalInstance', `event unsubscribed session=${this.sessionId}, event=${event}`);
             } catch (error) {
               console.warn(`[TerminalInstance] Failed to dispose event handler for ${event}:`, error);
             }
@@ -420,8 +455,9 @@ export class TerminalInstance {
           eventDisposables.delete(handler);
         }
         break;
+      }
 
-      case 'focus':
+      case 'focus': {
         // Focus 事件处理
         const focusHandlers = this.domEventListeners.get('focus');
         if (focusHandlers) {
@@ -435,8 +471,9 @@ export class TerminalInstance {
           }
         }
         break;
+      }
 
-      case 'blur':
+      case 'blur': {
         // Blur 事件处理
         const blurHandlers = this.domEventListeners.get('blur');
         if (blurHandlers) {
@@ -450,6 +487,7 @@ export class TerminalInstance {
           }
         }
         break;
+      }
     }
   }
 
@@ -464,7 +502,7 @@ export class TerminalInstance {
 
     // 清理所有 xterm.js 6.x disposables
     this.disposables.forEach((disposableMap, event) => {
-      disposableMap.forEach((disposable, _handler) => {
+      disposableMap.forEach(disposable => {
         try {
           if (disposable && typeof disposable.dispose === 'function') {
             disposable.dispose();
@@ -481,7 +519,7 @@ export class TerminalInstance {
     this._removeBlurListener();
     this.domEventListeners.clear();
 
-    console.log(`[TerminalInstance] All event handlers cleared for session ${this.sessionId}`);
+    devLog('TerminalInstance', `all event handlers cleared session=${this.sessionId}`);
   }
 
   /**
@@ -492,7 +530,7 @@ export class TerminalInstance {
       this.terminal.element.removeEventListener('focus', this.focusListener);
       this.focusListener = null;
       this.hasFocusListener = false;
-      console.log(`[TerminalInstance] Focus listener removed for session ${this.sessionId}`);
+      devLog('TerminalInstance', `focus listener removed session=${this.sessionId}`);
     }
   }
 
@@ -500,11 +538,11 @@ export class TerminalInstance {
    * 移除失焦事件监听器
    */
   private _removeBlurListener(): void {
-    const blurListener = (this as any).blurListener;
-    if (blurListener && this.terminal && this.terminal.element) {
-      this.terminal.element.removeEventListener('blur', blurListener);
-      delete (this as any).blurListener;
-      console.log(`[TerminalInstance] Blur listener removed for session ${this.sessionId}`);
+    if (this.blurListener && this.terminal && this.terminal.element) {
+      this.terminal.element.removeEventListener('blur', this.blurListener);
+      this.blurListener = null;
+      this.hasBlurListener = false;
+      devLog('TerminalInstance', `blur listener removed session=${this.sessionId}`);
     }
   }
 
@@ -530,7 +568,7 @@ export class TerminalInstance {
     }
 
     this.isDisposed = true;
-    console.log(`[TerminalInstance] Terminal instance disposed for session ${this.sessionId}`);
+    devLog('TerminalInstance', `instance disposed session=${this.sessionId}`);
   }
 
   /**

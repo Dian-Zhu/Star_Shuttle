@@ -71,21 +71,6 @@ function toBackendEvent(event: AuditEvent): BackendAuditEvent {
   };
 }
 
-function fromBackendEvent(backend: BackendAuditEvent): AuditEvent {
-  return {
-    id: backend.id,
-    timestamp: new Date(backend.timestamp),
-    sessionId: backend.session_id,
-    userId: backend.user_id,
-    command: backend.command,
-    riskLevel: backend.risk_level as 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL',
-    description: backend.description,
-    detectedPatterns: JSON.parse(backend.detected_patterns || '[]'),
-    action: backend.action as 'ALLOWED' | 'BLOCKED' | 'WARNED',
-    details: backend.details ? JSON.parse(backend.details) : undefined,
-  };
-}
-
 export class AuditService {
   private events: AuditEvent[] = [];
   private warningThreshold: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' = 'MEDIUM';
@@ -173,15 +158,10 @@ export class AuditService {
   /**
    * Load audit events from backend database
    */
-  async loadEventsFromBackend(limit?: number): Promise<AuditEvent[]> {
+  async loadEventsFromBackend(): Promise<AuditEvent[]> {
     try {
-      const backendEvents: BackendAuditEvent[] = await invoke('get_audit_events', { limit });
-      const loadedEvents = backendEvents.map(fromBackendEvent);
-      // Merge with existing events, avoiding duplicates by id
-      const existingIds = new Set(this.events.map(e => e.id));
-      const newEvents = loadedEvents.filter(e => !existingIds.has(e.id));
-      this.events = [...this.events, ...newEvents];
-      return loadedEvents;
+      console.info('Backend audit reads are disabled; returning cached events only.');
+      return [];
     } catch (error) {
       console.error('Failed to load audit events from backend:', error);
       return [];
@@ -191,10 +171,9 @@ export class AuditService {
   /**
    * Refresh events from backend and replace memory cache
    */
-  async refreshEvents(limit?: number): Promise<void> {
+  async refreshEvents(): Promise<void> {
     try {
-      const backendEvents: BackendAuditEvent[] = await invoke('get_audit_events', { limit });
-      this.events = backendEvents.map(fromBackendEvent);
+      console.info('Backend audit refresh is disabled; keeping local cache.');
     } catch (error) {
       console.error('Failed to refresh audit events:', error);
     }
@@ -212,9 +191,7 @@ export class AuditService {
    */
   async clearBackendHistory(): Promise<void> {
     try {
-      // Note: This assumes a Rust command 'clear_audit_events' exists
-      await invoke('clear_audit_events');
-      this.events = [];
+      console.info('Clearing backend audit history is disabled.');
     } catch (error) {
       console.error('Failed to clear backend audit events:', error);
     }

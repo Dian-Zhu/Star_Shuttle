@@ -7,6 +7,24 @@ type BackendOpenHandle = {
 
 type BackendFileStat = {
   size: number;
+  access_token?: string | null;
+};
+
+type LocalFsDialogFilter = {
+  name: string;
+  extensions: string[];
+};
+
+type BackendDialogGrant = {
+  path: string;
+  access_token: string;
+  size: number;
+};
+
+export type LocalFsDialogGrant = {
+  path: string;
+  accessToken: string;
+  size: number;
 };
 
 class LocalReadHandle {
@@ -70,10 +88,39 @@ export class LocalFsService {
     return path.replace(/\\/g, '/');
   }
 
-  async openFile(path: string): Promise<LocalReadHandle> {
+  async pickFileForRead(filters: LocalFsDialogFilter[] = []): Promise<LocalFsDialogGrant | null> {
+    const grant = await invoke<BackendDialogGrant | null>('local_fs_pick_file_for_read', {
+      filters,
+    });
+    if (!grant) return null;
+    return {
+      path: this.normalizePath(grant.path),
+      accessToken: grant.access_token,
+      size: grant.size,
+    };
+  }
+
+  async pickFileForWrite(
+    defaultFileName?: string,
+    filters: LocalFsDialogFilter[] = [],
+  ): Promise<LocalFsDialogGrant | null> {
+    const grant = await invoke<BackendDialogGrant | null>('local_fs_pick_file_for_write', {
+      defaultFileName: defaultFileName ?? null,
+      filters,
+    });
+    if (!grant) return null;
+    return {
+      path: this.normalizePath(grant.path),
+      accessToken: grant.access_token,
+      size: grant.size,
+    };
+  }
+
+  async openFile(path: string, accessToken?: string): Promise<LocalReadHandle> {
     try {
       const result = await invoke<BackendOpenHandle>('local_fs_open_read', {
         path: this.normalizePath(path),
+        accessToken,
       });
       return new LocalReadHandle(result.handle_id, result.size);
     } catch (error: any) {
@@ -81,11 +128,12 @@ export class LocalFsService {
     }
   }
 
-  async openWriteFile(path: string, truncate: boolean): Promise<LocalWriteHandle> {
+  async openWriteFile(path: string, truncate: boolean, accessToken?: string): Promise<LocalWriteHandle> {
     try {
       const handleId = await invoke<string>('local_fs_open_write', {
         path: this.normalizePath(path),
         truncate,
+        accessToken,
       });
       return new LocalWriteHandle(handleId);
     } catch (error: any) {
@@ -123,80 +171,23 @@ export class LocalFsService {
     }
   }
 
-  async getFileSize(path: string): Promise<number> {
-    try {
-      const stat = await invoke<BackendFileStat>('local_fs_stat', {
-        path: this.normalizePath(path),
-      });
-      return stat.size;
-    } catch (error: any) {
-      throw new Error(`Failed to get file size: ${error.message}`);
-    }
-  }
-
-  async readFile(path: string): Promise<Uint8Array> {
-    const handle = await this.openFile(path);
-    try {
-      const stat = await handle.stat();
-      const size = stat.size;
-      const chunks: Uint8Array[] = [];
-      let remaining = size;
-      const chunkSize = 128 * 1024;
-
-      while (remaining > 0) {
-        const chunk = await this.readChunk(handle, Math.min(chunkSize, remaining));
-        if (chunk.length === 0) break;
-        chunks.push(chunk);
-        remaining -= chunk.length;
-      }
-
-      const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-      const content = new Uint8Array(total);
-      let offset = 0;
-      for (const chunk of chunks) {
-        content.set(chunk, offset);
-        offset += chunk.length;
-      }
-      return content;
-    } catch (error: any) {
-      throw new Error(`Failed to read file: ${error.message}`);
-    } finally {
-      await this.closeFile(handle);
-    }
-  }
-
-  async writeFile(path: string, content: Uint8Array, append: boolean = false): Promise<void> {
-    try {
-      const normalizedPath = this.normalizePath(path);
-      const handle = await this.openWriteFile(normalizedPath, !append);
-      try {
-        if (append) {
-          await handle.seek(0, 2);
-        }
-        await this.writeChunk(handle, content);
-      } finally {
-        await this.closeFile(handle);
-      }
-    } catch (error: any) {
-      throw new Error(`Failed to write file: ${error.message}`);
-    }
-  }
-
-  async readTextFile(path: string): Promise<string> {
+  async readTextFile(path: string, accessToken?: string): Promise<string> {
     try {
       return await invoke<string>('local_fs_read_text', {
         path: this.normalizePath(path),
+        accessToken,
       });
     } catch (error: any) {
       throw new Error(`Failed to read text file: ${error.message}`);
     }
   }
 
-  async writeTextFile(path: string, content: string): Promise<void> {
+  async writeTextFile(path: string, content: string, accessToken?: string): Promise<void> {
     try {
       await invoke('local_fs_write_text', {
         path: this.normalizePath(path),
         content,
+        accessToken,
       });
     } catch (error: any) {
       throw new Error(`Failed to write text file: ${error.message}`);

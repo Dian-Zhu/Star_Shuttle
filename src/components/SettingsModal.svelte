@@ -486,12 +486,13 @@
   const basicColorKeys: CustomThemeKey[] = ['background', 'foreground', 'cursor', 'selectionBackground'];
   const standardColorKeys: CustomThemeKey[] = ['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white'];
   const brightColorKeys: CustomThemeKey[] = ['brightBlack', 'brightRed', 'brightGreen', 'brightYellow', 'brightBlue', 'brightMagenta', 'brightCyan', 'brightWhite'];
+  type EyeDropperResult = { sRGBHex: string };
+  type EyeDropperCtor = new () => { open: () => Promise<EyeDropperResult> };
 
   async function handleEyeDropper(updateFn: (color: string) => void) {
      if (!('EyeDropper' in window)) return;
      try {
-       // @ts-ignore
-       const eyeDropper = new (window as any).EyeDropper();
+       const eyeDropper = new (window as Window & { EyeDropper?: EyeDropperCtor }).EyeDropper!();
        const result = await eyeDropper.open();
        updateFn(result.sRGBHex);
      } catch (e) {

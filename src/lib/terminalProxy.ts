@@ -7,9 +7,11 @@
 
 import type { TerminalInstance } from './terminalInstance';
 
+type TerminalEventHandler = (...args: unknown[]) => void;
+
 export class TerminalProxy {
   private instance: TerminalInstance;
-  private localHandlers = new Map<string, Set<Function>>();
+  private localHandlers = new Map<string, Set<TerminalEventHandler>>();
 
   constructor(instance: TerminalInstance) {
     this.instance = instance;
@@ -65,7 +67,7 @@ export class TerminalProxy {
    * @param event 事件名称
    * @param handler 事件处理函数
    */
-  on(event: string, handler: Function): void {
+  on(event: string, handler: TerminalEventHandler): void {
     // 记录本地处理函数
     if (!this.localHandlers.has(event)) {
       this.localHandlers.set(event, new Set());
@@ -81,7 +83,7 @@ export class TerminalProxy {
    * @param event 事件名称
    * @param handler 事件处理函数
    */
-  off(event: string, handler: Function): void {
+  off(event: string, handler: TerminalEventHandler): void {
     // 从本地记录中移除
     const handlers = this.localHandlers.get(event);
     if (handlers) {

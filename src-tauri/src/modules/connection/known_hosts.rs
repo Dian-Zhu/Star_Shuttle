@@ -154,34 +154,6 @@ impl KnownHostsManager {
         Ok(false)
     }
 
-    /// Add a host key to known_hosts
-    pub fn add_host_key(
-        &mut self,
-        host: &str,
-        port: u16,
-        key: &PublicKey,
-    ) -> Result<(), anyhow::Error> {
-        let host_pattern = format!("[{}]:{}", host, port);
-        info!("Adding host key for: {}", host_pattern);
-
-        let (key_type, key_base64) = public_key_parts(key)?;
-
-        // Add the key to the in-memory map
-        self.known_hosts
-            .entry(host_pattern.clone())
-            .or_default()
-            .push(KnownHostKey {
-                key_type,
-                key_base64,
-            });
-
-        // Save to file
-        self.save()?;
-
-        info!("Successfully added host key to known_hosts");
-        Ok(())
-    }
-
     pub fn upsert_host_key_parts(
         &mut self,
         host: &str,
@@ -240,19 +212,6 @@ impl KnownHostsManager {
 
         info!("Successfully removed host key from known_hosts");
         Ok(())
-    }
-
-    /// Get the fingerprint of a public key
-    pub fn get_key_fingerprint(key: &PublicKey) -> String {
-        key.fingerprint()
-    }
-
-    /// Get the algorithm of a public key
-    pub fn get_key_algorithm(key: &PublicKey) -> String {
-        match key {
-            PublicKey::Ed25519(_) => "Ed25519".to_string(),
-            _ => "Unknown".to_string(),
-        }
     }
 }
 
@@ -326,7 +285,9 @@ fn host_pattern_matches_host(pattern: &str, host: &str) -> bool {
         || pattern
             .strip_prefix('[')
             .and_then(|rest| rest.split_once(']'))
-            .is_some_and(|(pattern_host, remainder)| pattern_host == host && remainder.starts_with(':'))
+            .is_some_and(|(pattern_host, remainder)| {
+                pattern_host == host && remainder.starts_with(':')
+            })
 }
 
 fn public_key_parts(key: &PublicKey) -> Result<(String, String), anyhow::Error> {

@@ -1,17 +1,29 @@
 use crate::modules::db::DatabaseManager;
 use crate::{ensure_app_unlocked_runtime, AppLockRuntimeState};
+mod grants;
+mod handles;
+
+pub(crate) use self::grants::issue_dialog_path_grant;
+use self::grants::{
+    authorize_path, default_allowed_roots, normalize_path, stat_with_optional_access, AccessMode,
+    PathGrant,
+};
+#[cfg(test)]
+use self::grants::{ensure_path_in_allowed_roots, issue_path_grant, PathGrantSource};
+use self::handles::{close_handle, insert_handle, with_handle};
 use serde::Serialize;
+use serde_json::json;
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::State;
-use uuid::Uuid;
 
 pub struct LocalFsState {
-    handles: Mutex<HashMap<String, LocalFileHandle>>,
+    handles: Mutex<HashMap<String, Arc<Mutex<LocalFileHandle>>>>,
     allowed_roots: Vec<PathBuf>,
+    path_grants: Mutex<HashMap<String, PathGrant>>,
 }
 
 struct LocalFileHandle {
@@ -21,6 +33,9 @@ struct LocalFileHandle {
 }
 
 const MAX_LOCAL_FS_CHUNK_BYTES: usize = 4 * 1024 * 1024;
+const MAX_LOCAL_FS_TEXT_BYTES: u64 = 8 * 1024 * 1024;
+const PATH_GRANT_TTL_SECONDS: u64 = 180;
+const LOCAL_FS_TEXT_TOO_LARGE_ERR: &str = "LOCAL_FS_TEXT_TOO_LARGE";
 
 #[derive(Serialize)]
 pub struct LocalOpenHandle {
@@ -31,30 +46,7 @@ pub struct LocalOpenHandle {
 #[derive(Serialize)]
 pub struct LocalFileStat {
     pub size: u64,
-}
-
-fn normalize_path(path: &str) -> PathBuf {
-    PathBuf::from(path)
-}
-
-fn default_allowed_roots() -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    for candidate in [
-        dirs::home_dir(),
-        dirs::desktop_dir(),
-        dirs::download_dir(),
-        dirs::document_dir(),
-        Some(std::env::temp_dir()),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        let canonical = fs::canonicalize(&candidate).unwrap_or(candidate);
-        if !roots.iter().any(|root| root == &canonical) {
-            roots.push(canonical);
-        }
-    }
-    roots
+    pub access_token: Option<String>,
 }
 
 impl Default for LocalFsState {
@@ -62,39 +54,9 @@ impl Default for LocalFsState {
         Self {
             handles: Mutex::new(HashMap::new()),
             allowed_roots: default_allowed_roots(),
+            path_grants: Mutex::new(HashMap::new()),
         }
     }
-}
-
-fn path_access_anchor(path: &Path) -> Result<PathBuf, String> {
-    let mut current = Some(path);
-    while let Some(candidate) = current {
-        if candidate.exists() {
-            return fs::canonicalize(candidate).map_err(|e| e.to_string());
-        }
-        current = candidate.parent();
-    }
-
-    Err(format!(
-        "Path is outside allowed roots or has no existing parent: {}",
-        path.display()
-    ))
-}
-
-fn ensure_path_allowed(state: &LocalFsState, path: &Path) -> Result<(), String> {
-    let anchor = path_access_anchor(path)?;
-    if state
-        .allowed_roots
-        .iter()
-        .any(|root| anchor.starts_with(root))
-    {
-        return Ok(());
-    }
-
-    Err(format!(
-        "Access to local path is denied: {}",
-        path.to_string_lossy()
-    ))
 }
 
 fn ensure_unlocked(
@@ -114,23 +76,19 @@ fn ensure_chunk_limit(length: usize, label: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn insert_handle(state: &LocalFsState, handle: LocalFileHandle) -> Result<String, String> {
-    let handle_id = Uuid::new_v4().to_string();
-    let mut handles = state.handles.lock().map_err(|e| e.to_string())?;
-    handles.insert(handle_id.clone(), handle);
-    Ok(handle_id)
-}
-
-fn with_handle<R>(
-    state: &LocalFsState,
-    handle_id: &str,
-    f: impl FnOnce(&mut LocalFileHandle) -> Result<R, String>,
-) -> Result<R, String> {
-    let mut handles = state.handles.lock().map_err(|e| e.to_string())?;
-    let handle = handles
-        .get_mut(handle_id)
-        .ok_or_else(|| format!("Unknown local file handle: {}", handle_id))?;
-    f(handle)
+fn ensure_text_limit(size_bytes: u64) -> Result<(), String> {
+    if size_bytes > MAX_LOCAL_FS_TEXT_BYTES {
+        return Err(format!(
+            "{}|{}",
+            LOCAL_FS_TEXT_TOO_LARGE_ERR,
+            json!({
+                "size_bytes": size_bytes,
+                "max_bytes": MAX_LOCAL_FS_TEXT_BYTES
+            })
+            .to_string()
+        ));
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -139,11 +97,12 @@ pub fn local_fs_open_read(
     app_lock_state: State<'_, Arc<Mutex<AppLockRuntimeState>>>,
     state: State<'_, LocalFsState>,
     path: String,
+    access_token: Option<String>,
 ) -> Result<LocalOpenHandle, String> {
     ensure_unlocked(&db, &app_lock_state)?;
     let path = normalize_path(&path);
-    ensure_path_allowed(&state, &path)?;
-    let file = File::open(&path).map_err(|e| e.to_string())?;
+    let authorized_path = authorize_path(&state, &path, AccessMode::Read, access_token.as_deref())?;
+    let file = File::open(&authorized_path).map_err(|e| e.to_string())?;
     let size = file.metadata().map_err(|e| e.to_string())?.len();
     let handle_id = insert_handle(
         &state,
@@ -162,14 +121,11 @@ pub fn local_fs_stat(
     app_lock_state: State<'_, Arc<Mutex<AppLockRuntimeState>>>,
     state: State<'_, LocalFsState>,
     path: String,
+    access_mode: Option<String>,
 ) -> Result<LocalFileStat, String> {
     ensure_unlocked(&db, &app_lock_state)?;
     let path = normalize_path(&path);
-    ensure_path_allowed(&state, &path)?;
-    let metadata = fs::metadata(path).map_err(|e| e.to_string())?;
-    Ok(LocalFileStat {
-        size: metadata.len(),
-    })
+    stat_with_optional_access(&state, &path, access_mode)
 }
 
 #[tauri::command]
@@ -197,15 +153,17 @@ pub fn local_fs_open_write(
     state: State<'_, LocalFsState>,
     path: String,
     truncate: bool,
+    access_token: Option<String>,
 ) -> Result<String, String> {
     ensure_unlocked(&db, &app_lock_state)?;
     let path = normalize_path(&path);
-    ensure_path_allowed(&state, &path)?;
+    let authorized_path =
+        authorize_path(&state, &path, AccessMode::Write, access_token.as_deref())?;
     let file = OpenOptions::new()
         .create(true)
         .write(true)
         .truncate(truncate)
-        .open(&path)
+        .open(&authorized_path)
         .map_err(|e| e.to_string())?;
     let handle_id = insert_handle(
         &state,
@@ -273,11 +231,7 @@ pub fn local_fs_close(
     handle_id: String,
 ) -> Result<(), String> {
     ensure_unlocked(&db, &app_lock_state)?;
-    let mut handles = state.handles.lock().map_err(|e| e.to_string())?;
-    handles
-        .remove(&handle_id)
-        .ok_or_else(|| format!("Unknown local file handle: {}", handle_id))?;
-    Ok(())
+    close_handle(&state, &handle_id)
 }
 
 #[tauri::command]
@@ -286,11 +240,20 @@ pub fn local_fs_read_text(
     app_lock_state: State<'_, Arc<Mutex<AppLockRuntimeState>>>,
     state: State<'_, LocalFsState>,
     path: String,
+    access_token: Option<String>,
 ) -> Result<String, String> {
     ensure_unlocked(&db, &app_lock_state)?;
     let path = normalize_path(&path);
-    ensure_path_allowed(&state, &path)?;
-    fs::read_to_string(path).map_err(|e| e.to_string())
+    let authorized_path = authorize_path(&state, &path, AccessMode::Read, access_token.as_deref())?;
+
+    // Prevent huge or unbounded streams from being loaded into memory in one shot.
+    // Read at most MAX+1 bytes, then error if the file is larger than the limit.
+    let file = File::open(&authorized_path).map_err(|e| e.to_string())?;
+    let mut limited = file.take(MAX_LOCAL_FS_TEXT_BYTES + 1);
+    let mut bytes = Vec::new();
+    limited.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+    ensure_text_limit(bytes.len() as u64)?;
+    String::from_utf8(bytes).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -300,18 +263,21 @@ pub fn local_fs_write_text(
     state: State<'_, LocalFsState>,
     path: String,
     content: String,
+    access_token: Option<String>,
 ) -> Result<(), String> {
     ensure_unlocked(&db, &app_lock_state)?;
     ensure_chunk_limit(content.len(), "Local FS text write")?;
     let path = normalize_path(&path);
-    ensure_path_allowed(&state, &path)?;
-    fs::write(path, content).map_err(|e| e.to_string())
+    let authorized_path =
+        authorize_path(&state, &path, AccessMode::Write, access_token.as_deref())?;
+    fs::write(authorized_path, content).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Write;
+    use uuid::Uuid;
 
     fn file_permissions_string(metadata: &fs::Metadata) -> String {
         #[cfg(unix)]
@@ -352,8 +318,7 @@ mod tests {
             },
         )
         .expect("failed to insert handle");
-        let mut handles = state.handles.lock().expect("failed to lock handles");
-        assert!(handles.remove(&handle_id).is_some());
+        close_handle(&state, &handle_id).expect("failed to close handle");
         let _ = fs::remove_file(file);
     }
 
@@ -404,9 +369,10 @@ mod tests {
         let state = LocalFsState {
             handles: Mutex::new(HashMap::new()),
             allowed_roots: vec![allowed_root.clone()],
+            path_grants: Mutex::new(HashMap::new()),
         };
 
-        let err = ensure_path_allowed(&state, &blocked_file)
+        let err = ensure_path_in_allowed_roots(&state, &blocked_file)
             .expect_err("path outside allowed roots should be rejected");
         assert!(err.contains("denied"));
 
@@ -424,14 +390,160 @@ mod tests {
         let state = LocalFsState {
             handles: Mutex::new(HashMap::new()),
             allowed_roots: vec![fs::canonicalize(&allowed_root).expect("canonical root")],
+            path_grants: Mutex::new(HashMap::new()),
         };
 
-        assert!(ensure_path_allowed(&state, &file).is_ok());
+        assert!(ensure_path_in_allowed_roots(&state, &file).is_ok());
 
         let _ = fs::remove_dir_all(allowed_root);
     }
 
+    #[test]
+    fn unauthorized_path_is_rejected_without_token() {
+        let outside_root = tempfile_path("outside");
+        fs::create_dir_all(&outside_root).expect("failed to create outside root");
+        let blocked_file = outside_root.join("blocked.txt");
+
+        let state = LocalFsState {
+            handles: Mutex::new(HashMap::new()),
+            allowed_roots: vec![],
+            path_grants: Mutex::new(HashMap::new()),
+        };
+
+        let err = authorize_path(&state, &blocked_file, AccessMode::Write, None)
+            .expect_err("path should be denied without token");
+        assert!(err.contains("denied"));
+
+        let _ = fs::remove_dir_all(outside_root);
+    }
+
+    #[test]
+    fn issued_token_allows_exact_path_once() {
+        let outside_root = tempfile_path("outside-token");
+        fs::create_dir_all(&outside_root).expect("failed to create outside root");
+        let target_file = outside_root.join("allowed.txt");
+
+        let state = LocalFsState {
+            handles: Mutex::new(HashMap::new()),
+            allowed_roots: vec![],
+            path_grants: Mutex::new(HashMap::new()),
+        };
+
+        let read_only_token = issue_path_grant(
+            &state,
+            &target_file,
+            AccessMode::Read,
+            PathGrantSource::TrustedDialog,
+        )
+        .expect("grant should issue");
+        let err = authorize_path(
+            &state,
+            &target_file,
+            AccessMode::Write,
+            Some(&read_only_token),
+        )
+        .expect_err("read-only token must not allow write access");
+        assert!(err.contains("denied"));
+
+        let write_token = issue_path_grant(
+            &state,
+            &target_file,
+            AccessMode::Write,
+            PathGrantSource::TrustedDialog,
+        )
+        .expect("grant should issue");
+        authorize_path(&state, &target_file, AccessMode::Write, Some(&write_token))
+            .expect("token should allow first access");
+
+        let err = authorize_path(&state, &target_file, AccessMode::Write, Some(&write_token))
+            .expect_err("token should be consumed after first use");
+        assert!(err.contains("denied"));
+
+        let _ = fs::remove_dir_all(outside_root);
+    }
+
+    #[test]
+    fn allowed_roots_token_cannot_be_issued_for_outside_path() {
+        let outside_root = tempfile_path("outside-allowed-only");
+        fs::create_dir_all(&outside_root).expect("failed to create outside root");
+        let target_file = outside_root.join("blocked.txt");
+
+        let state = LocalFsState {
+            handles: Mutex::new(HashMap::new()),
+            allowed_roots: vec![],
+            path_grants: Mutex::new(HashMap::new()),
+        };
+
+        let result = issue_path_grant(
+            &state,
+            &target_file,
+            AccessMode::Write,
+            PathGrantSource::AllowedRootsOnly,
+        );
+        assert!(result.is_err());
+
+        let _ = fs::remove_dir_all(outside_root);
+    }
+
+    #[test]
+    fn default_state_has_no_ambient_allowed_roots() {
+        let state = LocalFsState::default();
+        assert!(state.allowed_roots.is_empty());
+    }
+
+    #[test]
+    fn authorize_path_returns_resolved_target_path() {
+        let outside_root = tempfile_path("outside-symlink");
+        let target_root = tempfile_path("target-root");
+        fs::create_dir_all(&outside_root).expect("failed to create outside root");
+        fs::create_dir_all(&target_root).expect("failed to create target root");
+
+        let target_file = target_root.join("real.txt");
+        fs::write(&target_file, "hello").expect("failed to write target file");
+        let link_path = outside_root.join("link.txt");
+
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&target_file, &link_path).expect("failed to create symlink");
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_file(&target_file, &link_path)
+            .expect("failed to create symlink");
+
+        let state = LocalFsState {
+            handles: Mutex::new(HashMap::new()),
+            allowed_roots: vec![],
+            path_grants: Mutex::new(HashMap::new()),
+        };
+
+        let token = issue_path_grant(
+            &state,
+            &link_path,
+            AccessMode::Read,
+            PathGrantSource::TrustedDialog,
+        )
+        .expect("grant should issue");
+
+        let authorized =
+            authorize_path(&state, &link_path, AccessMode::Read, Some(&token)).expect("authorize");
+        assert_eq!(
+            authorized,
+            fs::canonicalize(&target_file).expect("canonical target file")
+        );
+
+        let _ = fs::remove_file(&link_path);
+        let _ = fs::remove_file(&target_file);
+        let _ = fs::remove_dir_all(outside_root);
+        let _ = fs::remove_dir_all(target_root);
+    }
+
     fn tempfile_path(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("star-shuttle-{}-{}", name, Uuid::new_v4()))
+    }
+
+    #[test]
+    fn text_limit_rejects_oversized_files() {
+        let err = ensure_text_limit(MAX_LOCAL_FS_TEXT_BYTES + 1)
+            .expect_err("oversized text should be rejected");
+        assert!(err.starts_with(LOCAL_FS_TEXT_TOO_LARGE_ERR));
+        assert!(err.contains("max_bytes"));
     }
 }

@@ -26,8 +26,8 @@ impl log::Log for SimpleLogger {
             <= self
                 .inner
                 .lock()
-                .map(|guard| guard.as_ref().map_or(LevelFilter::Info, |s| s.level))
-                .unwrap_or(LevelFilter::Info)
+                .map(|guard| guard.as_ref().map_or(LevelFilter::Off, |s| s.level))
+                .unwrap_or(LevelFilter::Off)
     }
 
     fn log(&self, record: &Record) {

@@ -43,7 +43,7 @@ impl ChannelStats {
 /// Tracks channel activity and logs data.
 pub struct ChannelTracker {
     stats: HashMap<Uuid, ChannelStats>,
-    log_dir: PathBuf,
+    log_dir: Option<PathBuf>,
 }
 
 impl Default for ChannelTracker {
@@ -54,15 +54,19 @@ impl Default for ChannelTracker {
 
 impl ChannelTracker {
     /// Creates a new `ChannelTracker`.
-    ///
-    /// Initializes a temporary directory for logging session data.
     pub fn new() -> Self {
-        let mut log_dir = std::env::temp_dir();
-        log_dir.push("star_shuttle_logs");
+        Self::with_logging_enabled(cfg!(debug_assertions))
+    }
 
-        if !log_dir.exists() {
-            let _ = fs::create_dir_all(&log_dir);
-        }
+    fn with_logging_enabled(enable: bool) -> Self {
+        let log_dir = enable.then(|| {
+            let dir = dirs::data_local_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join("star_shuttle")
+                .join("logs");
+            let _ = fs::create_dir_all(&dir);
+            dir
+        });
 
         Self {
             stats: HashMap::new(),
@@ -73,6 +77,11 @@ impl ChannelTracker {
     /// Registers a new session for tracking.
     pub fn register_session(&mut self, session_id: Uuid) {
         self.stats.insert(session_id, ChannelStats::new(session_id));
+    }
+
+    /// Unregisters a session and drops its in-memory statistics.
+    pub fn unregister_session(&mut self, session_id: &Uuid) {
+        self.stats.remove(session_id);
     }
 
     /// Logs data transfer for a session.
@@ -100,24 +109,21 @@ impl ChannelTracker {
         }
 
         // Log to file
-        let log_path = self.log_dir.join(format!("{}.log", session_id));
-        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) {
-            let timestamp = Utc::now().to_rfc3339();
-            // Simple text log: [TIMESTAMP] [DIRECTION] LENGTH bytes
-            // We avoid logging full content to avoid huge files, but for audit we might need it.
-            // For now, let's just log metadata to avoid filling disk.
-            let _ = writeln!(file, "[{}] [{}] {} bytes", timestamp, direction, data.len());
+        if let Some(log_dir) = &self.log_dir {
+            let log_path = log_dir.join(format!("{}.log", session_id));
+            if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) {
+                let timestamp = Utc::now().to_rfc3339();
+                // Simple text log: [TIMESTAMP] [DIRECTION] LENGTH bytes
+                // We avoid logging full content to avoid huge files, but for audit we might need it.
+                // For now, let's just log metadata to avoid filling disk.
+                let _ = writeln!(file, "[{}] [{}] {} bytes", timestamp, direction, data.len());
+            }
         }
     }
 
     /// Retrieves statistics for a specific session.
     pub fn get_stats(&self, session_id: &Uuid) -> Option<&ChannelStats> {
         self.stats.get(session_id)
-    }
-
-    /// Retrieves statistics for all sessions.
-    pub fn get_all_stats(&self) -> Vec<ChannelStats> {
-        self.stats.values().cloned().collect()
     }
 }
 
@@ -129,7 +135,15 @@ mod tests {
     fn test_tracker_initialization() {
         let tracker = ChannelTracker::new();
         assert!(tracker.stats.is_empty());
-        assert!(tracker.log_dir.exists());
+        if cfg!(debug_assertions) {
+            assert!(tracker
+                .log_dir
+                .as_ref()
+                .map(|p| p.exists())
+                .unwrap_or(false));
+        } else {
+            assert!(tracker.log_dir.is_none());
+        }
     }
 
     #[test]
@@ -161,5 +175,25 @@ mod tests {
         let stats = tracker.get_stats(&session_id).unwrap();
         assert_eq!(stats.bytes_received, data.len() as u64);
         assert_eq!(stats.output_count, 1);
+    }
+
+    #[test]
+    fn test_logging_disabled_mode() {
+        let mut tracker = ChannelTracker::with_logging_enabled(false);
+        assert!(tracker.log_dir.is_none());
+        let session_id = Uuid::new_v4();
+        tracker.register_session(session_id);
+        tracker.log_data(session_id, b"", "sent");
+        let stats = tracker.get_stats(&session_id);
+        assert!(stats.is_some());
+    }
+
+    #[test]
+    fn test_unregister_session_removes_stats() {
+        let mut tracker = ChannelTracker::with_logging_enabled(false);
+        let session_id = Uuid::new_v4();
+        tracker.register_session(session_id);
+        tracker.unregister_session(&session_id);
+        assert!(tracker.get_stats(&session_id).is_none());
     }
 }

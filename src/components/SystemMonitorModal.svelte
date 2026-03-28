@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { invoke } from '@tauri-apps/api/core';
   import { fade } from 'svelte/transition';
+  import { execAuditedRemoteCommand } from '../lib/remoteExecAudit';
   import XIcon from './icons/XIcon.svelte';
   import type { Connection } from '../lib/store';
 
@@ -46,8 +46,7 @@
 
   async function execMonitorCommand(command: string): Promise<string> {
     try {
-      const result = await invoke('exec_command', { sessionId, command });
-      return typeof result === 'string' ? result : String(result ?? '');
+      return await execAuditedRemoteCommand(sessionId, command, 'system-monitor');
     } catch {
       return '';
     }

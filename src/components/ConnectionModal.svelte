@@ -3,6 +3,13 @@
   import { saveConnection, createBackendConfig } from '../lib/connectionService';
   import { connectAndOpen } from '../lib/terminalService';
   import { invoke } from '@tauri-apps/api/core';
+  import {
+    getHostKeyPromptHint,
+    getHostKeyPromptTitle,
+    parseHostKeyPrompt,
+    saveHostKeyPrompt,
+    type HostKeyPrompt,
+  } from '../lib/hostKeyPrompt';
   import XIcon from './icons/XIcon.svelte';
   import PlusIcon from './icons/PlusIcon.svelte';
   import ActivityIcon from './icons/ActivityIcon.svelte';
@@ -206,20 +213,27 @@
     }
   }
 
-  function sanitizeConnectConfig(config: any) {
-    const out = JSON.parse(JSON.stringify(config));
+  function sanitizeConnectConfig(config: unknown): Connection {
+    const out = JSON.parse(JSON.stringify(config ?? {})) as Connection;
     if (out?.auth_method?.Password) out.auth_method.Password.password = '';
     if (out?.auth_method?.PrivateKey) delete out.auth_method.PrivateKey.passphrase;
     if (out?.auth_method?.Certificate) delete out.auth_method.Certificate.passphrase;
 
-    if (out?.proxy_type?.JumpHost?.auth_method?.Password) {
-      out.proxy_type.JumpHost.auth_method.Password.password = '';
+    const proxyRecord = asRecord(out?.proxy_type);
+    const jumpHost = asRecord(proxyRecord?.JumpHost);
+    const jumpAuth = asRecord(jumpHost?.auth_method);
+    const jumpPassword = asRecord(jumpAuth?.Password);
+    const jumpPrivateKey = asRecord(jumpAuth?.PrivateKey);
+    const jumpCertificate = asRecord(jumpAuth?.Certificate);
+
+    if (jumpPassword) {
+      jumpPassword.password = '';
     }
-    if (out?.proxy_type?.JumpHost?.auth_method?.PrivateKey) {
-      delete out.proxy_type.JumpHost.auth_method.PrivateKey.passphrase;
+    if (jumpPrivateKey) {
+      delete jumpPrivateKey.passphrase;
     }
-    if (out?.proxy_type?.JumpHost?.auth_method?.Certificate) {
-      delete out.proxy_type.JumpHost.auth_method.Certificate.passphrase;
+    if (jumpCertificate) {
+      delete jumpCertificate.passphrase;
     }
     return out;
   }
@@ -284,58 +298,13 @@
   let isSaving = false;
   let isTesting = false;
   
-  let hostKeyVerification: { 
-    type: 'unknown' | 'mismatch' | 'unavailable';
-    host: string; 
-    port: number; 
-    keyType: string; 
-    keyBase64: string; 
-    fingerprint: string; 
-    reason?: string;
-  } | null = null;
-
-  const hostKeyMarkers: Array<{ marker: string; type: 'unknown' | 'mismatch' | 'unavailable' }> = [
-    { marker: 'HOST_KEY_UNKNOWN|', type: 'unknown' },
-    { marker: 'HOST_KEY_MISMATCH|', type: 'mismatch' },
-    { marker: 'HOST_KEY_UNAVAILABLE|', type: 'unavailable' },
-  ];
-
-  function parseHostKeyError(errStr: string) {
-    for (const { marker, type } of hostKeyMarkers) {
-      if (!errStr.includes(marker)) continue;
-      try {
-        const jsonStr = errStr.split(marker)[1];
-        const keyData = JSON.parse(jsonStr);
-        return {
-          type,
-          host: keyData.host as string,
-          port: keyData.port as number,
-          keyType: keyData.key_type as string,
-          keyBase64: keyData.key_base64 as string,
-          fingerprint: keyData.fingerprint as string,
-          reason: keyData.reason as string | undefined,
-        };
-      } catch (e) {
-        console.error('Failed to parse host key data', e);
-        return null;
-      }
-    }
-    return null;
-  }
+  let hostKeyVerification: HostKeyPrompt | null = null;
 
   $: hostKeyTitle =
-    hostKeyVerification?.type === 'mismatch'
-      ? '主机密钥已变更'
-      : hostKeyVerification?.type === 'unavailable'
-        ? '无法校验主机密钥'
-        : '未知的主机密钥';
+    hostKeyVerification ? getHostKeyPromptTitle(hostKeyVerification.type) : '未知的主机密钥';
 
   $: hostKeyHint =
-    hostKeyVerification?.type === 'mismatch'
-      ? '这可能是中间人攻击或服务器重装导致。请谨慎确认后再信任。'
-      : hostKeyVerification?.type === 'unavailable'
-        ? '应用信任库当前不可用，无法自动校验服务器身份。'
-        : '首次连接该服务器，请确认指纹后再继续。';
+    hostKeyVerification ? getHostKeyPromptHint(hostKeyVerification.type) : '首次连接该服务器，请确认指纹后再继续。';
 
   $: if ($editingConnection) {
     hydrateFromConnection($editingConnection);
@@ -345,13 +314,7 @@
     if (!hostKeyVerification) return;
     
     try {
-      await invoke('known_hosts_save_host_key', {
-        host: hostKeyVerification.host,
-        port: hostKeyVerification.port,
-        keyType: hostKeyVerification.keyType,
-        keyBase64: hostKeyVerification.keyBase64,
-        replace: hostKeyVerification.type === 'mismatch'
-      });
+      await saveHostKeyPrompt(hostKeyVerification);
       
       hostKeyVerification = null;
       showSuccessMessage('主机密钥已保存到应用信任库', 3000);
@@ -382,9 +345,8 @@
       
       await invoke('test_connection', { config });
       showSuccessMessage('连接测试成功！', 3000);
-    } catch (error: any) {
-      const errStr = String(error);
-      const parsedHostKey = parseHostKeyError(errStr);
+    } catch (error: unknown) {
+      const parsedHostKey = parseHostKeyPrompt(error);
       if (parsedHostKey) {
         hostKeyVerification = parsedHostKey;
         return;
@@ -413,7 +375,7 @@
       if (!isEditing) {
         const connection = $connections.find(c => c.id === result.connectionId);
         const safeConnection = connection ?? sanitizeConnectConfig(result.connectConfig);
-        connectAndOpen(safeConnection as any, result.connectConfig);
+        connectAndOpen(safeConnection, result.connectConfig);
       }
       handleClose();
     }
@@ -456,16 +418,16 @@
           <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
         </div>
         <h3 class="text-xl font-semibold text-app-text mb-2">{hostKeyTitle}</h3>
-        <p class="text-sm text-app-text-secondary mb-6 max-w-md">
-          服务器 <strong>{hostKeyVerification.host}:{hostKeyVerification.port}</strong> 的身份验证需要确认。
+          <p class="text-sm text-app-text-secondary mb-6 max-w-md">
+          服务器 <strong>{hostKeyVerification.payload.host}:{hostKeyVerification.payload.port}</strong> 的身份验证需要确认。
           <br>
           {hostKeyHint}
           <br>
-          {#if hostKeyVerification.reason}
-            原因: {hostKeyVerification.reason}
+          {#if hostKeyVerification.payload.reason}
+            原因: {hostKeyVerification.payload.reason}
             <br>
           {/if}
-          指纹: <code class="bg-app-bg px-1 py-0.5 rounded text-xs font-mono select-all mt-2 inline-block">{hostKeyVerification.fingerprint}</code>
+          指纹: <code class="bg-app-bg px-1 py-0.5 rounded text-xs font-mono select-all mt-2 inline-block">{hostKeyVerification.payload.fingerprint}</code>
         </p>
         <div class="flex items-center gap-3">
           <button

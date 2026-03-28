@@ -1,30 +1,43 @@
+#[path = "ssh_impl_auth.rs"]
+mod auth_helpers;
+#[path = "ssh_impl_forwarding.rs"]
+mod forwarding_helpers;
+#[path = "ssh_impl_proxy.rs"]
+mod proxy_helpers;
+
 use super::known_hosts::KnownHostsManager;
 use anyhow::anyhow;
 use async_trait::async_trait;
-use base64::{engine::general_purpose, Engine as _};
-use futures::Future;
 use log::{debug, error, info};
-use russh::client::{Handle, Handler, KeyboardInteractiveAuthResponse, Prompt};
-#[cfg(unix)]
-use russh_keys::agent::client::AgentClient;
-use russh_keys::encoding::Encoding;
-use russh_keys::key::PublicKey;
-use russh_keys::key::SignatureHash;
-use russh_keys::load_secret_key;
-use russh_keys::signature::Signature;
+use russh::client::{Handle, Handler, Prompt};
 use russh_keys::PublicKeyBase64;
 use serde_json::json;
 use std::collections::HashMap;
-use std::fs;
-use std::path::Path;
-use std::pin::Pin;
 use std::sync::Arc;
+#[cfg(test)]
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::lookup_host;
-#[cfg(unix)]
-use tokio::net::UnixStream;
+#[cfg(test)]
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::Mutex;
+use tokio::sync::{watch, Mutex};
+
+#[cfg(unix)]
+use self::auth_helpers::authenticate_agent;
+use self::auth_helpers::{
+    authenticate_keyboard_interactive, load_openssh_public_key, load_private_key,
+    validate_certificate_paths, KeyPairSigner,
+};
+use self::forwarding_helpers::{
+    forward_remote_connection_to_local, local_forward_target_for_port,
+    setup_port_forwarding as setup_port_forwarding_impl,
+};
+use self::proxy_helpers::start_socks5_proxy;
+#[cfg(test)]
+use self::proxy_helpers::{http_proxy_connect, socks5_client_handshake};
+pub use self::proxy_helpers::{
+    start_ephemeral_direct_tcpip_listener, start_ephemeral_http_proxy_dial_listener,
+    start_ephemeral_socks5_proxy_dial_listener,
+};
 
 #[derive(Clone)]
 pub enum AuthType {
@@ -56,6 +69,31 @@ pub trait KeyboardInteractivePrompter: Send + Sync {
 #[derive(Clone)]
 pub struct SshConnection {
     pub handle: Arc<Mutex<Handle<SshHandler>>>,
+    lifecycle: Arc<ConnectionLifecycle>,
+}
+
+struct ConnectionLifecycle {
+    shutdown_tx: watch::Sender<bool>,
+}
+
+impl ConnectionLifecycle {
+    fn new() -> Self {
+        let (shutdown_tx, _shutdown_rx) = watch::channel(false);
+        Self { shutdown_tx }
+    }
+
+    fn subscribe(&self) -> watch::Receiver<bool> {
+        self.shutdown_tx.subscribe()
+    }
+
+    fn shutdown(&self) {
+        let _ = self.shutdown_tx.send(true);
+    }
+
+    #[cfg(test)]
+    fn is_shutdown(&self) -> bool {
+        *self.shutdown_tx.borrow()
+    }
 }
 
 #[derive(Clone)]
@@ -71,109 +109,6 @@ pub struct SshHandler {
     port: u16,
     // Map remote_port -> (local_host, local_port) for remote forwarding
     remote_forward_mappings: HashMap<u16, (String, u16)>,
-}
-
-#[derive(Clone)]
-struct KeyPairSigner {
-    key_pair: Arc<russh_keys::key::KeyPair>,
-}
-
-fn append_signature(
-    data: &mut russh::CryptoVec,
-    signature: &Signature,
-) -> Result<(), anyhow::Error> {
-    let (t, sig) = match signature {
-        Signature::Ed25519(bytes) => (&b"ssh-ed25519"[..], bytes.0.as_slice()),
-        Signature::P256(bytes) => (&b"ecdsa-sha2-nistp256"[..], bytes.as_slice()),
-        Signature::RSA { hash, bytes } => {
-            let t = match hash {
-                SignatureHash::SHA2_256 => &b"rsa-sha2-256"[..],
-                SignatureHash::SHA2_512 => &b"rsa-sha2-512"[..],
-                SignatureHash::SHA1 => &b"ssh-rsa"[..],
-            };
-            (t, bytes.as_slice())
-        }
-    };
-
-    data.push_u32_be((t.len() + sig.len() + 8) as u32);
-    data.extend_ssh_string(t);
-    data.extend_ssh_string(sig);
-    Ok(())
-}
-
-impl russh::Signer for KeyPairSigner {
-    type Error = anyhow::Error;
-    type Future =
-        Pin<Box<dyn Future<Output = (Self, Result<russh::CryptoVec, Self::Error>)> + Send>>;
-
-    fn auth_publickey_sign(self, _key: &PublicKey, mut to_sign: russh::CryptoVec) -> Self::Future {
-        let key_pair = self.key_pair.clone();
-        Box::pin(async move {
-            let signature = match key_pair.sign_detached(&to_sign) {
-                Ok(s) => s,
-                Err(e) => {
-                    return (self, Err(anyhow!("Failed to sign with private key: {}", e)));
-                }
-            };
-            if let Err(e) = append_signature(&mut to_sign, &signature) {
-                return (self, Err(e));
-            }
-            (self, Ok(to_sign))
-        })
-    }
-}
-
-fn load_openssh_public_key(path: &str) -> Result<PublicKey, anyhow::Error> {
-    let content = fs::read_to_string(path)
-        .map_err(|e| anyhow!("Failed to read public key file {}: {}", path, e))?;
-    let line = content
-        .lines()
-        .map(str::trim)
-        .find(|l| !l.is_empty() && !l.starts_with('#'))
-        .ok_or_else(|| anyhow!("Public key file has no key line: {}", path))?;
-
-    let mut parts = line.split_whitespace();
-    let key_type = parts
-        .next()
-        .ok_or_else(|| anyhow!("Invalid public key line (missing type): {}", path))?;
-    if key_type.contains("-cert-v01@openssh.com") {
-        return Err(anyhow!(
-            "OpenSSH certificate public keys are not supported: {}",
-            key_type
-        ));
-    }
-    let key_base64 = parts
-        .next()
-        .ok_or_else(|| anyhow!("Invalid public key line (missing base64): {}", path))?;
-
-    let raw = general_purpose::STANDARD
-        .decode(key_base64)
-        .map_err(|e| anyhow!("Invalid base64 in public key file {}: {}", path, e))?;
-
-    if raw.len() < 4 {
-        return Err(anyhow!("Invalid SSH public key blob (too short): {}", path));
-    }
-    let algo_len = u32::from_be_bytes([raw[0], raw[1], raw[2], raw[3]]) as usize;
-    if raw.len() < 4 + algo_len {
-        return Err(anyhow!(
-            "Invalid SSH public key blob (bad algo length): {}",
-            path
-        ));
-    }
-    let algo = &raw[4..4 + algo_len];
-    let pubkey = &raw[4 + algo_len..];
-
-    let pk = PublicKey::parse(algo, pubkey)
-        .map_err(|e| anyhow!("Failed to parse public key {}: {}", path, e))?;
-    if pk.name() != key_type {
-        debug!(
-            "Public key type mismatch: file says {}, parsed says {}",
-            key_type,
-            pk.name()
-        );
-    }
-
-    Ok(pk)
 }
 
 #[async_trait]
@@ -257,67 +192,11 @@ impl Handler for SshHandler {
             originator_address, originator_port, connected_address, connected_port
         );
 
-        // Check if we have a mapping for this port
         if let Some((local_host, local_port)) =
-            self.remote_forward_mappings.get(&(connected_port as u16))
+            local_forward_target_for_port(&self.remote_forward_mappings, connected_port)
         {
-            let local_host = local_host.clone();
-            let local_port = *local_port;
-
-            info!(
-                "Forwarding remote connection on port {} to local {}:{}",
-                connected_port, local_host, local_port
-            );
-
-            // Connect to local target
-            match TcpStream::connect(format!("{}:{}", local_host, local_port)).await {
-                Ok(mut socket) => {
-                    let mut channel = channel;
-                    // Spawn proxy task
-                    tokio::spawn(async move {
-                        let mut buf = vec![0u8; 8192];
-                        loop {
-                            tokio::select! {
-                                // Read from channel (remote) -> Write to socket (local)
-                                msg = channel.wait() => {
-                                    match msg {
-                                        Some(russh::ChannelMsg::Data { data }) => {
-                                            if let Err(e) = socket.write_all(&data).await {
-                                                debug!("Failed to write to local socket: {:?}", e);
-                                                break;
-                                            }
-                                        }
-                                        Some(russh::ChannelMsg::Eof) | None => {
-                                            break;
-                                        }
-                                        _ => {} // Ignore other messages
-                                    }
-                                }
-                                // Read from socket (local) -> Write to channel (remote)
-                                n = socket.read(&mut buf) => {
-                                    match n {
-                                        Ok(n) if n > 0 => {
-                                            if let Err(e) = channel.data(&buf[..n]).await {
-                                                debug!("Failed to write to remote channel: {:?}", e);
-                                                break;
-                                            }
-                                        }
-                                        _ => break, // EOF or Error
-                                    }
-                                }
-                            }
-                        }
-                        channel.close().await.ok();
-                    });
-                }
-                Err(e) => {
-                    error!(
-                        "Failed to connect to local target {}:{}: {}",
-                        local_host, local_port, e
-                    );
-                    channel.close().await.ok();
-                }
-            }
+            forward_remote_connection_to_local(channel, connected_port, local_host, local_port)
+                .await;
         } else {
             error!(
                 "No forwarding mapping found for remote port {}",
@@ -373,144 +252,20 @@ impl SshConnection {
         local_forwards: &Vec<super::LocalForward>,
         remote_forwards: &Vec<super::RemoteForward>,
     ) -> Result<(), anyhow::Error> {
-        // Clone the Arc containing the Handle for local forwarding tasks
-        let handle_arc = self.handle.clone();
+        setup_port_forwarding_impl(self, local_forwards, remote_forwards).await
+    }
 
-        // Setup local forwards (client -> server -> remote)
-        for forward in local_forwards {
-            let local_host = forward.local_host.clone();
-            let local_port = forward.local_port;
-            let remote_host = forward.remote_host.clone();
-            let remote_port = forward.remote_port;
-            let handle_arc = handle_arc.clone();
+    pub fn subscribe_shutdown(&self) -> watch::Receiver<bool> {
+        self.lifecycle.subscribe()
+    }
 
-            info!(
-                "Setting up local port forwarding: {}:{} -> {}:{}",
-                local_host, local_port, remote_host, remote_port
-            );
+    pub fn shutdown_background_tasks(&self) {
+        self.lifecycle.shutdown();
+    }
 
-            tokio::spawn(async move {
-                let listener =
-                    match TcpListener::bind(format!("{}:{}", local_host, local_port)).await {
-                        Ok(l) => l,
-                        Err(e) => {
-                            error!("Failed to bind local port {}: {}", local_port, e);
-                            return;
-                        }
-                    };
-
-                info!(
-                    "Listening on {}:{} for forwarding to {}:{}",
-                    local_host, local_port, remote_host, remote_port
-                );
-
-                loop {
-                    match listener.accept().await {
-                        Ok((mut socket, addr)) => {
-                            debug!("Accepted connection from {:?} for forwarding", addr);
-                            let handle_arc = handle_arc.clone();
-                            let remote_host = remote_host.clone();
-                            let remote_port = remote_port;
-
-                            tokio::spawn(async move {
-                                // Lock the mutex to get access to the Handle
-                                let channel_result = {
-                                    let guard = handle_arc.lock().await;
-                                    guard
-                                        .channel_open_direct_tcpip(
-                                            &remote_host,
-                                            remote_port as u32,
-                                            "127.0.0.1",
-                                            0,
-                                        )
-                                        .await
-                                };
-
-                                match channel_result {
-                                    Ok(mut channel) => {
-                                        // Use manual proxy loop instead of copy_bidirectional
-                                        let mut buf = vec![0u8; 8192];
-                                        loop {
-                                            tokio::select! {
-                                                // Read from channel (remote) -> Write to socket (local)
-                                                msg = channel.wait() => {
-                                                    match msg {
-                                                        Some(russh::ChannelMsg::Data { data }) => {
-                                                            if let Err(e) = socket.write_all(&data).await {
-                                                                debug!("Failed to write to local socket: {:?}", e);
-                                                                break;
-                                                            }
-                                                        }
-                                                        Some(russh::ChannelMsg::Eof) | None => {
-                                                            break;
-                                                        }
-                                                        _ => {} // Ignore other messages
-                                                    }
-                                                }
-                                                // Read from socket (local) -> Write to channel (remote)
-                                                n = socket.read(&mut buf) => {
-                                                    match n {
-                                                        Ok(n) if n > 0 => {
-                                                            if let Err(e) = channel.data(&buf[..n]).await {
-                                                                debug!("Failed to write to remote channel: {:?}", e);
-                                                                break;
-                                                            }
-                                                        }
-                                                        _ => break, // EOF or Error
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        error!("Failed to open direct-tcpip channel: {:?}", e);
-                                    }
-                                }
-                            });
-                        }
-                        Err(e) => {
-                            error!(
-                                "Failed to accept connection on {}:{}: {}",
-                                local_host, local_port, e
-                            );
-                            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                        }
-                    }
-                }
-            });
-        }
-
-        // Setup remote forwards (remote -> server -> client)
-        // Lock the mutex to get access to the Handle for remote forwarding
-        {
-            let mut handle = self.handle.lock().await;
-
-            for forward in remote_forwards {
-                info!(
-                    "Requesting remote port forwarding: {}:{} -> {}:{}",
-                    forward.remote_host,
-                    forward.remote_port,
-                    forward.local_host,
-                    forward.local_port
-                );
-                match handle
-                    .tcpip_forward(&forward.remote_host, forward.remote_port as u32)
-                    .await
-                {
-                    Ok(true) => info!(
-                        "Remote port forwarding request accepted for port {}",
-                        forward.remote_port
-                    ),
-                    Ok(false) => error!(
-                        "Remote port forwarding request rejected for port {}",
-                        forward.remote_port
-                    ),
-                    Err(e) => error!("Failed to request remote port forwarding: {:?}", e),
-                }
-            }
-        }
-
-        Ok(())
+    #[cfg(test)]
+    pub fn is_shutdown_for_test(&self) -> bool {
+        self.lifecycle.is_shutdown()
     }
 }
 
@@ -652,10 +407,7 @@ pub async fn connect_ssh_with_known_host(
             }
         }
         AuthType::PrivateKey(key_path, passphrase) => {
-            let key_pair = match load_secret_key(key_path, passphrase.as_deref()) {
-                Ok(k) => k,
-                Err(e) => return Err(anyhow!("Failed to load private key: {:?}", e)),
-            };
+            let key_pair = load_private_key(&key_path, passphrase.as_deref())?;
             handle
                 .authenticate_publickey(username, Arc::new(key_pair))
                 .await
@@ -676,45 +428,10 @@ pub async fn connect_ssh_with_known_host(
             }
         }
         AuthType::Certificate(cert_path, key_path, passphrase) => {
-            let cert_path_obj = Path::new(&cert_path);
-            if !cert_path_obj.exists() {
-                return Err(anyhow!(
-                    "Certificate file not found: {}",
-                    cert_path_obj.display()
-                ));
-            }
-            let cert_meta = fs::metadata(cert_path_obj)
-                .map_err(|e| anyhow!("Failed to read certificate metadata: {}", e))?;
-            if cert_meta.len() == 0 {
-                return Err(anyhow!(
-                    "Certificate file is empty: {}",
-                    cert_path_obj.display()
-                ));
-            }
-
-            let key_path_obj = Path::new(&key_path);
-            if !key_path_obj.exists() {
-                return Err(anyhow!(
-                    "Private key file not found: {}",
-                    key_path_obj.display()
-                ));
-            }
-            let key_meta = fs::metadata(key_path_obj)
-                .map_err(|e| anyhow!("Failed to read private key metadata: {}", e))?;
-            if key_meta.len() == 0 {
-                return Err(anyhow!(
-                    "Private key file is empty: {}",
-                    key_path_obj.display()
-                ));
-            }
-
+            validate_certificate_paths(&cert_path, &key_path)?;
             let cert_public_key = load_openssh_public_key(&cert_path)?;
 
-            // Load the private key
-            let key_pair = match load_secret_key(&key_path, passphrase.as_deref()) {
-                Ok(k) => k,
-                Err(e) => return Err(anyhow!("Failed to load private key: {:?}", e)),
-            };
+            let key_pair = load_private_key(&key_path, passphrase.as_deref())?;
             let signer = KeyPairSigner {
                 key_pair: Arc::new(key_pair),
             };
@@ -778,6 +495,7 @@ pub async fn connect_ssh_with_known_host(
     // Create connection object
     let connection = SshConnection {
         handle: Arc::new(Mutex::new(handle)),
+        lifecycle: Arc::new(ConnectionLifecycle::new()),
     };
 
     // Setup port forwarding if configured
@@ -795,603 +513,15 @@ pub async fn connect_ssh_with_known_host(
     // Start SOCKS5 proxy if configured
     if let Some(port) = socks_proxy_port {
         info!("Starting SOCKS5 proxy on port {}...", port);
-        start_socks5_proxy(connection.handle.clone(), port).await?;
+        start_socks5_proxy(
+            connection.handle.clone(),
+            port,
+            connection.subscribe_shutdown(),
+        )
+        .await?;
     }
 
     Ok(connection)
-}
-
-async fn authenticate_keyboard_interactive(
-    handle: &mut Handle<SshHandler>,
-    host: &str,
-    port: u16,
-    username: &str,
-    prompter: Arc<dyn KeyboardInteractivePrompter>,
-) -> Result<bool, anyhow::Error> {
-    let mut response = handle
-        .authenticate_keyboard_interactive_start(username, None::<String>)
-        .await
-        .map_err(anyhow::Error::from)?;
-
-    loop {
-        match response {
-            KeyboardInteractiveAuthResponse::Success => return Ok(true),
-            KeyboardInteractiveAuthResponse::Failure => return Ok(false),
-            KeyboardInteractiveAuthResponse::InfoRequest {
-                name,
-                instructions,
-                prompts,
-            } => {
-                let replies = prompter
-                    .prompt(KeyboardInteractivePromptRequest {
-                        host: host.to_string(),
-                        port,
-                        username: username.to_string(),
-                        name,
-                        instructions,
-                        prompts,
-                    })
-                    .await?;
-                response = handle
-                    .authenticate_keyboard_interactive_respond(replies)
-                    .await
-                    .map_err(anyhow::Error::from)?;
-            }
-        }
-    }
-}
-
-pub async fn start_ephemeral_direct_tcpip_listener(
-    handle: Arc<Mutex<Handle<SshHandler>>>,
-    remote_host: String,
-    remote_port: u16,
-) -> Result<u16, anyhow::Error> {
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
-    let local_port = listener.local_addr()?.port();
-
-    info!(
-        "Listening on 127.0.0.1:{} for forwarding to {}:{}",
-        local_port, remote_host, remote_port
-    );
-
-    tokio::spawn(async move {
-        loop {
-            match listener.accept().await {
-                Ok((mut socket, addr)) => {
-                    debug!("Accepted connection from {:?} for jump forwarding", addr);
-                    let handle = handle.clone();
-                    let remote_host = remote_host.clone();
-
-                    tokio::spawn(async move {
-                        let channel_result = {
-                            let guard = handle.lock().await;
-                            guard
-                                .channel_open_direct_tcpip(
-                                    &remote_host,
-                                    remote_port as u32,
-                                    "127.0.0.1",
-                                    0,
-                                )
-                                .await
-                        };
-
-                        match channel_result {
-                            Ok(mut channel) => {
-                                let mut buf = vec![0u8; 8192];
-                                loop {
-                                    tokio::select! {
-                                        msg = channel.wait() => {
-                                            match msg {
-                                                Some(russh::ChannelMsg::Data { data }) => {
-                                                    if socket.write_all(&data).await.is_err() {
-                                                        break;
-                                                    }
-                                                }
-                                                Some(russh::ChannelMsg::Eof) | None => {
-                                                    break;
-                                                }
-                                                _ => {}
-                                            }
-                                        }
-                                        n = socket.read(&mut buf) => {
-                                            match n {
-                                                Ok(n) if n > 0 => {
-                                                    if channel.data(&buf[..n]).await.is_err() {
-                                                        break;
-                                                    }
-                                                }
-                                                _ => break,
-                                            }
-                                        }
-                                    }
-                                }
-
-                                channel.close().await.ok();
-                            }
-                            Err(e) => {
-                                debug!("Failed to open direct-tcpip channel: {:?}", e);
-                            }
-                        }
-                    });
-                }
-                Err(e) => {
-                    debug!("Failed to accept jump forwarding connection: {:?}", e);
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                }
-            }
-        }
-    });
-
-    Ok(local_port)
-}
-
-pub async fn start_ephemeral_socks5_proxy_dial_listener(
-    proxy_host: String,
-    proxy_port: u16,
-    proxy_username: Option<String>,
-    proxy_password: Option<String>,
-    remote_host: String,
-    remote_port: u16,
-) -> Result<u16, anyhow::Error> {
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
-    let local_port = listener.local_addr()?.port();
-
-    info!(
-        "Listening on 127.0.0.1:{} for proxying to {}:{} via SOCKS5 {}:{}",
-        local_port, remote_host, remote_port, proxy_host, proxy_port
-    );
-
-    tokio::spawn(async move {
-        let accept = listener.accept().await;
-        let Ok((mut local, _addr)) = accept else {
-            return;
-        };
-
-        let proxy_stream = TcpStream::connect(format!("{}:{}", proxy_host, proxy_port)).await;
-        let Ok(mut proxy_stream) = proxy_stream else {
-            local.shutdown().await.ok();
-            return;
-        };
-
-        if socks5_client_handshake(
-            &mut proxy_stream,
-            proxy_username.as_deref(),
-            proxy_password.as_deref(),
-            &remote_host,
-            remote_port,
-        )
-        .await
-        .is_err()
-        {
-            local.shutdown().await.ok();
-            proxy_stream.shutdown().await.ok();
-            return;
-        }
-
-        let mut local_buf = vec![0u8; 8192];
-        let mut proxy_buf = vec![0u8; 8192];
-        loop {
-            tokio::select! {
-                n = local.read(&mut local_buf) => {
-                    match n {
-                        Ok(n) if n > 0 => {
-                            if proxy_stream.write_all(&local_buf[..n]).await.is_err() {
-                                break;
-                            }
-                        }
-                        _ => break,
-                    }
-                }
-                n = proxy_stream.read(&mut proxy_buf) => {
-                    match n {
-                        Ok(n) if n > 0 => {
-                            if local.write_all(&proxy_buf[..n]).await.is_err() {
-                                break;
-                            }
-                        }
-                        _ => break,
-                    }
-                }
-            }
-        }
-
-        local.shutdown().await.ok();
-        proxy_stream.shutdown().await.ok();
-    });
-
-    Ok(local_port)
-}
-
-pub async fn start_ephemeral_http_proxy_dial_listener(
-    proxy_host: String,
-    proxy_port: u16,
-    proxy_username: Option<String>,
-    proxy_password: Option<String>,
-    remote_host: String,
-    remote_port: u16,
-) -> Result<u16, anyhow::Error> {
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
-    let local_port = listener.local_addr()?.port();
-
-    info!(
-        "Listening on 127.0.0.1:{} for proxying to {}:{} via HTTP {}:{}",
-        local_port, remote_host, remote_port, proxy_host, proxy_port
-    );
-
-    tokio::spawn(async move {
-        let accept = listener.accept().await;
-        let Ok((mut local, _addr)) = accept else {
-            return;
-        };
-
-        let proxy_stream = TcpStream::connect(format!("{}:{}", proxy_host, proxy_port)).await;
-        let Ok(mut proxy_stream) = proxy_stream else {
-            local.shutdown().await.ok();
-            return;
-        };
-
-        if http_proxy_connect(
-            &mut proxy_stream,
-            proxy_username.as_deref(),
-            proxy_password.as_deref(),
-            &remote_host,
-            remote_port,
-        )
-        .await
-        .is_err()
-        {
-            local.shutdown().await.ok();
-            proxy_stream.shutdown().await.ok();
-            return;
-        }
-
-        let mut local_buf = vec![0u8; 8192];
-        let mut proxy_buf = vec![0u8; 8192];
-        loop {
-            tokio::select! {
-                n = local.read(&mut local_buf) => {
-                    match n {
-                        Ok(n) if n > 0 => {
-                            if proxy_stream.write_all(&local_buf[..n]).await.is_err() {
-                                break;
-                            }
-                        }
-                        _ => break,
-                    }
-                }
-                n = proxy_stream.read(&mut proxy_buf) => {
-                    match n {
-                        Ok(n) if n > 0 => {
-                            if local.write_all(&proxy_buf[..n]).await.is_err() {
-                                break;
-                            }
-                        }
-                        _ => break,
-                    }
-                }
-            }
-        }
-
-        local.shutdown().await.ok();
-        proxy_stream.shutdown().await.ok();
-    });
-
-    Ok(local_port)
-}
-
-async fn start_socks5_proxy(
-    handle: Arc<Mutex<Handle<SshHandler>>>,
-    port: u16,
-) -> Result<(), anyhow::Error> {
-    let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).await?;
-
-    tokio::spawn(async move {
-        loop {
-            match listener.accept().await {
-                Ok((stream, addr)) => {
-                    debug!("SOCKS5 client connected from {:?}", addr);
-                    let handle = handle.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = handle_socks5_client(handle, stream).await {
-                            debug!("SOCKS5 client handling error: {:?}", e);
-                        }
-                    });
-                }
-                Err(e) => {
-                    debug!("SOCKS5 accept error: {:?}", e);
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                }
-            }
-        }
-    });
-
-    Ok(())
-}
-
-#[cfg(unix)]
-async fn authenticate_agent(
-    handle: &mut Handle<SshHandler>,
-    username: &str,
-    agent_path: Option<String>,
-) -> Result<bool, anyhow::Error> {
-    let sock = match agent_path {
-        Some(p) => p,
-        None => std::env::var("SSH_AUTH_SOCK").map_err(|_| anyhow!("SSH_AUTH_SOCK not set"))?,
-    };
-    let stream = UnixStream::connect(sock).await?;
-    let mut client = AgentClient::connect(stream);
-    let keys = client.request_identities().await?;
-    let public_key = keys
-        .into_iter()
-        .next()
-        .ok_or(anyhow!("No identities in SSH agent"))?;
-    let (_, res) = handle
-        .authenticate_future(username, public_key, client)
-        .await;
-    res.map_err(anyhow::Error::from)
-}
-
-async fn handle_socks5_client(
-    handle: Arc<Mutex<Handle<SshHandler>>>,
-    mut stream: TcpStream,
-) -> Result<(), anyhow::Error> {
-    let mut header = [0u8; 2];
-    stream.read_exact(&mut header).await?;
-    if header[0] != 0x05 {
-        return Err(anyhow!("Unsupported SOCKS version: {}", header[0]));
-    }
-
-    let nmethods = header[1] as usize;
-    let mut methods = vec![0u8; nmethods];
-    stream.read_exact(&mut methods).await?;
-    if !methods.contains(&0x00) {
-        stream.write_all(&[0x05, 0xff]).await.ok();
-        return Ok(());
-    }
-    stream.write_all(&[0x05, 0x00]).await?;
-
-    let mut req_hdr = [0u8; 4];
-    stream.read_exact(&mut req_hdr).await?;
-    if req_hdr[0] != 0x05 {
-        return Err(anyhow!("Invalid request version: {}", req_hdr[0]));
-    }
-    if req_hdr[1] != 0x01 {
-        stream
-            .write_all(&[0x05, 0x07, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
-            .await
-            .ok();
-        return Ok(());
-    }
-
-    let atyp = req_hdr[3];
-    let dest_host = match atyp {
-        0x01 => {
-            let mut ip = [0u8; 4];
-            stream.read_exact(&mut ip).await?;
-            std::net::Ipv4Addr::from(ip).to_string()
-        }
-        0x03 => {
-            let mut len = [0u8; 1];
-            stream.read_exact(&mut len).await?;
-            let mut name = vec![0u8; len[0] as usize];
-            stream.read_exact(&mut name).await?;
-            String::from_utf8(name)?
-        }
-        0x04 => {
-            let mut ip = [0u8; 16];
-            stream.read_exact(&mut ip).await?;
-            std::net::Ipv6Addr::from(ip).to_string()
-        }
-        _ => {
-            stream
-                .write_all(&[0x05, 0x08, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
-                .await
-                .ok();
-            return Ok(());
-        }
-    };
-
-    let mut port_buf = [0u8; 2];
-    stream.read_exact(&mut port_buf).await?;
-    let dest_port = u16::from_be_bytes(port_buf);
-
-    let channel_result = {
-        let guard = handle.lock().await;
-        guard
-            .channel_open_direct_tcpip(&dest_host, dest_port as u32, "127.0.0.1", 0)
-            .await
-    };
-
-    let mut channel = match channel_result {
-        Ok(ch) => ch,
-        Err(_) => {
-            stream
-                .write_all(&[0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
-                .await
-                .ok();
-            return Ok(());
-        }
-    };
-
-    stream
-        .write_all(&[0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
-        .await?;
-
-    let mut buf = vec![0u8; 8192];
-    loop {
-        tokio::select! {
-            msg = channel.wait() => {
-                match msg {
-                    Some(russh::ChannelMsg::Data { data }) => {
-                        if stream.write_all(&data).await.is_err() {
-                            break;
-                        }
-                    }
-                    Some(russh::ChannelMsg::Eof) | None => {
-                        break;
-                    }
-                    _ => {}
-                }
-            }
-            n = stream.read(&mut buf) => {
-                match n {
-                    Ok(n) if n > 0 => {
-                        if channel.data(&buf[..n]).await.is_err() {
-                            break;
-                        }
-                    }
-                    _ => break,
-                }
-            }
-        }
-    }
-
-    channel.close().await.ok();
-    Ok(())
-}
-
-async fn socks5_client_handshake(
-    stream: &mut TcpStream,
-    username: Option<&str>,
-    password: Option<&str>,
-    dest_host: &str,
-    dest_port: u16,
-) -> Result<(), anyhow::Error> {
-    let mut methods = vec![0x00u8];
-    if username.is_some() || password.is_some() {
-        methods.push(0x02);
-    }
-
-    let mut req = Vec::with_capacity(2 + methods.len());
-    req.push(0x05);
-    req.push(methods.len() as u8);
-    req.extend_from_slice(&methods);
-    stream.write_all(&req).await?;
-
-    let mut resp = [0u8; 2];
-    stream.read_exact(&mut resp).await?;
-    if resp[0] != 0x05 {
-        return Err(anyhow!("Invalid SOCKS5 response version: {}", resp[0]));
-    }
-
-    match resp[1] {
-        0x00 => {}
-        0x02 => {
-            let u = username.unwrap_or("");
-            let p = password.unwrap_or("");
-            if u.len() > 255 || p.len() > 255 {
-                return Err(anyhow!("SOCKS5 username/password too long"));
-            }
-
-            let mut auth = Vec::with_capacity(3 + u.len() + p.len());
-            auth.push(0x01);
-            auth.push(u.len() as u8);
-            auth.extend_from_slice(u.as_bytes());
-            auth.push(p.len() as u8);
-            auth.extend_from_slice(p.as_bytes());
-            stream.write_all(&auth).await?;
-
-            let mut auth_resp = [0u8; 2];
-            stream.read_exact(&mut auth_resp).await?;
-            if auth_resp[0] != 0x01 || auth_resp[1] != 0x00 {
-                return Err(anyhow!("SOCKS5 auth failed"));
-            }
-        }
-        0xff => return Err(anyhow!("SOCKS5 proxy requires unsupported auth")),
-        v => return Err(anyhow!("Unsupported SOCKS5 auth method: {}", v)),
-    }
-
-    let host_bytes = dest_host.as_bytes();
-    let mut conn = vec![0x05, 0x01, 0x00, 0x03, host_bytes.len() as u8];
-    conn.extend_from_slice(host_bytes);
-    conn.extend_from_slice(&dest_port.to_be_bytes());
-    stream.write_all(&conn).await?;
-
-    let mut head = [0u8; 4];
-    stream.read_exact(&mut head).await?;
-    if head[0] != 0x05 {
-        return Err(anyhow!(
-            "Invalid SOCKS5 connect response version: {}",
-            head[0]
-        ));
-    }
-    if head[1] != 0x00 {
-        return Err(anyhow!("SOCKS5 connect failed, rep={}", head[1]));
-    }
-
-    match head[3] {
-        0x01 => {
-            let mut addr = [0u8; 4];
-            stream.read_exact(&mut addr).await?;
-        }
-        0x03 => {
-            let mut len = [0u8; 1];
-            stream.read_exact(&mut len).await?;
-            let mut addr = vec![0u8; len[0] as usize];
-            stream.read_exact(&mut addr).await?;
-        }
-        0x04 => {
-            let mut addr = [0u8; 16];
-            stream.read_exact(&mut addr).await?;
-        }
-        v => return Err(anyhow!("Invalid SOCKS5 atyp: {}", v)),
-    }
-    let mut bnd_port = [0u8; 2];
-    stream.read_exact(&mut bnd_port).await?;
-
-    Ok(())
-}
-
-async fn http_proxy_connect(
-    stream: &mut TcpStream,
-    username: Option<&str>,
-    password: Option<&str>,
-    dest_host: &str,
-    dest_port: u16,
-) -> Result<(), anyhow::Error> {
-    let authority = format!("{}:{}", dest_host, dest_port);
-    let mut req = format!(
-        "CONNECT {} HTTP/1.1\r\nHost: {}\r\nProxy-Connection: Keep-Alive\r\n",
-        authority, authority
-    );
-
-    if let (Some(u), Some(p)) = (username, password) {
-        let token = general_purpose::STANDARD.encode(format!("{}:{}", u, p));
-        req.push_str(&format!("Proxy-Authorization: Basic {}\r\n", token));
-    }
-
-    req.push_str("\r\n");
-    stream.write_all(req.as_bytes()).await?;
-
-    let mut buf = Vec::with_capacity(1024);
-    let mut tmp = [0u8; 256];
-    loop {
-        let n = stream.read(&mut tmp).await?;
-        if n == 0 {
-            return Err(anyhow!("HTTP proxy closed connection"));
-        }
-        buf.extend_from_slice(&tmp[..n]);
-        if buf.windows(4).any(|w| w == b"\r\n\r\n") {
-            break;
-        }
-        if buf.len() > 16 * 1024 {
-            return Err(anyhow!("HTTP proxy response too large"));
-        }
-    }
-
-    let header = String::from_utf8_lossy(&buf);
-    let first_line = header.lines().next().unwrap_or_default();
-    if !first_line.starts_with("HTTP/") {
-        return Err(anyhow!("Invalid HTTP proxy response"));
-    }
-    let mut parts = first_line.split_whitespace();
-    let _http = parts.next().unwrap_or_default();
-    let code = parts.next().unwrap_or_default();
-    if code != "200" {
-        return Err(anyhow!("HTTP proxy CONNECT failed: {}", first_line));
-    }
-
-    Ok(())
 }
 
 #[cfg(test)]

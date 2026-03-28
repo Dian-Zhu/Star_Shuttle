@@ -3,7 +3,6 @@ import { onDestroy } from 'svelte';
 import { get } from 'svelte/store';
 import { activeTerminals, type ActiveTerminal, terminalSessionMap, closeSplitRequest } from '../lib/store';
 import { createTerminalSession, closeSplitSession, disconnectTerminal } from '../lib/terminalService';
-import { terminalPool } from '../lib/terminalPool';
 import type { LayoutNode, TerminalPaneNode, SplitNode } from '../lib/layout';
 import { generateId, findNode, replaceNode, removeNode, findNodeBySessionId } from '../lib/layout';
 import type { TerminalProxy } from '../lib/terminalProxy';
@@ -90,30 +89,6 @@ import SplitPane from './terminal/SplitPane.svelte';
 
   onDestroy(() => {
     destroyed = true;
-    if (terminalData && layoutRoot) {
-      // Clean up all non-root sessions
-      const cleanupNode = (node: LayoutNode) => {
-        if (node.type === 'pane' && !node.isRoot) {
-          // 关闭分屏会话
-          closeSplitSession(node.sessionId);
-          // 从池中销毁实例
-          terminalPool.destroyInstance(node.sessionId);
-        } else if (node.type === 'split') {
-          cleanupNode(node.children[0]);
-          cleanupNode(node.children[1]);
-        }
-      };
-      cleanupNode(layoutRoot);
-      
-      // Cleanup root session instance from pool
-      terminalPool.destroyInstance(terminalData.sessionId);
-      
-      // Remove from session map
-      terminalSessionMap.update(map => {
-        map.delete(terminalData.sessionId);
-        return map;
-      });
-    }
   });
 
   async function handleSplit(e: CustomEvent) {
@@ -206,7 +181,7 @@ import SplitPane from './terminal/SplitPane.svelte';
     }
   }
 
-  function handleClosePane(e: CustomEvent) {
+  async function handleClosePane(e: CustomEvent) {
     const { targetId } = e.detail;
     if (!layoutRoot) return;
     
@@ -220,9 +195,12 @@ import SplitPane from './terminal/SplitPane.svelte';
 
     if (targetNode && targetNode.type === 'pane' && !targetNode.isRoot) {
          // 关闭分屏会话
-         closeSplitSession(targetNode.sessionId);
-         // 从池中销毁实例
-         terminalPool.destroyInstance(targetNode.sessionId);
+        try {
+          await closeSplitSession(targetNode.sessionId);
+        } catch (error) {
+          console.warn('Failed to close split session', error);
+          return;
+        }
          // Remove from activeTerminals
          activeTerminals.update(terms => terms.filter(t => t.sessionId !== targetNode.sessionId));
     }

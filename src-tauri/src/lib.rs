@@ -1,41 +1,15 @@
+#[cfg(test)]
+use crate::modules::app_runtime::parse_host_key_error_payload;
+pub(crate) use crate::modules::app_runtime::{
+    enrich_host_key_error_with_challenge, ensure_app_unlocked_runtime, AppLockRuntimeState,
+    HostKeyChallengeRuntimeState,
+};
 use crate::modules::connection::{ConnectionConfig, ConnectionProtocol, DefaultConnectionManager};
 use crate::modules::db::DatabaseManager;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 use tauri::{AppHandle, Manager, State};
 use uuid::Uuid;
-
-#[derive(Debug, Default)]
-pub struct AppLockRuntimeState {
-    pub unlocked: bool,
-}
-
-pub(crate) const APP_LOCKED_ERROR: &str = "App is locked. Please unlock first.";
-
-pub(crate) fn ensure_app_unlocked_runtime(
-    db: &Arc<Mutex<DatabaseManager>>,
-    app_lock_state: &Arc<Mutex<AppLockRuntimeState>>,
-) -> Result<(), String> {
-    let lock_enabled = {
-        let db = db.lock().map_err(|e| e.to_string())?;
-        db.get_setting("app_lock_hash")
-            .map_err(|e| e.to_string())?
-            .is_some()
-    };
-
-    if !lock_enabled {
-        let mut state = app_lock_state.lock().map_err(|e| e.to_string())?;
-        state.unlocked = true;
-        return Ok(());
-    }
-
-    let state = app_lock_state.lock().map_err(|e| e.to_string())?;
-    if state.unlocked {
-        Ok(())
-    } else {
-        Err(APP_LOCKED_ERROR.to_string())
-    }
-}
 
 // Create a separate module for commands to avoid macro name conflicts
 pub(crate) mod commands {
@@ -48,6 +22,20 @@ pub(crate) mod commands {
     use std::thread;
     use std::time::Duration;
     use tauri::command;
+    use tauri_plugin_dialog::DialogExt;
+
+    #[derive(Debug, Clone, serde::Deserialize)]
+    pub struct LocalFsDialogFilter {
+        pub name: String,
+        pub extensions: Vec<String>,
+    }
+
+    #[derive(Debug, Clone, serde::Serialize)]
+    pub struct LocalFsDialogGrant {
+        pub path: String,
+        pub access_token: String,
+        pub size: u64,
+    }
 
     fn set_unlock_state(
         app_lock_state: &State<Arc<Mutex<AppLockRuntimeState>>>,
@@ -77,6 +65,98 @@ pub(crate) mod commands {
             thread::sleep(Duration::from_secs(120));
             let _ = std::fs::remove_file(path);
         });
+    }
+
+    fn apply_dialog_filters<R: tauri::Runtime>(
+        mut dialog: tauri_plugin_dialog::FileDialogBuilder<R>,
+        filters: Vec<LocalFsDialogFilter>,
+    ) -> tauri_plugin_dialog::FileDialogBuilder<R> {
+        for filter in filters {
+            let name = filter.name.trim();
+            let extensions: Vec<&str> = filter
+                .extensions
+                .iter()
+                .map(|ext| ext.trim())
+                .filter(|ext| !ext.is_empty())
+                .collect();
+            if name.is_empty() || extensions.is_empty() {
+                continue;
+            }
+            dialog = dialog.add_filter(name.to_string(), &extensions);
+        }
+        dialog
+    }
+
+    fn to_grant_response(
+        local_fs_state: &State<'_, crate::modules::local_fs::LocalFsState>,
+        path: PathBuf,
+        mode: &str,
+        size: u64,
+    ) -> Result<LocalFsDialogGrant, String> {
+        let access_token =
+            crate::modules::local_fs::issue_dialog_path_grant(local_fs_state.inner(), &path, mode)?;
+        Ok(LocalFsDialogGrant {
+            path: path.to_string_lossy().to_string(),
+            access_token,
+            size,
+        })
+    }
+
+    #[command]
+    pub fn local_fs_pick_file_for_read(
+        app: AppHandle,
+        db: State<Arc<Mutex<DatabaseManager>>>,
+        app_lock_state: State<Arc<Mutex<AppLockRuntimeState>>>,
+        local_fs_state: State<crate::modules::local_fs::LocalFsState>,
+        filters: Option<Vec<LocalFsDialogFilter>>,
+    ) -> Result<Option<LocalFsDialogGrant>, String> {
+        ensure_app_unlocked(&db, &app_lock_state)?;
+        let dialog = app.dialog().file();
+        let dialog = apply_dialog_filters(dialog, filters.unwrap_or_default());
+        let Some(file_path) = dialog.blocking_pick_file() else {
+            return Ok(None);
+        };
+        let path = file_path.into_path().map_err(|e| e.to_string())?;
+        if !path.is_absolute() {
+            return Err(format!(
+                "Dialog returned a non-absolute path: {}",
+                path.display()
+            ));
+        }
+        let size = std::fs::metadata(&path).map_err(|e| e.to_string())?.len();
+        to_grant_response(&local_fs_state, path, "read", size).map(Some)
+    }
+
+    #[command]
+    pub fn local_fs_pick_file_for_write(
+        app: AppHandle,
+        db: State<Arc<Mutex<DatabaseManager>>>,
+        app_lock_state: State<Arc<Mutex<AppLockRuntimeState>>>,
+        local_fs_state: State<crate::modules::local_fs::LocalFsState>,
+        default_file_name: Option<String>,
+        filters: Option<Vec<LocalFsDialogFilter>>,
+    ) -> Result<Option<LocalFsDialogGrant>, String> {
+        ensure_app_unlocked(&db, &app_lock_state)?;
+        let mut dialog = app.dialog().file();
+        if let Some(name) = default_file_name {
+            let trimmed = name.trim();
+            if !trimmed.is_empty() {
+                dialog = dialog.set_file_name(trimmed.to_string());
+            }
+        }
+        dialog = apply_dialog_filters(dialog, filters.unwrap_or_default());
+        let Some(file_path) = dialog.blocking_save_file() else {
+            return Ok(None);
+        };
+        let path = file_path.into_path().map_err(|e| e.to_string())?;
+        if !path.is_absolute() {
+            return Err(format!(
+                "Dialog returned a non-absolute path: {}",
+                path.display()
+            ));
+        }
+        let size = std::fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
+        to_grant_response(&local_fs_state, path, "write", size).map(Some)
     }
 
     #[command]
@@ -204,6 +284,7 @@ pub(crate) mod commands {
         app: AppHandle,
         db: State<Arc<Mutex<DatabaseManager>>>,
         app_lock_state: State<Arc<Mutex<AppLockRuntimeState>>>,
+        host_key_challenge_state: State<Arc<Mutex<HostKeyChallengeRuntimeState>>>,
         manager: State<Arc<RwLock<DefaultConnectionManager>>>,
         config: ConnectionConfig,
     ) -> Result<Uuid, String> {
@@ -223,7 +304,10 @@ pub(crate) mod commands {
                 if let Ok(mut manager) = manager.write() {
                     manager.finish_connect_failure(session_id);
                 }
-                return Err(error.to_string());
+                return Err(enrich_host_key_error_with_challenge(
+                    error.to_string(),
+                    host_key_challenge_state.inner(),
+                ));
             }
         };
 
@@ -335,6 +419,8 @@ pub(crate) mod commands {
     pub fn known_hosts_save_host_key(
         db: State<Arc<Mutex<DatabaseManager>>>,
         app_lock_state: State<Arc<Mutex<AppLockRuntimeState>>>,
+        host_key_challenge_state: State<Arc<Mutex<HostKeyChallengeRuntimeState>>>,
+        challenge_token: String,
         host: String,
         port: u16,
         key_type: String,
@@ -342,9 +428,21 @@ pub(crate) mod commands {
         replace: Option<bool>,
     ) -> Result<(), String> {
         ensure_app_unlocked(&db, &app_lock_state)?;
+        let replace = replace.unwrap_or(false);
+        {
+            let mut challenge_state = host_key_challenge_state.lock().map_err(|e| e.to_string())?;
+            challenge_state.consume(
+                &challenge_token,
+                &host,
+                port,
+                &key_type,
+                &key_base64,
+                replace,
+            )?;
+        }
         let mut manager = KnownHostsManager::new().map_err(|e| e.to_string())?;
         manager
-            .upsert_host_key_parts(&host, port, key_type, key_base64, replace.unwrap_or(false))
+            .upsert_host_key_parts(&host, port, key_type, key_base64, replace)
             .map_err(|e| e.to_string())?;
         Ok(())
     }
@@ -463,6 +561,7 @@ pub(crate) mod commands {
         app: AppHandle,
         db: State<Arc<Mutex<DatabaseManager>>>,
         app_lock_state: State<Arc<Mutex<AppLockRuntimeState>>>,
+        host_key_challenge_state: State<Arc<Mutex<HostKeyChallengeRuntimeState>>>,
         manager: State<Arc<RwLock<DefaultConnectionManager>>>,
         config: ConnectionConfig,
     ) -> Result<(), String> {
@@ -470,9 +569,9 @@ pub(crate) mod commands {
         let manager = manager
             .read()
             .map_err(|e| format!("Failed to acquire read lock: {}", e))?;
-        manager
-            .test_connection(&app, &config)
-            .map_err(|e| e.to_string())
+        manager.test_connection(&app, &config).map_err(|e| {
+            enrich_host_key_error_with_challenge(e.to_string(), host_key_challenge_state.inner())
+        })
     }
 
     #[command]
@@ -660,67 +759,22 @@ pub(crate) mod commands {
         let db = db.lock().map_err(|e| e.to_string())?;
         db.save_audit_event(&event).map_err(|e| e.to_string())
     }
-
-    #[command]
-    pub fn get_audit_events(
-        db: State<Arc<Mutex<DatabaseManager>>>,
-        app_lock_state: State<Arc<Mutex<AppLockRuntimeState>>>,
-        limit: Option<u32>,
-    ) -> Result<Vec<crate::modules::db::AuditEvent>, String> {
-        ensure_app_unlocked(&db, &app_lock_state)?;
-        let db = db.lock().map_err(|e| e.to_string())?;
-        db.get_audit_events(limit).map_err(|e| e.to_string())
-    }
-
-    #[command]
-    pub fn clear_audit_events(
-        db: State<Arc<Mutex<DatabaseManager>>>,
-        app_lock_state: State<Arc<Mutex<AppLockRuntimeState>>>,
-    ) -> Result<(), String> {
-        ensure_app_unlocked(&db, &app_lock_state)?;
-        let db = db.lock().map_err(|e| e.to_string())?;
-        db.clear_audit_events().map_err(|e| e.to_string())
-    }
-
-    #[command]
-    pub fn get_logs(
-        db: State<Arc<Mutex<DatabaseManager>>>,
-        app_lock_state: State<Arc<Mutex<AppLockRuntimeState>>>,
-    ) -> Result<Vec<String>, String> {
-        ensure_app_unlocked(&db, &app_lock_state)?;
-        Ok(crate::modules::logging::LogManager::get_logs())
-    }
-
-    #[command]
-    pub fn clear_logs(
-        db: State<Arc<Mutex<DatabaseManager>>>,
-        app_lock_state: State<Arc<Mutex<AppLockRuntimeState>>>,
-    ) -> Result<(), String> {
-        ensure_app_unlocked(&db, &app_lock_state)?;
-        crate::modules::logging::LogManager::clear_logs();
-        Ok(())
-    }
-
-    #[command]
-    pub fn get_log_file_path(
-        db: State<Arc<Mutex<DatabaseManager>>>,
-        app_lock_state: State<Arc<Mutex<AppLockRuntimeState>>>,
-    ) -> Result<Option<String>, String> {
-        ensure_app_unlocked(&db, &app_lock_state)?;
-        Ok(crate::modules::logging::LogManager::get_log_file_path())
-    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Initialize our custom structured logger
-    crate::modules::logging::LogManager::init(log::LevelFilter::Info)
-        .expect("Failed to initialize logger");
+    if cfg!(debug_assertions) {
+        crate::modules::logging::LogManager::init(log::LevelFilter::Info)
+            .expect("Failed to initialize logger");
+    } else {
+        log::set_max_level(log::LevelFilter::Off);
+    }
 
     let connection_manager = Arc::new(RwLock::new(DefaultConnectionManager::new()));
     let connection_manager_for_setup = connection_manager.clone();
     let sftp_manager = crate::modules::sftp::SftpManager::new(connection_manager.clone());
     let local_fs_state = crate::modules::local_fs::LocalFsState::default();
+    let host_key_challenge_state = Arc::new(Mutex::new(HostKeyChallengeRuntimeState::default()));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -800,6 +854,7 @@ pub fn run() {
         .manage(connection_manager)
         .manage(sftp_manager)
         .manage(local_fs_state)
+        .manage(host_key_challenge_state)
         .invoke_handler(tauri::generate_handler![
             // Connection management commands
             commands::connect,
@@ -827,6 +882,8 @@ pub fn run() {
             commands::is_app_lock_enabled,
             commands::lock_app,
             commands::remove_app_lock,
+            commands::local_fs_pick_file_for_read,
+            commands::local_fs_pick_file_for_write,
             // Local filesystem commands
             crate::modules::local_fs::local_fs_open_read,
             crate::modules::local_fs::local_fs_stat,
@@ -838,16 +895,16 @@ pub fn run() {
             crate::modules::local_fs::local_fs_read_text,
             crate::modules::local_fs::local_fs_write_text,
             // SFTP commands
-            crate::modules::sftp::sftp_ls,
-            crate::modules::sftp::sftp_read,
-            crate::modules::sftp::sftp_read_chunk,
-            crate::modules::sftp::sftp_write,
-            crate::modules::sftp::sftp_mkdir,
-            crate::modules::sftp::sftp_rm,
-            crate::modules::sftp::sftp_rmdir,
-            crate::modules::sftp::sftp_rename,
-            crate::modules::sftp::scp_upload,
-            crate::modules::sftp::scp_download,
+            crate::modules::sftp::tauri_commands::sftp_ls,
+            crate::modules::sftp::tauri_commands::sftp_read,
+            crate::modules::sftp::tauri_commands::sftp_read_chunk,
+            crate::modules::sftp::tauri_commands::sftp_write,
+            crate::modules::sftp::tauri_commands::sftp_mkdir,
+            crate::modules::sftp::tauri_commands::sftp_rm,
+            crate::modules::sftp::tauri_commands::sftp_rmdir,
+            crate::modules::sftp::tauri_commands::sftp_rename,
+            crate::modules::sftp::tauri_commands::scp_upload,
+            crate::modules::sftp::tauri_commands::scp_download,
             // Command snippet commands
             commands::save_command_snippet,
             commands::get_command_snippets,
@@ -856,11 +913,6 @@ pub fn run() {
             commands::increment_command_snippet_usage,
             // Audit logging commands
             commands::log_audit_event,
-            commands::get_audit_events,
-            commands::clear_audit_events,
-            commands::get_logs,
-            commands::clear_logs,
-            commands::get_log_file_path,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -873,12 +925,86 @@ pub mod utils;
 
 #[cfg(test)]
 mod tests {
-    use super::commands::sanitize_rdp_field;
+    use super::{
+        commands::sanitize_rdp_field, enrich_host_key_error_with_challenge,
+        parse_host_key_error_payload, HostKeyChallengeRuntimeState,
+    };
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn rejects_rdp_fields_with_line_breaks() {
         assert!(sanitize_rdp_field("Host", "rdp-host").is_ok());
         assert!(sanitize_rdp_field("Host", "bad\nhost").is_err());
         assert!(sanitize_rdp_field("Username", "bad\ruser").is_err());
+    }
+
+    #[test]
+    fn host_key_error_enrichment_issues_one_time_token() {
+        let state = Arc::new(Mutex::new(HostKeyChallengeRuntimeState::default()));
+        let raw = "HOST_KEY_UNKNOWN|{\"host\":\"example.com\",\"port\":22,\"fingerprint\":\"fp\",\"key_type\":\"ssh-ed25519\",\"key_base64\":\"AAAA\"}".to_string();
+        let enriched = enrich_host_key_error_with_challenge(raw, &state);
+
+        let (_, payload) = parse_host_key_error_payload(&enriched).expect("payload should parse");
+        let token = payload
+            .challenge_token
+            .clone()
+            .expect("challenge token should exist");
+
+        let mut guard = state.lock().expect("state lock should work");
+        assert!(guard
+            .consume(&token, "example.com", 22, "ssh-ed25519", "AAAA", false)
+            .is_ok());
+        assert!(guard
+            .consume(&token, "example.com", 22, "ssh-ed25519", "AAAA", false)
+            .is_err());
+    }
+
+    #[test]
+    fn host_key_challenge_rejects_payload_tampering() {
+        let state = Arc::new(Mutex::new(HostKeyChallengeRuntimeState::default()));
+        let raw = "HOST_KEY_UNKNOWN|{\"host\":\"example.com\",\"port\":22,\"fingerprint\":\"fp\",\"key_type\":\"ssh-ed25519\",\"key_base64\":\"AAAA\"}".to_string();
+        let enriched = enrich_host_key_error_with_challenge(raw, &state);
+
+        let (_, payload) = parse_host_key_error_payload(&enriched).expect("payload should parse");
+        let token = payload
+            .challenge_token
+            .expect("challenge token should exist");
+
+        let mut guard = state.lock().expect("state lock should work");
+        let result = guard.consume(&token, "example.com", 22, "ssh-ed25519", "BBBB", false);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn host_key_mismatch_challenge_requires_replace_true() {
+        let state = Arc::new(Mutex::new(HostKeyChallengeRuntimeState::default()));
+        let raw = "HOST_KEY_MISMATCH|{\"host\":\"example.com\",\"port\":22,\"fingerprint\":\"fp\",\"key_type\":\"ssh-ed25519\",\"key_base64\":\"AAAA\",\"reason\":\"changed\"}".to_string();
+        let enriched = enrich_host_key_error_with_challenge(raw, &state);
+
+        let (_, payload) = parse_host_key_error_payload(&enriched).expect("payload should parse");
+        let token = payload
+            .challenge_token
+            .expect("challenge token should exist");
+
+        let mut guard = state.lock().expect("state lock should work");
+        let result = guard.consume(&token, "example.com", 22, "ssh-ed25519", "AAAA", false);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn host_key_unavailable_enrichment_parses_and_issues_token() {
+        let state = Arc::new(Mutex::new(HostKeyChallengeRuntimeState::default()));
+        let raw = "HOST_KEY_UNAVAILABLE|{\"host\":\"example.com\",\"port\":22,\"fingerprint\":\"fp\",\"key_type\":\"ssh-ed25519\",\"key_base64\":\"AAAA\"}".to_string();
+        let enriched = enrich_host_key_error_with_challenge(raw, &state);
+
+        let (_, payload) = parse_host_key_error_payload(&enriched).expect("payload should parse");
+        let token = payload
+            .challenge_token
+            .expect("challenge token should exist");
+
+        let mut guard = state.lock().expect("state lock should work");
+        assert!(guard
+            .consume(&token, "example.com", 22, "ssh-ed25519", "AAAA", false)
+            .is_ok());
     }
 }

@@ -5,7 +5,7 @@
   import { SearchAddon } from 'xterm-addon-search';
   import { settings, getXtermTheme, getBaseXtermTheme, type Connection } from '../../lib/store';
   import { terminalPool } from '../../lib/terminalPool';
-  import { TerminalProxy } from '../../lib/terminalProxy';
+  import type { TerminalProxy } from '../../lib/terminalProxy';
   import ContextMenu from '../ui/ContextMenu.svelte';
   import ContextMenuItem from '../ui/ContextMenuItem.svelte';
   import ContextMenuDivider from '../ui/ContextMenuDivider.svelte';
@@ -22,10 +22,6 @@
   export let connection: Connection;
   export let isRoot: boolean = false;
   export let paneIndex: number = 1;
-  // If provided, use existing instance (for root terminal that is already initialized)
-  export let existingTerminal: Terminal | null = null;
-  export let existingFitAddon: FitAddon | null = null;
-  export let existingSearchAddon: SearchAddon | null = null;
   export let onInit: ((proxy: TerminalProxy) => void) | undefined = undefined;
   export let onFocus: (() => void) | undefined = undefined;
   
@@ -48,6 +44,7 @@
   let focusListener: (() => void) | null = null;
   let mouseDownListener: (() => void) | null = null;
   let textareaEl: HTMLTextAreaElement | null = null;
+  let titleChangeDisposable: { dispose: () => void } | null = null;
   let ctrlCArmedUntil = 0;
 
   const CTRL_C_INTERRUPT_WINDOW_MS = 800;
@@ -141,6 +138,12 @@
     });
   }
 
+  function resolvePooledTerminal() {
+    const instance = terminalPool.retrieveInstance(sessionId);
+    if (!instance || instance.disposed) return null;
+    return instance;
+  }
+
   // Initialization
   onMount(async () => {
     isDestroyed = false;
@@ -153,28 +156,16 @@
       }
     });
 
-    if (existingTerminal) {
-      terminal = existingTerminal;
-      fitAddon = existingFitAddon;
-      searchAddon = existingSearchAddon;
-
-      // 将已存在的终端 DOM 元素移动到新容器
-      // 注意：不能调用 terminal.open()，因为 xterm.js 6.0 不允许重复打开
-      if (terminal.element && terminal.element.parentElement !== container) {
-        // 清空容器
-        container.innerHTML = '';
-        // 将终端元素移动到新容器
-        container.appendChild(terminal.element);
-      }
-
-      fitAddon?.fit();
+    const pooled = resolvePooledTerminal();
+    if (pooled) {
+      terminal = pooled.terminal;
+      fitAddon = pooled.fitAddon;
+      searchAddon = pooled.searchAddon;
+      pooled.mount(container);
       attachTerminalKeybindings(terminal);
 
-      if (terminal && fitAddon && searchAddon && onInit) {
-        const instance = terminalPool.getInstance(sessionId);
-        if (instance) {
-          onInit(new TerminalProxy(instance));
-        }
+      if (onInit) {
+        onInit(terminalPool.getProxy(sessionId));
       }
     } else {
       // Initialize new detached terminal
@@ -188,12 +179,7 @@
         searchAddon = result.searchAddon;
         attachTerminalKeybindings(terminal);
 
-        if (onInit) {
-          const instance = terminalPool.getInstance(sessionId);
-          if (instance) {
-            onInit(new TerminalProxy(instance));
-          }
-        }
+        if (onInit) onInit(terminalPool.getProxy(sessionId));
       }
     }
 
@@ -202,7 +188,7 @@
     }
 
     if (terminal) {
-      terminal.onTitleChange(() => {
+      titleChangeDisposable = terminal.onTitleChange(() => {
         // Use title change as a proxy for activity/focus if needed,
         // but better to use onFocus event from xterm textarea
       });
@@ -236,6 +222,14 @@
     if (resizeObserver) {
       resizeObserver.disconnect();
     }
+    if (titleChangeDisposable) {
+      try {
+        titleChangeDisposable.dispose();
+      } catch {
+        // Ignore disposal failures during teardown.
+      }
+      titleChangeDisposable = null;
+    }
     if (textareaEl && focusListener) {
       textareaEl.removeEventListener('focus', focusListener);
     }
@@ -246,6 +240,11 @@
     focusListener = null;
     mouseDownListener = null;
     container?.removeEventListener('paste', handlePaste, true);
+
+    const pooled = resolvePooledTerminal();
+    if (pooled && pooled.container === container) {
+      pooled.unmount();
+    }
     
     // We NO LONGER dispose/disconnect here. 
     // Session cleanup is now managed explicitly by the parent view or closeSplitSession.

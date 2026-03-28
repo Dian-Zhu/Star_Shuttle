@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { get } from 'svelte/store';
-  import { save } from '@tauri-apps/plugin-dialog';
   import { sftpService } from '../../lib/sftpService';
   import { localFsService } from '../../lib/localFsService';
   import { fileClipboard, settings } from '../../lib/store';
@@ -37,6 +36,7 @@
   let editorSessionId: string | null = null;
   const FILE_TRANSFER_CHUNK_SIZE = 1024 * 1024; // 1MB
   const MAX_IN_MEMORY_FALLBACK_BYTES = 8 * 1024 * 1024; // 8MB
+  const pathWriteLocks = new Map<string, Promise<void>>();
 
   function joinPath(base: string, name: string): string {
     if (base === '/' || base === '') return `/${name}`;
@@ -73,9 +73,124 @@
     return stack.length > 0 ? stack.join('/') : '.';
   }
 
+  async function withPathWriteLock<T>(
+    scope: 'remote' | 'local',
+    rawPath: string,
+    task: () => Promise<T>
+  ): Promise<T> {
+    const normalizedPath = scope === 'remote' ? normalizePath(rawPath) : rawPath.replace(/\\/g, '/').trim();
+    const key = `${scope}:${normalizedPath}`;
+
+    // Serialize writes for the same target path to prevent interleaved chunks.
+    for (;;) {
+      const inFlight = pathWriteLocks.get(key);
+      if (!inFlight) break;
+      await inFlight;
+    }
+
+    let releaseLock: () => void = () => {};
+    const lock = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+    pathWriteLocks.set(key, lock);
+
+    try {
+      return await task();
+    } finally {
+      if (pathWriteLocks.get(key) === lock) {
+        pathWriteLocks.delete(key);
+      }
+      releaseLock();
+    }
+  }
+
+  function randomId(): string {
+    // Prefer stable unique IDs when available (Tauri webview supports crypto in modern runtimes).
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID();
+    }
+    return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+
+  async function atomicReplaceRemoteFile(
+    targetSessionId: string,
+    finalPath: string,
+    writeToTemp: (tempPath: string) => Promise<void>
+  ): Promise<void> {
+    const id = randomId();
+    const tempPath = `${finalPath}.starshuttle-tmp-${id}`;
+    const backupPath = `${finalPath}.starshuttle-backup-${id}`;
+    let backedUp = false;
+
+    // Ensure temp doesn't exist (best-effort).
+    try {
+      await sftpService.removeFile(targetSessionId, tempPath);
+    } catch {
+      // Ignore missing temp files from previous interrupted attempts.
+    }
+
+    try {
+      await writeToTemp(tempPath);
+    } catch (e) {
+      // Don't leave partial temp files around.
+      try {
+        await sftpService.removeFile(targetSessionId, tempPath);
+      } catch {
+        // Ignore temp cleanup failures and preserve the original write error.
+      }
+      throw e;
+    }
+
+    // Best-effort: move the existing target aside so we can roll back if rename fails.
+    try {
+      await sftpService.rename(targetSessionId, finalPath, backupPath);
+      backedUp = true;
+    } catch {
+      backedUp = false;
+    }
+
+    try {
+      await sftpService.rename(targetSessionId, tempPath, finalPath);
+    } catch (e) {
+      // Roll back if we successfully backed up the original.
+      if (backedUp) {
+        try {
+          await sftpService.rename(targetSessionId, backupPath, finalPath);
+        } catch {
+          // Ignore rollback failures; the original rename error is more important.
+        }
+      }
+      // Also try to clean up temp if it's still there.
+      try {
+        await sftpService.removeFile(targetSessionId, tempPath);
+      } catch {
+        // Ignore temp cleanup failures and preserve the original rename error.
+      }
+      throw e;
+    }
+
+    // Success: try to delete the backup; if it fails, prefer leaving data around over data loss.
+    if (backedUp) {
+      try {
+        await sftpService.removeFile(targetSessionId, backupPath);
+      } catch {
+        // Leaving a backup file behind is safer than risking data loss.
+      }
+    }
+  }
+
   function parentPath(path: string): string {
     const normalized = normalizePath(path);
     if (normalized === '/' || normalized === '.') return normalized;
+    if (normalized === '~') return '~';
+    // Treat ~/... as home-relative; allow navigating upwards within that namespace.
+    if (normalized.startsWith('~/')) {
+      const rest = normalized.slice(2);
+      const segments = rest.split('/').filter(Boolean);
+      segments.pop();
+      return segments.length > 0 ? `~/${segments.join('/')}` : '~';
+    }
+    // Preserve other ~-prefixed forms (e.g. ~user) as-is.
     if (normalized.startsWith('~')) return normalized;
 
     if (normalized.startsWith('/')) {
@@ -224,39 +339,104 @@
     targetSessionId: string,
     targetPath: string
   ): Promise<void> {
-    let offset = 0;
-    let append = false;
-    while (true) {
-      ensureSessionUnchanged(targetSessionId);
-      const chunk = await sftpService.readChunk(sourceSessionId, sourcePath, offset, FILE_TRANSFER_CHUNK_SIZE);
-      if (chunk.length === 0) break;
-      await sftpService.writeFile(targetSessionId, targetPath, chunk, append);
-      append = true;
-      offset += chunk.length;
+    const normalizedSource = normalizePath(sourcePath);
+    const normalizedTarget = normalizePath(targetPath);
+    if (sourceSessionId === targetSessionId && normalizedSource === normalizedTarget) {
+      throw new Error('不能粘贴到同一路径：源文件与目标文件相同');
     }
+
+    await withPathWriteLock('remote', targetPath, async () => {
+      await atomicReplaceRemoteFile(targetSessionId, targetPath, async (tempPath) => {
+        let offset = 0;
+        let append = false;
+        for (;;) {
+          ensureSessionUnchanged(targetSessionId);
+          const chunk = await sftpService.readChunk(
+            sourceSessionId,
+            sourcePath,
+            offset,
+            FILE_TRANSFER_CHUNK_SIZE
+          );
+          if (chunk.length === 0) {
+            if (!append) {
+              // Source is empty; create empty file.
+              await sftpService.writeFile(targetSessionId, tempPath, new Uint8Array(0), false);
+            }
+            break;
+          }
+          await sftpService.writeFile(targetSessionId, tempPath, chunk, append);
+          append = true;
+          offset += chunk.length;
+        }
+      });
+    });
   }
 
   async function downloadRemoteFileInChunks(
     sourceSessionId: string,
     sourcePath: string,
-    localPath: string
+    localPath: string,
+    accessToken: string
   ): Promise<void> {
-    let handle: any = null;
-    let offset = 0;
-    try {
-      handle = await localFsService.openWriteFile(localPath, true);
-      while (true) {
-        ensureSessionUnchanged(sourceSessionId);
-        const chunk = await sftpService.readChunk(sourceSessionId, sourcePath, offset, FILE_TRANSFER_CHUNK_SIZE);
-        if (chunk.length === 0) break;
-        await localFsService.writeChunk(handle, chunk);
-        offset += chunk.length;
+    await withPathWriteLock('local', localPath, async () => {
+      let handle: any = null;
+      let offset = 0;
+      try {
+        // Best-effort safety: read the first chunk before truncating/creating the destination.
+        // For small files, prefer buffering the entire content to avoid leaving a partial file.
+        const first = await sftpService.readChunk(
+          sourceSessionId,
+          sourcePath,
+          0,
+          FILE_TRANSFER_CHUNK_SIZE
+        );
+
+        handle = await localFsService.openWriteFile(localPath, true, accessToken);
+        if (first.length > 0) {
+          await localFsService.writeChunk(handle, first);
+          offset = first.length;
+        }
+
+        for (;;) {
+          ensureSessionUnchanged(sourceSessionId);
+          const chunk = await sftpService.readChunk(
+            sourceSessionId,
+            sourcePath,
+            offset,
+            FILE_TRANSFER_CHUNK_SIZE
+          );
+          if (chunk.length === 0) break;
+          await localFsService.writeChunk(handle, chunk);
+          offset += chunk.length;
+        }
+      } finally {
+        if (handle) {
+          await localFsService.closeFile(handle);
+        }
       }
-    } finally {
-      if (handle) {
-        await localFsService.closeFile(handle);
+    });
+  }
+
+  async function downloadRemoteFileToMemoryThenWrite(
+    sourceSessionId: string,
+    sourcePath: string,
+    localPath: string,
+    accessToken: string,
+    maxBytes: number
+  ): Promise<void> {
+    await withPathWriteLock('local', localPath, async () => {
+      // Read first; only truncate/create the destination after we have the full content.
+      const content = await readRemoteFileToMemoryInChunks(sourceSessionId, sourcePath, maxBytes);
+      let handle: any = null;
+      try {
+        handle = await localFsService.openWriteFile(localPath, true, accessToken);
+        await localFsService.writeChunk(handle, content);
+      } finally {
+        if (handle) {
+          await localFsService.closeFile(handle);
+        }
       }
-    }
+    });
   }
 
   async function readRemoteFileToMemoryInChunks(
@@ -267,7 +447,7 @@
     const chunks: Uint8Array[] = [];
     let offset = 0;
     let total = 0;
-    while (true) {
+    for (;;) {
       ensureSessionUnchanged(sourceSessionId);
       const chunk = await sftpService.readChunk(sourceSessionId, sourcePath, offset, FILE_TRANSFER_CHUNK_SIZE);
       if (chunk.length === 0) break;
@@ -474,11 +654,13 @@
     const path = joinPath(getMenuTargetDirectory(), name);
     try {
       ensureSessionUnchanged(targetSessionId);
-      try {
-        await sftpService.writeFile(targetSessionId, path, new Uint8Array(0), false);
-      } catch (e) {
-        await sftpService.scpUpload(targetSessionId, path, new Uint8Array(0));
-      }
+      await withPathWriteLock('remote', path, async () => {
+        try {
+          await sftpService.writeFile(targetSessionId, path, new Uint8Array(0), false);
+        } catch (e) {
+          await sftpService.scpUpload(targetSessionId, path, new Uint8Array(0));
+        }
+      });
       if (targetSessionId === sessionId) {
         invalidateCache(targetPath);
         void loadFiles(targetPath, { force: true });
@@ -603,36 +785,42 @@
 
   async function uploadSingleFile(file: File, targetSessionId: string, targetPath: string): Promise<void> {
     const path = targetPath === '/' ? `/${file.name}` : `${targetPath}/${file.name}`.replace('//', '/');
-    
-    const totalChunks = Math.ceil(file.size / FILE_TRANSFER_CHUNK_SIZE);
 
-    if (file.size === 0) {
-      try {
-        ensureSessionUnchanged(targetSessionId);
-        await sftpService.writeFile(targetSessionId, path, new Uint8Array(0), false);
-      } catch (e) {
-        await sftpService.scpUpload(targetSessionId, path, new Uint8Array(0));
-      }
-      return;
-    }
-    
-    try {
-      for (let i = 0; i < totalChunks; i++) {
-        const start = i * FILE_TRANSFER_CHUNK_SIZE;
-        const end = Math.min(start + FILE_TRANSFER_CHUNK_SIZE, file.size);
-        const chunk = file.slice(start, end);
-        const content = new Uint8Array(await chunk.arrayBuffer());
-        ensureSessionUnchanged(targetSessionId);
-        await sftpService.writeFile(targetSessionId, path, content, i > 0);
-      }
-    } catch (e) {
-      if (file.size > MAX_IN_MEMORY_FALLBACK_BYTES) {
-        throw new Error(`上传失败：为避免内存占用，已禁用超大文件整块回退（${formatSize(file.size)}）`);
-      }
-      const full = new Uint8Array(await file.arrayBuffer());
-      ensureSessionUnchanged(targetSessionId);
-      await sftpService.scpUpload(targetSessionId, path, full);
-    }
+    await withPathWriteLock('remote', path, async () => {
+      await atomicReplaceRemoteFile(targetSessionId, path, async (tempPath) => {
+        const totalChunks = Math.ceil(file.size / FILE_TRANSFER_CHUNK_SIZE);
+
+        if (file.size === 0) {
+          try {
+            ensureSessionUnchanged(targetSessionId);
+            await sftpService.writeFile(targetSessionId, tempPath, new Uint8Array(0), false);
+          } catch (e) {
+            await sftpService.scpUpload(targetSessionId, tempPath, new Uint8Array(0));
+          }
+          return;
+        }
+
+        try {
+          for (let i = 0; i < totalChunks; i++) {
+            const start = i * FILE_TRANSFER_CHUNK_SIZE;
+            const end = Math.min(start + FILE_TRANSFER_CHUNK_SIZE, file.size);
+            const chunk = file.slice(start, end);
+            const content = new Uint8Array(await chunk.arrayBuffer());
+            ensureSessionUnchanged(targetSessionId);
+            await sftpService.writeFile(targetSessionId, tempPath, content, i > 0);
+          }
+        } catch (e) {
+          if (file.size > MAX_IN_MEMORY_FALLBACK_BYTES) {
+            throw new Error(
+              `上传失败：为避免内存占用，已禁用超大文件整块回退（${formatSize(file.size)}）`
+            );
+          }
+          const full = new Uint8Array(await file.arrayBuffer());
+          ensureSessionUnchanged(targetSessionId);
+          await sftpService.scpUpload(targetSessionId, tempPath, full);
+        }
+      });
+    });
   }
 
   async function handleDownload() {
@@ -647,19 +835,24 @@
     loading = true;
     try {
       const targetSessionId = sessionId;
-      const filePath = await save({
-        filters: [{
-          name: file.name.split('.').pop() || 'All Files',
-          extensions: file.name.includes('.') ? [file.name.split('.').pop()!] : ['*']
-        }],
-        defaultPath: file.name
-      });
-
-      if (!filePath) {
+      const extension = file.name.includes('.') ? file.name.split('.').pop()! : '';
+      const filters = extension ? [{ name: extension, extensions: [extension] }] : [];
+      const grant = await localFsService.pickFileForWrite(file.name, filters);
+      if (!grant) {
         return; // 用户取消了保存
       }
 
-      await downloadRemoteFileInChunks(targetSessionId, file.path, filePath);
+      if (file.size > 0 && file.size <= MAX_IN_MEMORY_FALLBACK_BYTES) {
+        await downloadRemoteFileToMemoryThenWrite(
+          targetSessionId,
+          file.path,
+          grant.path,
+          grant.accessToken,
+          MAX_IN_MEMORY_FALLBACK_BYTES
+        );
+      } else {
+        await downloadRemoteFileInChunks(targetSessionId, file.path, grant.path, grant.accessToken);
+      }
 
     } catch (e: any) {
       error = e.toString();
@@ -726,6 +919,11 @@
         const destPath = joinPath(destDir, entry.name);
 
         if (!item.sessionId) continue;
+        // Prevent a destructive no-op: copying a file onto itself corrupts it when chunked.
+        if (item.sessionId === targetSessionId && normalizePath(entry.path) === normalizePath(destPath)) {
+          error = `已跳过：不能粘贴到同一路径（${entry.name}）`;
+          continue;
+        }
         await copyRemoteFileInChunks(item.sessionId, entry.path, targetSessionId, destPath);
       }
 
@@ -962,14 +1160,17 @@
     editorError = null;
     const targetSessionId = editorSessionId ?? sessionId;
     const targetPath = currentPath;
+    const editorPath = editorFile.path;
     try {
       ensureSessionUnchanged(targetSessionId);
       const content = new TextEncoder().encode(editorContent);
-      try {
-        await sftpService.writeFile(targetSessionId, editorFile.path, content, false);
-      } catch (e) {
-        await sftpService.scpUpload(targetSessionId, editorFile.path, content);
-      }
+      await withPathWriteLock('remote', editorPath, async () => {
+        try {
+          await sftpService.writeFile(targetSessionId, editorPath, content, false);
+        } catch (e) {
+          await sftpService.scpUpload(targetSessionId, editorPath, content);
+        }
+      });
       if (targetSessionId === sessionId) {
         invalidateCache(targetPath);
         await loadFiles(targetPath, { force: true });

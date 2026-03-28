@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { invoke } from '@tauri-apps/api/core';
   import { activeTerminals, selectedTerminalIndex } from '../lib/store';
+  import { execAuditedRemoteCommand } from '../lib/remoteExecAudit';
   import TerminalView from './TerminalView.svelte';
   import TerminalIcon from './icons/TerminalIcon.svelte';
   import { formatSpeed } from '../lib/transferQueueService';
@@ -225,7 +225,11 @@
         'echo "---STAR_SHUTTLE_SPLIT---"',
         '(head -n 1 /proc/stat 2>/dev/null || (top -bn1 | grep "Cpu(s)") 2>/dev/null || (top -l 1 | grep "CPU usage") 2>/dev/null || true)'
       ].join('; ');
-      const output = await invoke('exec_command', { sessionId, command: combinedCommand }) as string;
+      const output = await execAuditedRemoteCommand(
+        sessionId,
+        combinedCommand,
+        'terminal-manager-poll',
+      );
       if (version !== pollVersion || !isSessionStillSelected(sessionId)) return;
 
       const parts = output.split('---STAR_SHUTTLE_SPLIT---');

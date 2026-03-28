@@ -3,7 +3,6 @@
   import type { LayoutNode } from '../../lib/layout';
   import { getPaneIndex } from '../../lib/layout';
   import TerminalPane from './TerminalPane.svelte';
-  import { terminalPool } from '../../lib/terminalPool';
 
   export let node: LayoutNode;
   export let isVisible: boolean = true;
@@ -12,19 +11,6 @@
 
   // Get root node for calculating pane indices
   export let rootNode: LayoutNode | null = null;
-
-  // 从终端池获取现有实例（用于分屏时保持原始终端）
-  function getExistingInstance(sessionId: string) {
-    const instance = terminalPool.retrieveInstance(sessionId);
-    if (instance && !instance.disposed) {
-      return {
-        terminal: instance.terminal,
-        fitAddon: instance.fitAddon,
-        searchAddon: instance.searchAddon
-      };
-    }
-    return null;
-  }
 
   // Resize logic
   let isResizing = false;
@@ -75,7 +61,6 @@
 </script>
 
 {#if node.type === 'pane'}
-  {@const existing = getExistingInstance(node.sessionId)}
   {@const paneIndex = rootNode ? getPaneIndex(rootNode, node.id) : 1}
   {#key node.id}
     <TerminalPane
@@ -83,9 +68,6 @@
       connection={node.connection}
       isRoot={node.isRoot}
       paneIndex={paneIndex}
-      existingTerminal={existing?.terminal ?? null}
-      existingFitAddon={existing?.fitAddon ?? null}
-      existingSearchAddon={existing?.searchAddon ?? null}
       onInit={node.onInit}
       isVisible={isVisible}
       on:split={(e) => handlePaneSplit(e, node.id)}

@@ -10,6 +10,7 @@ import type { TerminalInstance } from './terminalInstance';
 import type { TerminalProxy } from './terminalProxy';
 import { TerminalInstance as TerminalInstanceClass } from './terminalInstance';
 import { TerminalProxy as TerminalProxyClass } from './terminalProxy';
+import { devLog, devWarn } from './devLogger';
 
 export class TerminalPool {
   private static instance: TerminalPool;
@@ -35,13 +36,47 @@ export class TerminalPool {
     
     // 如果已存在，先销毁旧实例
     if (this.instances.has(sessionId)) {
-      console.warn(`[TerminalPool] Replacing existing instance for session ${sessionId}`);
+      devWarn('TerminalPool', `replacing existing instance session=${sessionId}`);
       const oldInstance = this.instances.get(sessionId)!;
       oldInstance.dispose();
     }
 
     this.instances.set(sessionId, instance);
-    console.log(`[TerminalPool] Registered terminal instance for session ${sessionId}`);
+    devLog('TerminalPool', `registered instance session=${sessionId}`);
+  }
+
+  migrateSession(oldSessionId: string, newSessionId: string): boolean {
+    if (oldSessionId === newSessionId) return true;
+
+    const instance = this.instances.get(oldSessionId);
+    if (!instance) {
+      devWarn('TerminalPool', `cannot migrate missing instance old=${oldSessionId}, new=${newSessionId}`);
+      return false;
+    }
+
+    const conflictInstance = this.instances.get(newSessionId);
+    if (conflictInstance && conflictInstance !== instance) {
+      conflictInstance.dispose();
+      this.instances.delete(newSessionId);
+    }
+
+    this.instances.delete(oldSessionId);
+    instance.renameSession(newSessionId);
+    this.instances.set(newSessionId, instance);
+
+    const proxy = this.proxies.get(oldSessionId);
+    const conflictProxy = this.proxies.get(newSessionId);
+    if (conflictProxy && conflictProxy !== proxy) {
+      conflictProxy.dispose();
+      this.proxies.delete(newSessionId);
+    }
+    if (proxy) {
+      this.proxies.delete(oldSessionId);
+      this.proxies.set(newSessionId, proxy);
+    }
+
+    devLog('TerminalPool', `migrated session old=${oldSessionId}, new=${newSessionId}`);
+    return true;
   }
 
   /**
@@ -61,7 +96,7 @@ export class TerminalPool {
     const instance = new TerminalInstanceClass(sessionId, options);
     this.instances.set(sessionId, instance);
 
-    console.log(`[TerminalPool] Created new terminal instance for session ${sessionId}`);
+    devLog('TerminalPool', `created new instance session=${sessionId}`);
     
     return instance;
   }
@@ -146,7 +181,7 @@ export class TerminalPool {
    * @param sessionId 会话 ID
    */
   destroyInstance(sessionId: string): void {
-    console.log(`[TerminalPool] Destroying instance for session ${sessionId}`);
+    devLog('TerminalPool', `destroying instance session=${sessionId}`);
 
     // 销毁代理
     const proxy = this.proxies.get(sessionId);
@@ -167,7 +202,7 @@ export class TerminalPool {
    * 销毁所有实例和代理
    */
   destroyAll(): void {
-    console.log(`[TerminalPool] Destroying all instances (${this.instances.size})`);
+    devLog('TerminalPool', `destroying all instances count=${this.instances.size}`);
 
     // 销毁所有代理
     this.proxies.forEach(proxy => proxy.dispose());

@@ -11,6 +11,7 @@ import {
 } from './store';
 import { v4 as uuidv4 } from 'uuid';
 import { get } from 'svelte/store';
+import { devWarn } from './devLogger';
 
 type ConnectionProtocol = 'Ssh' | 'Rdp' | 'Telnet';
 type AuthMethodKind = 'password' | 'keyboardInteractive' | 'privateKey' | 'agent' | 'certificate';
@@ -56,6 +57,16 @@ type BackendAuthMethod =
   | BackendPrivateKeyAuth
   | BackendAgentAuth
   | BackendCertificateAuth;
+
+type ParseResult<T> =
+  | {
+      ok: true;
+      value: T;
+    }
+  | {
+      ok: false;
+      reason: string;
+    };
 
 type BackendProxyType =
   | 'None'
@@ -158,13 +169,345 @@ export interface ConnectionFormData {
   created_at?: string;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object';
+}
+
+function asString(value: unknown): string | null {
+  return typeof value === 'string' ? value : null;
+}
+
+function asNullableString(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  return typeof value === 'string' ? value : null;
+}
+
+function asNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function asBoolean(value: unknown): boolean | null {
+  return typeof value === 'boolean' ? value : null;
+}
+
+function normalizeProtocol(value: unknown): ConnectionProtocol {
+  if (value === 'Rdp' || value === 'Telnet') return value;
+  return 'Ssh';
+}
+
+function parseBackendAuthMethod(value: unknown): ParseResult<BackendAuthMethod> {
+  if (!isRecord(value)) {
+    return { ok: false, reason: 'auth_method must be an object' };
+  }
+
+  const hasPassword = value.Password !== undefined;
+  const hasKeyboardInteractive = value.KeyboardInteractive !== undefined;
+  const hasPrivateKey = value.PrivateKey !== undefined;
+  const hasAgent = value.Agent !== undefined;
+  const hasCertificate = value.Certificate !== undefined;
+  const variantCount =
+    Number(hasPassword) +
+    Number(hasKeyboardInteractive) +
+    Number(hasPrivateKey) +
+    Number(hasAgent) +
+    Number(hasCertificate);
+
+  if (variantCount !== 1) {
+    return {
+      ok: false,
+      reason: 'auth_method must contain exactly one variant',
+    };
+  }
+
+  if (hasPassword) {
+    const password = value.Password;
+    if (!isRecord(password)) {
+      return { ok: false, reason: 'auth_method.Password must be an object' };
+    }
+    const rawPassword = asString(password.password);
+    const rawSavePassword = asBoolean(password.save_password);
+    if (rawPassword === null || rawSavePassword === null) {
+      return {
+        ok: false,
+        reason: 'auth_method.Password.password/save_password have invalid types',
+      };
+    }
+    return {
+      ok: true,
+      value: {
+        Password: {
+          password: rawPassword,
+          save_password: rawSavePassword,
+        },
+      },
+    };
+  }
+
+  if (hasKeyboardInteractive) {
+    if (!isRecord(value.KeyboardInteractive)) {
+      return {
+        ok: false,
+        reason: 'auth_method.KeyboardInteractive must be an object',
+      };
+    }
+    return { ok: true, value: { KeyboardInteractive: {} } };
+  }
+
+  if (hasPrivateKey) {
+    const privateKey = value.PrivateKey;
+    if (!isRecord(privateKey)) {
+      return { ok: false, reason: 'auth_method.PrivateKey must be an object' };
+    }
+    const keyPath = asString(privateKey.key_path);
+    const savePassphrase = asBoolean(privateKey.save_passphrase);
+    if (keyPath === null || savePassphrase === null) {
+      return {
+        ok: false,
+        reason: 'auth_method.PrivateKey.key_path/save_passphrase have invalid types',
+      };
+    }
+    const passphraseRaw = privateKey.passphrase;
+    if (passphraseRaw !== undefined && passphraseRaw !== null && typeof passphraseRaw !== 'string') {
+      return {
+        ok: false,
+        reason: 'auth_method.PrivateKey.passphrase must be string/null/undefined',
+      };
+    }
+    return {
+      ok: true,
+      value: {
+        PrivateKey: {
+          key_path: keyPath,
+          passphrase: asNullableString(passphraseRaw) ?? undefined,
+          save_passphrase: savePassphrase,
+        },
+      },
+    };
+  }
+
+  if (hasAgent) {
+    const agent = value.Agent;
+    if (!isRecord(agent)) {
+      return { ok: false, reason: 'auth_method.Agent must be an object' };
+    }
+    const agentPathRaw = agent.agent_path;
+    if (agentPathRaw !== undefined && agentPathRaw !== null && typeof agentPathRaw !== 'string') {
+      return {
+        ok: false,
+        reason: 'auth_method.Agent.agent_path must be string/null/undefined',
+      };
+    }
+    return {
+      ok: true,
+      value: {
+        Agent: {
+          agent_path: asNullableString(agentPathRaw) ?? undefined,
+        },
+      },
+    };
+  }
+
+  const certificate = value.Certificate;
+  if (!isRecord(certificate)) {
+    return { ok: false, reason: 'auth_method.Certificate must be an object' };
+  }
+  const certificatePath = asString(certificate.certificate_path);
+  const privateKeyPath = asString(certificate.private_key_path);
+  const savePassphrase = asBoolean(certificate.save_passphrase);
+  if (certificatePath === null || privateKeyPath === null || savePassphrase === null) {
+    return {
+      ok: false,
+      reason: 'auth_method.Certificate.certificate_path/private_key_path/save_passphrase have invalid types',
+    };
+  }
+  const passphraseRaw = certificate.passphrase;
+  if (passphraseRaw !== undefined && passphraseRaw !== null && typeof passphraseRaw !== 'string') {
+    return {
+      ok: false,
+      reason: 'auth_method.Certificate.passphrase must be string/null/undefined',
+    };
+  }
+  return {
+    ok: true,
+    value: {
+      Certificate: {
+        certificate_path: certificatePath,
+        private_key_path: privateKeyPath,
+        passphrase: asNullableString(passphraseRaw) ?? undefined,
+        save_passphrase: savePassphrase,
+      },
+    },
+  };
+}
+
+function normalizeBackendAuthMethod(value: unknown): BackendAuthMethod {
+  const parsed = parseBackendAuthMethod(value);
+  if (!parsed.ok) {
+    throw new Error(`Invalid auth_method: ${parsed.reason}`);
+  }
+  return parsed.value;
+}
+
+function normalizeConnectionAuthMethod(value: Connection['auth_method']): BackendAuthMethod {
+  return normalizeBackendAuthMethod(value);
+}
+
+function toConnectionAuthMethod(auth: BackendAuthMethod): Connection['auth_method'] {
+  if ('Password' in auth) {
+    return {
+      Password: {
+        password: auth.Password.password,
+        save_password: auth.Password.save_password,
+      },
+    };
+  }
+  if ('PrivateKey' in auth) {
+    return {
+      PrivateKey: {
+        key_path: auth.PrivateKey.key_path,
+        passphrase: auth.PrivateKey.passphrase,
+        save_passphrase: auth.PrivateKey.save_passphrase,
+      },
+    };
+  }
+  if ('Agent' in auth) {
+    return {
+      Agent: {
+        agent_path: auth.Agent.agent_path,
+      },
+    };
+  }
+  if ('Certificate' in auth) {
+    return {
+      Certificate: {
+        certificate_path: auth.Certificate.certificate_path,
+        private_key_path: auth.Certificate.private_key_path,
+        passphrase: auth.Certificate.passphrase,
+        save_passphrase: auth.Certificate.save_passphrase,
+      },
+    };
+  }
+  return { KeyboardInteractive: {} };
+}
+
+function normalizeLocalForwards(value: unknown): LocalForward[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map(entry => {
+      if (!isRecord(entry)) return null;
+      const localPort = asNumber(entry.local_port);
+      const remotePort = asNumber(entry.remote_port);
+      if (localPort === null || remotePort === null) return null;
+      return {
+        local_host: asString(entry.local_host) ?? 'localhost',
+        local_port: localPort,
+        remote_host: asString(entry.remote_host) ?? 'localhost',
+        remote_port: remotePort,
+      };
+    })
+    .filter((entry): entry is LocalForward => entry !== null);
+}
+
+function normalizeRemoteForwards(value: unknown): RemoteForward[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map(entry => {
+      if (!isRecord(entry)) return null;
+      const localPort = asNumber(entry.local_port);
+      const remotePort = asNumber(entry.remote_port);
+      if (localPort === null || remotePort === null) return null;
+      return {
+        remote_host: asString(entry.remote_host) ?? 'localhost',
+        remote_port: remotePort,
+        local_host: asString(entry.local_host) ?? 'localhost',
+        local_port: localPort,
+      };
+    })
+    .filter((entry): entry is RemoteForward => entry !== null);
+}
+
+function normalizeConnectionFromBackend(value: unknown): Connection | null {
+  if (!isRecord(value)) return null;
+
+  const id = asString(value.id);
+  const name = asString(value.name);
+  const host = asString(value.host);
+  const port = asNumber(value.port);
+
+  if (!id || !name || !host || port === null) {
+    return null;
+  }
+
+  const parsedAuthMethod = parseBackendAuthMethod(value.auth_method);
+  if (!parsedAuthMethod.ok) {
+    devWarn(
+      'connectionService',
+      `Skipping connection ${id}: invalid auth_method (${parsedAuthMethod.reason})`
+    );
+    return null;
+  }
+  const parsedProxyType = parseBackendProxyType(value.proxy_type);
+  if (!parsedProxyType.ok) {
+    devWarn(
+      'connectionService',
+      `Skipping connection ${id}: invalid proxy_type (${parsedProxyType.reason})`
+    );
+    return null;
+  }
+
+  return {
+    id,
+    name,
+    protocol: normalizeProtocol(value.protocol),
+    host,
+    port,
+    username: asString(value.username) ?? '',
+    auth_method: toConnectionAuthMethod(parsedAuthMethod.value),
+    description: asNullableString(value.description),
+    tags: parseTags(value.tags),
+    created_at: asString(value.created_at) ?? new Date().toISOString(),
+    updated_at: asString(value.updated_at) ?? new Date().toISOString(),
+    group_id: asNullableString(value.group_id),
+    local_forwards: normalizeLocalForwards(value.local_forwards),
+    remote_forwards: normalizeRemoteForwards(value.remote_forwards),
+    proxy_type: parsedProxyType.value,
+    socks_proxy_port: asNumber(value.socks_proxy_port),
+    auto_reconnect: asBoolean(value.auto_reconnect) ?? undefined,
+  };
+}
+
+function normalizeConnectionsPayload(payload: unknown): Connection[] {
+  if (!Array.isArray(payload)) {
+    devWarn('connectionService', 'Expected array from get_all_connection_configs, got non-array payload');
+    return [];
+  }
+
+  let skipped = 0;
+  const normalized: Connection[] = [];
+
+  for (const item of payload) {
+    const connection = normalizeConnectionFromBackend(item);
+    if (!connection) {
+      skipped += 1;
+      continue;
+    }
+    normalized.push(connection);
+  }
+
+  if (skipped > 0) {
+    devWarn('connectionService', `Skipped ${skipped} invalid connection entries from backend payload`);
+  }
+
+  return normalized;
+}
+
 export async function loadConnections() {
   try {
     loading.set(true);
     clearErrorMessage();
     
-    const result = await invoke('get_all_connection_configs');
-    connections.set(result as Connection[]);
+    const result = await invoke<unknown>('get_all_connection_configs');
+    connections.set(normalizeConnectionsPayload(result));
   } catch (error) {
     console.error('Error loading connections:', error);
     showErrorMessage(`加载连接失败: ${error}`, 5000);
@@ -199,61 +542,133 @@ export async function deleteConnection(connectionId: string) {
   }
 }
 
-function normalizeBackendProxyType(proxyType: Connection['proxy_type']): BackendProxyType {
-  if (!proxyType || proxyType === 'None') {
-    return 'None';
+function parseBackendProxyType(proxyType: unknown): ParseResult<BackendProxyType> {
+  if (proxyType === null || proxyType === undefined || proxyType === 'None') {
+    return { ok: true, value: 'None' };
   }
-  if (typeof proxyType !== 'object') {
-    return 'None';
+  if (!isRecord(proxyType)) {
+    return { ok: false, reason: 'proxy_type must be "None" or an object variant' };
   }
-  const record = proxyType as Record<string, unknown>;
-  const asRecord = (value: unknown): Record<string, unknown> | null =>
-    value && typeof value === 'object' ? (value as Record<string, unknown>) : null;
-  const asString = (value: unknown): string | null =>
-    typeof value === 'string' ? value : null;
-  const asNumber = (value: unknown): number | null =>
-    typeof value === 'number' && Number.isFinite(value) ? value : null;
 
-  const socks = asRecord(record.Socks5);
-  if (socks) {
+  const hasSocks5 = proxyType.Socks5 !== undefined;
+  const hasHttp = proxyType.Http !== undefined;
+  const hasJumpHost = proxyType.JumpHost !== undefined;
+  const variantCount = Number(hasSocks5) + Number(hasHttp) + Number(hasJumpHost);
+
+  if (variantCount !== 1) {
     return {
-      Socks5: {
-        host: asString(socks.host) ?? '',
-        port: asNumber(socks.port) ?? 1080,
-        username: asString(socks.username),
-        password: asString(socks.password),
-      },
+      ok: false,
+      reason: 'proxy_type must contain exactly one variant',
     };
   }
 
-  const http = asRecord(record.Http);
-  if (http) {
-    return {
-      Http: {
-        host: asString(http.host) ?? '',
-        port: asNumber(http.port) ?? 8080,
-        username: asString(http.username),
-        password: asString(http.password),
-      },
-    };
-  }
-
-  const jumpHost = asRecord(record.JumpHost);
-  if (jumpHost) {
-    const authMethod = asRecord(jumpHost.auth_method);
-    if (!authMethod) {
-      return 'None';
+  if (hasSocks5) {
+    const socks = proxyType.Socks5;
+    if (!isRecord(socks)) {
+      return { ok: false, reason: 'proxy_type.Socks5 must be an object' };
+    }
+    const host = asString(socks.host);
+    const port = asNumber(socks.port);
+    if (host === null || port === null) {
+      return {
+        ok: false,
+        reason: 'proxy_type.Socks5.host/port have invalid types',
+      };
+    }
+    const usernameRaw = socks.username;
+    const passwordRaw = socks.password;
+    if (usernameRaw !== undefined && usernameRaw !== null && typeof usernameRaw !== 'string') {
+      return { ok: false, reason: 'proxy_type.Socks5.username must be string/null/undefined' };
+    }
+    if (passwordRaw !== undefined && passwordRaw !== null && typeof passwordRaw !== 'string') {
+      return { ok: false, reason: 'proxy_type.Socks5.password must be string/null/undefined' };
     }
     return {
-      JumpHost: {
-        host: asString(jumpHost.host) ?? '',
-        port: asNumber(jumpHost.port) ?? 22,
-        username: asString(jumpHost.username) ?? '',
-        auth_method: authMethod as BackendAuthMethod,
+      ok: true,
+      value: {
+        Socks5: {
+          host,
+          port,
+          username: asNullableString(usernameRaw),
+          password: asNullableString(passwordRaw),
+        },
       },
     };
   }
-  return 'None';
+
+  if (hasHttp) {
+    const http = proxyType.Http;
+    if (!isRecord(http)) {
+      return { ok: false, reason: 'proxy_type.Http must be an object' };
+    }
+    const host = asString(http.host);
+    const port = asNumber(http.port);
+    if (host === null || port === null) {
+      return {
+        ok: false,
+        reason: 'proxy_type.Http.host/port have invalid types',
+      };
+    }
+    const usernameRaw = http.username;
+    const passwordRaw = http.password;
+    if (usernameRaw !== undefined && usernameRaw !== null && typeof usernameRaw !== 'string') {
+      return { ok: false, reason: 'proxy_type.Http.username must be string/null/undefined' };
+    }
+    if (passwordRaw !== undefined && passwordRaw !== null && typeof passwordRaw !== 'string') {
+      return { ok: false, reason: 'proxy_type.Http.password must be string/null/undefined' };
+    }
+    return {
+      ok: true,
+      value: {
+        Http: {
+          host,
+          port,
+          username: asNullableString(usernameRaw),
+          password: asNullableString(passwordRaw),
+        },
+      },
+    };
+  }
+
+  const jumpHost = proxyType.JumpHost;
+  if (!isRecord(jumpHost)) {
+    return { ok: false, reason: 'proxy_type.JumpHost must be an object' };
+  }
+  const host = asString(jumpHost.host);
+  const port = asNumber(jumpHost.port);
+  const username = asString(jumpHost.username);
+  if (host === null || port === null || username === null) {
+    return {
+      ok: false,
+      reason: 'proxy_type.JumpHost.host/port/username have invalid types',
+    };
+  }
+  const parsedAuthMethod = parseBackendAuthMethod(jumpHost.auth_method);
+  if (!parsedAuthMethod.ok) {
+    return {
+      ok: false,
+      reason: `proxy_type.JumpHost.auth_method is invalid (${parsedAuthMethod.reason})`,
+    };
+  }
+  return {
+    ok: true,
+    value: {
+      JumpHost: {
+        host,
+        port,
+        username,
+        auth_method: parsedAuthMethod.value,
+      },
+    },
+  };
+}
+
+function normalizeBackendProxyType(proxyType: unknown): BackendProxyType {
+  const parsed = parseBackendProxyType(proxyType);
+  if (!parsed.ok) {
+    throw new Error(`Invalid proxy_type: ${parsed.reason}`);
+  }
+  return parsed.value;
 }
 
 function parseTags(value: unknown): string[] {
@@ -283,7 +698,7 @@ function toBackendConnectionConfig(
     host: connection.host,
     port: Number(connection.port),
     username: connection.username,
-    auth_method: connection.auth_method as BackendAuthMethod,
+    auth_method: normalizeConnectionAuthMethod(connection.auth_method),
     description: connection.description ?? null,
     tags: connection.tags ?? [],
     group_id: connection.group_id ?? null,
@@ -575,3 +990,10 @@ export async function saveConnection(
     return null;
   }
 }
+
+export const __connectionServiceTestHooks = {
+  parseBackendAuthMethod,
+  parseBackendProxyType,
+  normalizeConnectionsPayload,
+  toBackendConnectionConfig,
+};

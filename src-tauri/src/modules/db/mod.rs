@@ -1,33 +1,11 @@
+mod audit;
+mod command_snippets;
+
 use rusqlite::{params, Connection, Result};
-use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct CommandSnippet {
-    pub id: Uuid,
-    pub name: String,
-    pub command: String,
-    pub description: Option<String>,
-    pub category: Option<String>,
-    pub tags: Option<String>,
-    pub created_at: u64,
-    pub updated_at: u64,
-    pub usage_count: i32,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct AuditEvent {
-    pub id: Uuid,
-    pub timestamp: u64,
-    pub session_id: Option<Uuid>,
-    pub user_id: Option<String>,
-    pub command: String,
-    pub risk_level: String,
-    pub description: String,
-    pub detected_patterns: String,
-    pub action: String,
-    pub details: Option<String>,
-}
+pub use audit::AuditEvent;
+pub use command_snippets::CommandSnippet;
 
 pub struct DatabaseManager {
     conn: Connection,
@@ -48,37 +26,8 @@ impl DatabaseManager {
             )",
             [],
         )?;
-
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS command_snippets (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                command TEXT NOT NULL,
-                description TEXT,
-                category TEXT,
-                tags TEXT,
-                created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
-                usage_count INTEGER DEFAULT 0
-            )",
-            [],
-        )?;
-
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS audit_events (
-                id TEXT PRIMARY KEY,
-                timestamp INTEGER NOT NULL,
-                session_id TEXT,
-                user_id TEXT,
-                command TEXT NOT NULL,
-                risk_level TEXT NOT NULL,
-                description TEXT NOT NULL,
-                detected_patterns TEXT NOT NULL,
-                action TEXT NOT NULL,
-                details TEXT
-            )",
-            [],
-        )?;
+        command_snippets::create_table(conn)?;
+        audit::create_table(conn)?;
         Ok(())
     }
 
@@ -111,151 +60,34 @@ impl DatabaseManager {
 
     // Command snippets CRUD
     pub fn save_command_snippet(&self, snippet: &CommandSnippet) -> Result<()> {
-        self.conn.execute(
-            "INSERT OR REPLACE INTO command_snippets (id, name, command, description, category, tags, created_at, updated_at, usage_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            params![
-                snippet.id.to_string(),
-                snippet.name,
-                snippet.command,
-                snippet.description,
-                snippet.category,
-                snippet.tags,
-                snippet.created_at,
-                snippet.updated_at,
-                snippet.usage_count,
-            ],
-        )?;
-        Ok(())
+        command_snippets::save(&self.conn, snippet)
     }
 
     pub fn get_command_snippets(&self) -> Result<Vec<CommandSnippet>> {
-        let mut stmt = self.conn.prepare("SELECT id, name, command, description, category, tags, created_at, updated_at, usage_count FROM command_snippets")?;
-        let snippet_iter = stmt.query_map([], |row| {
-            Ok(CommandSnippet {
-                id: Uuid::parse_str(row.get::<_, String>(0)?.as_str()).map_err(|e| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        0,
-                        rusqlite::types::Type::Text,
-                        Box::new(e),
-                    )
-                })?,
-                name: row.get(1)?,
-                command: row.get(2)?,
-                description: row.get(3)?,
-                category: row.get(4)?,
-                tags: row.get(5)?,
-                created_at: row.get(6)?,
-                updated_at: row.get(7)?,
-                usage_count: row.get(8)?,
-            })
-        })?;
-
-        let mut snippets = Vec::new();
-        for snippet in snippet_iter {
-            snippets.push(snippet?);
-        }
-        Ok(snippets)
+        command_snippets::get_all(&self.conn)
     }
 
     pub fn get_command_snippet_by_id(&self, id: &Uuid) -> Result<Option<CommandSnippet>> {
-        let mut stmt = self.conn.prepare("SELECT id, name, command, description, category, tags, created_at, updated_at, usage_count FROM command_snippets WHERE id = ?")?;
-        let mut rows = stmt.query(params![id.to_string()])?;
-
-        if let Some(row) = rows.next()? {
-            Ok(Some(CommandSnippet {
-                id: Uuid::parse_str(row.get::<_, String>(0)?.as_str()).map_err(|e| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        0,
-                        rusqlite::types::Type::Text,
-                        Box::new(e),
-                    )
-                })?,
-                name: row.get(1)?,
-                command: row.get(2)?,
-                description: row.get(3)?,
-                category: row.get(4)?,
-                tags: row.get(5)?,
-                created_at: row.get(6)?,
-                updated_at: row.get(7)?,
-                usage_count: row.get(8)?,
-            }))
-        } else {
-            Ok(None)
-        }
+        command_snippets::get_by_id(&self.conn, id)
     }
 
     pub fn delete_command_snippet(&self, id: &Uuid) -> Result<()> {
-        self.conn.execute(
-            "DELETE FROM command_snippets WHERE id = ?",
-            params![id.to_string()],
-        )?;
-        Ok(())
+        command_snippets::delete(&self.conn, id)
     }
 
     pub fn increment_usage_count(&self, id: &Uuid) -> Result<()> {
-        self.conn.execute(
-            "UPDATE command_snippets SET usage_count = usage_count + 1 WHERE id = ?",
-            params![id.to_string()],
-        )?;
-        Ok(())
+        command_snippets::increment_usage_count(&self.conn, id)
     }
 
     pub fn save_audit_event(&self, event: &AuditEvent) -> Result<()> {
-        self.conn.execute(
-            "INSERT INTO audit_events (id, timestamp, session_id, user_id, command, risk_level, description, detected_patterns, action, details) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            params![
-                event.id.to_string(),
-                event.timestamp,
-                event.session_id.map(|id| id.to_string()),
-                event.user_id.clone(),
-                event.command,
-                event.risk_level,
-                event.description,
-                event.detected_patterns,
-                event.action,
-                event.details,
-            ],
-        )?;
-        Ok(())
+        audit::save_event(&self.conn, event)
     }
 
     pub fn get_audit_events(&self, limit: Option<u32>) -> Result<Vec<AuditEvent>> {
-        let limit = limit.unwrap_or(100);
-        let mut stmt = self.conn.prepare(
-            "SELECT id, timestamp, session_id, user_id, command, risk_level, description, detected_patterns, action, details FROM audit_events ORDER BY timestamp DESC LIMIT ?",
-        )?;
-        let event_iter = stmt.query_map(params![limit], |row| {
-            let session_id_str: Option<String> = row.get(2)?;
-            let session_id = session_id_str.and_then(|s| Uuid::parse_str(&s).ok());
-            Ok(AuditEvent {
-                id: Uuid::parse_str(row.get::<_, String>(0)?.as_str()).map_err(|e| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        0,
-                        rusqlite::types::Type::Text,
-                        Box::new(e),
-                    )
-                })?,
-                timestamp: row.get(1)?,
-                session_id,
-                user_id: row.get(3)?,
-                command: row.get(4)?,
-                risk_level: row.get(5)?,
-                description: row.get(6)?,
-                detected_patterns: row.get(7)?,
-                action: row.get(8)?,
-                details: row.get(9)?,
-            })
-        })?;
-
-        let mut events = Vec::new();
-        for event in event_iter {
-            events.push(event?);
-        }
-        Ok(events)
+        audit::get_events(&self.conn, limit)
     }
 
     pub fn clear_audit_events(&self) -> Result<()> {
-        self.conn.execute("DELETE FROM audit_events", [])?;
-        Ok(())
+        audit::clear_events(&self.conn)
     }
 }
