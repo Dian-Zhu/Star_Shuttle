@@ -2,8 +2,7 @@
 
 use super::*;
 use russh::client::Prompt;
-use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::net::{TcpListener, TcpStream};
 
 fn telnet_artifacts() -> TelnetConnection {
@@ -271,11 +270,57 @@ fn test_disconnect_removes_session_entry() {
 }
 
 #[test]
-fn test_close_terminal_waits_for_full_queue_before_removing_terminal() {
+fn test_prepare_disconnect_is_idempotent_for_disconnecting_session() {
+    let mut manager = DefaultConnectionManager::new();
+    let session_id = Uuid::new_v4();
+    manager.sessions.insert(
+        session_id,
+        SessionInfo {
+            id: session_id,
+            connection_id: Uuid::new_v4(),
+            status: ConnectionStatus::Disconnecting,
+            terminal_id: None,
+            created_at: Utc::now(),
+            last_active: Utc::now(),
+        },
+    );
+
+    assert!(manager.prepare_disconnect(&session_id).is_ok());
+    assert_eq!(
+        manager.sessions.get(&session_id).map(|s| &s.status),
+        Some(&ConnectionStatus::Disconnecting)
+    );
+}
+
+#[test]
+fn test_prepare_disconnect_keeps_disconnected_status() {
+    let mut manager = DefaultConnectionManager::new();
+    let session_id = Uuid::new_v4();
+    manager.sessions.insert(
+        session_id,
+        SessionInfo {
+            id: session_id,
+            connection_id: Uuid::new_v4(),
+            status: ConnectionStatus::Disconnected,
+            terminal_id: None,
+            created_at: Utc::now(),
+            last_active: Utc::now(),
+        },
+    );
+
+    assert!(manager.prepare_disconnect(&session_id).is_ok());
+    assert_eq!(
+        manager.sessions.get(&session_id).map(|s| &s.status),
+        Some(&ConnectionStatus::Disconnected)
+    );
+}
+
+#[test]
+fn test_close_terminal_fails_fast_when_queue_is_full_and_keeps_terminal() {
     let mut manager = DefaultConnectionManager::new();
     let session_id = Uuid::new_v4();
     let terminal_id = Uuid::new_v4();
-    let (sender, mut receiver) = mpsc::channel(1);
+    let (sender, _receiver) = mpsc::channel(1);
 
     sender
         .try_send(TerminalCommand::Data(vec![1]))
@@ -289,16 +334,323 @@ fn test_close_terminal_waits_for_full_queue_before_removing_terminal() {
         },
     );
 
-    let drain = thread::spawn(move || {
-        thread::sleep(Duration::from_millis(50));
-        let first = receiver.blocking_recv();
-        let second = receiver.blocking_recv();
-        (first, second)
-    });
+    let start = Instant::now();
+    let result = manager.close_terminal(&session_id);
+    let elapsed = start.elapsed();
 
-    assert!(manager.close_terminal(&session_id).is_ok());
-    assert!(manager.terminals.is_empty());
+    assert!(
+        matches!(result, Err(ConnectionError::ConnectionFailed(message)) if message.contains("queue is full"))
+    );
+    assert!(elapsed < Duration::from_millis(200));
+    assert!(manager.terminals.contains_key(&terminal_id));
+}
 
-    let (_first, second) = drain.join().expect("failed to join drain thread");
-    assert!(matches!(second, Some(TerminalCommand::Close)));
+#[test]
+fn test_prepared_close_terminal_removes_only_after_finish() {
+    let mut manager = DefaultConnectionManager::new();
+    let session_id = Uuid::new_v4();
+    let terminal_id = Uuid::new_v4();
+    let (sender, mut receiver) = mpsc::channel(1);
+
+    manager.sessions.insert(
+        session_id,
+        SessionInfo {
+            id: session_id,
+            connection_id: Uuid::new_v4(),
+            status: ConnectionStatus::Connected,
+            terminal_id: Some(terminal_id),
+            created_at: Utc::now(),
+            last_active: Utc::now(),
+        },
+    );
+
+    manager.terminals.insert(
+        terminal_id,
+        TerminalSession {
+            id: terminal_id,
+            session_id,
+            sender,
+        },
+    );
+
+    let prepared = manager
+        .prepare_close_terminal(&session_id)
+        .expect("prepare close should succeed");
+    assert!(manager.terminals.contains_key(&terminal_id));
+
+    assert!(DefaultConnectionManager::execute_prepared_terminal_close(&prepared).is_ok());
+    assert!(manager.terminals.contains_key(&terminal_id));
+
+    manager.finish_close_terminal(&prepared);
+    assert!(!manager.terminals.contains_key(&terminal_id));
+    assert_eq!(
+        manager
+            .sessions
+            .get(&session_id)
+            .and_then(|session| session.terminal_id),
+        None
+    );
+
+    let received = receiver.blocking_recv();
+    assert!(matches!(received, Some(TerminalCommand::Close)));
+}
+
+#[test]
+fn test_finish_close_terminal_does_not_clear_mismatched_terminal_attachment() {
+    let mut manager = DefaultConnectionManager::new();
+    let session_id = Uuid::new_v4();
+    let active_terminal_id = Uuid::new_v4();
+    let stale_terminal_id = Uuid::new_v4();
+    let (sender, _receiver) = mpsc::channel(1);
+
+    manager.sessions.insert(
+        session_id,
+        SessionInfo {
+            id: session_id,
+            connection_id: Uuid::new_v4(),
+            status: ConnectionStatus::Connected,
+            terminal_id: Some(active_terminal_id),
+            created_at: Utc::now(),
+            last_active: Utc::now(),
+        },
+    );
+    manager.terminals.insert(
+        stale_terminal_id,
+        TerminalSession {
+            id: stale_terminal_id,
+            session_id,
+            sender: sender.clone(),
+        },
+    );
+
+    let prepared = PreparedTerminalClose {
+        terminal_id: stale_terminal_id,
+        session_id,
+        sender,
+    };
+    manager.finish_close_terminal(&prepared);
+
+    assert_eq!(
+        manager
+            .sessions
+            .get(&session_id)
+            .and_then(|session| session.terminal_id),
+        Some(active_terminal_id)
+    );
+}
+
+#[test]
+fn test_handle_terminal_exit_disconnects_session_on_connection_lost() {
+    let mut manager = DefaultConnectionManager::new();
+    let session_id = Uuid::new_v4();
+    let terminal_id = Uuid::new_v4();
+    let (sender, _receiver) = mpsc::channel(1);
+
+    manager.sessions.insert(
+        session_id,
+        SessionInfo {
+            id: session_id,
+            connection_id: Uuid::new_v4(),
+            status: ConnectionStatus::Connected,
+            terminal_id: Some(terminal_id),
+            created_at: Utc::now(),
+            last_active: Utc::now(),
+        },
+    );
+    manager.terminals.insert(
+        terminal_id,
+        TerminalSession {
+            id: terminal_id,
+            session_id,
+            sender,
+        },
+    );
+    {
+        let mut tracker = manager
+            .tracker
+            .lock()
+            .expect("failed to lock tracker before exit");
+        tracker.register_session(session_id);
+    }
+
+    manager.handle_terminal_exit(&session_id, "connection_lost");
+
+    assert!(!manager.sessions.contains_key(&session_id));
+    assert!(!manager.terminals.contains_key(&terminal_id));
+    let tracker = manager
+        .tracker
+        .lock()
+        .expect("failed to lock tracker after exit");
+    assert!(tracker.get_stats(&session_id).is_none());
+}
+
+#[test]
+fn test_handle_terminal_exit_normal_cleans_terminal_but_keeps_session() {
+    let mut manager = DefaultConnectionManager::new();
+    let session_id = Uuid::new_v4();
+    let terminal_id = Uuid::new_v4();
+    let (sender, _receiver) = mpsc::channel(1);
+
+    manager.sessions.insert(
+        session_id,
+        SessionInfo {
+            id: session_id,
+            connection_id: Uuid::new_v4(),
+            status: ConnectionStatus::Connected,
+            terminal_id: Some(terminal_id),
+            created_at: Utc::now(),
+            last_active: Utc::now(),
+        },
+    );
+    manager.terminals.insert(
+        terminal_id,
+        TerminalSession {
+            id: terminal_id,
+            session_id,
+            sender,
+        },
+    );
+    {
+        let mut tracker = manager
+            .tracker
+            .lock()
+            .expect("failed to lock tracker before exit");
+        tracker.register_session(session_id);
+    }
+
+    manager.handle_terminal_exit(&session_id, "normal");
+
+    assert!(manager.sessions.contains_key(&session_id));
+    assert_eq!(
+        manager
+            .sessions
+            .get(&session_id)
+            .and_then(|session| session.terminal_id),
+        None
+    );
+    assert!(!manager.terminals.contains_key(&terminal_id));
+    let tracker = manager
+        .tracker
+        .lock()
+        .expect("failed to lock tracker after exit");
+    assert!(tracker.get_stats(&session_id).is_none());
+}
+
+#[test]
+fn test_finish_close_after_terminal_exit_is_idempotent() {
+    let mut manager = DefaultConnectionManager::new();
+    let session_id = Uuid::new_v4();
+    let terminal_id = Uuid::new_v4();
+    let (sender, mut receiver) = mpsc::channel(2);
+
+    manager.sessions.insert(
+        session_id,
+        SessionInfo {
+            id: session_id,
+            connection_id: Uuid::new_v4(),
+            status: ConnectionStatus::Connected,
+            terminal_id: Some(terminal_id),
+            created_at: Utc::now(),
+            last_active: Utc::now(),
+        },
+    );
+    manager.terminals.insert(
+        terminal_id,
+        TerminalSession {
+            id: terminal_id,
+            session_id,
+            sender,
+        },
+    );
+    {
+        let mut tracker = manager
+            .tracker
+            .lock()
+            .expect("failed to lock tracker before exit");
+        tracker.register_session(session_id);
+    }
+
+    let prepared = manager
+        .prepare_close_terminal(&session_id)
+        .expect("prepare close should succeed");
+    assert!(DefaultConnectionManager::execute_prepared_terminal_close(&prepared).is_ok());
+
+    // Simulate remote side exiting while close flow is still in progress.
+    manager.handle_terminal_exit(&session_id, "user_closed");
+    manager.finish_close_terminal(&prepared);
+
+    assert!(manager.sessions.contains_key(&session_id));
+    assert_eq!(
+        manager
+            .sessions
+            .get(&session_id)
+            .and_then(|session| session.terminal_id),
+        None
+    );
+    assert!(!manager.terminals.contains_key(&terminal_id));
+    let tracker = manager
+        .tracker
+        .lock()
+        .expect("failed to lock tracker after idempotent close");
+    assert!(tracker.get_stats(&session_id).is_none());
+
+    let received = receiver.blocking_recv();
+    assert!(matches!(received, Some(TerminalCommand::Close)));
+}
+
+#[test]
+fn test_prepared_close_after_connection_lost_terminal_exit_is_safe() {
+    let mut manager = DefaultConnectionManager::new();
+    let session_id = Uuid::new_v4();
+    let terminal_id = Uuid::new_v4();
+    let (sender, _receiver) = mpsc::channel(2);
+
+    manager.sessions.insert(
+        session_id,
+        SessionInfo {
+            id: session_id,
+            connection_id: Uuid::new_v4(),
+            status: ConnectionStatus::Connected,
+            terminal_id: Some(terminal_id),
+            created_at: Utc::now(),
+            last_active: Utc::now(),
+        },
+    );
+    manager.terminals.insert(
+        terminal_id,
+        TerminalSession {
+            id: terminal_id,
+            session_id,
+            sender,
+        },
+    );
+    {
+        let mut tracker = manager
+            .tracker
+            .lock()
+            .expect("failed to lock tracker before exit");
+        tracker.register_session(session_id);
+    }
+
+    let prepared = manager
+        .prepare_close_terminal(&session_id)
+        .expect("prepare close should succeed");
+
+    // Simulate remote termination winning the race before local close finalizes.
+    manager.handle_terminal_exit(&session_id, "connection_lost");
+    assert!(!manager.sessions.contains_key(&session_id));
+    assert!(!manager.terminals.contains_key(&terminal_id));
+
+    // Late-arriving local close should not resurrect state or panic.
+    assert!(DefaultConnectionManager::execute_prepared_terminal_close(&prepared).is_ok());
+    manager.finish_close_terminal(&prepared);
+    manager.handle_terminal_exit(&session_id, "connection_lost");
+
+    assert!(!manager.sessions.contains_key(&session_id));
+    assert!(!manager.terminals.contains_key(&terminal_id));
+    let tracker = manager
+        .tracker
+        .lock()
+        .expect("failed to lock tracker after connection_lost race");
+    assert!(tracker.get_stats(&session_id).is_none());
 }

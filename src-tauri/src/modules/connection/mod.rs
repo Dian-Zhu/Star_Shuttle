@@ -36,6 +36,7 @@ pub use self::config::{
 use self::connect_helpers::{connect_telnet, immediate_hop, preflight_connectivity_check};
 use self::credential_sync::fill_saved_credentials;
 use self::flow::{
+    clear_session_terminal_if_matches as clear_session_terminal_if_matches_flow,
     finish_connect_failure as finish_connect_failure_flow,
     finish_connect_success as finish_connect_success_flow,
     finish_disconnect as finish_disconnect_flow,
@@ -55,7 +56,9 @@ use self::manager_shell::{
 };
 use self::ssh_connect::connect_ssh_via_proxy;
 use self::telnet::TelnetConnection;
-pub use self::terminal_control::{try_send_terminal_command, TerminalCommand, TerminalSession};
+pub use self::terminal_control::{
+    try_send_terminal_command, PreparedTerminalClose, TerminalCommand, TerminalSession,
+};
 use self::terminal_exec::execute_prepared_terminal_start as execute_prepared_terminal_start_impl;
 use self::types::{
     ConnectArtifacts, ConnectCompletion, PreparedConnect, PreparedConnectOperation,
@@ -185,6 +188,13 @@ impl Default for DefaultConnectionManager {
 }
 
 impl DefaultConnectionManager {
+    fn should_disconnect_after_terminal_exit(exit_reason: &str) -> bool {
+        matches!(
+            exit_reason,
+            "connection_lost" | "server_closed" | "keepalive_failed" | "read_error" | "write_error"
+        )
+    }
+
     pub fn new() -> Self {
         let runtime = Runtime::new().expect("Failed to create Tokio runtime");
         Self {
@@ -417,6 +427,66 @@ impl DefaultConnectionManager {
     ) -> Result<bool, ConnectionError> {
         finish_start_terminal_flow(&mut self.sessions, &mut self.terminals, started)
     }
+
+    pub(crate) fn prepare_close_terminal(
+        &self,
+        session_id: &Uuid,
+    ) -> Result<PreparedTerminalClose, ConnectionError> {
+        terminal_control::prepare_terminal_close(&self.terminals, session_id)
+    }
+
+    pub(crate) fn execute_prepared_terminal_close(
+        prepared: &PreparedTerminalClose,
+    ) -> Result<(), ConnectionError> {
+        terminal_control::execute_prepared_terminal_close(prepared)
+    }
+
+    pub(crate) fn finish_close_terminal(&mut self, prepared: &PreparedTerminalClose) {
+        terminal_control::finish_terminal_close(&mut self.terminals, prepared);
+        let _ = clear_session_terminal_if_matches_flow(
+            &mut self.sessions,
+            prepared.session_id,
+            Some(prepared.terminal_id),
+        );
+    }
+
+    pub(crate) fn handle_terminal_exit(&mut self, session_id: &Uuid, exit_reason: &str) {
+        if let Some(terminal_id) =
+            terminal_control::remove_terminal_by_session(&mut self.terminals, session_id)
+        {
+            let _ = clear_session_terminal_if_matches_flow(
+                &mut self.sessions,
+                *session_id,
+                Some(terminal_id),
+            );
+        }
+
+        if Self::should_disconnect_after_terminal_exit(exit_reason) {
+            match self.prepare_disconnect(session_id) {
+                Ok(()) => {
+                    self.finish_disconnect(session_id);
+                    info!(
+                        "Session {} disconnected after terminal exit ({})",
+                        session_id, exit_reason
+                    );
+                    return;
+                }
+                Err(ConnectionError::SessionNotFound(_)) => {
+                    return;
+                }
+                Err(err) => {
+                    warn!(
+                        "Failed to prepare disconnect for session {} after terminal exit ({}): {}",
+                        session_id, exit_reason, err
+                    );
+                }
+            }
+        }
+
+        if let Ok(mut tracker) = self.tracker.lock() {
+            tracker.unregister_session(session_id);
+        }
+    }
 }
 
 impl ConnectionManager for DefaultConnectionManager {
@@ -533,9 +603,7 @@ impl ConnectionManager for DefaultConnectionManager {
 
     fn close_terminal(&mut self, session_id: &Uuid) -> Result<(), ConnectionError> {
         terminal_control::close_terminal(&mut self.terminals, session_id)?;
-        if let Some(session) = self.sessions.get_mut(session_id) {
-            session.terminal_id = None;
-        }
+        let _ = clear_session_terminal_if_matches_flow(&mut self.sessions, *session_id, None);
 
         info!("Terminal closed for session: {}", session_id);
         Ok(())

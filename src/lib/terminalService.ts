@@ -8,6 +8,7 @@ import { WebLinksAddon } from 'xterm-addon-web-links';
 import { get } from 'svelte/store';
 import {
   activeTerminals,
+  activeTerminalSessionIds,
   connections,
   selectedTerminalIndex,
   type Connection,
@@ -21,14 +22,61 @@ import {
   getXtermTheme,
   getBaseXtermTheme,
   terminalSessionMap,
+  terminalSessionStates,
+  setTerminalSessionState,
+  removeTerminalSessionState,
   connectingConnections,
   clearErrorMessage,
   showErrorMessage,
   showSuccessMessage,
 } from './store';
-import { auditService } from './auditService';
 import { terminalPool } from './terminalPool';
 import { TerminalInstance } from './terminalInstance';
+import { computeNextSelectedIndexAfterRemoval } from './terminalStateUtils';
+import {
+  attachTerminalInputListener as attachTerminalInputListenerRegistry,
+  armTerminalKeyListener,
+  clearOutputListenerCleanup,
+  clearReconnectKeyListener,
+  deleteOutputListenerCleanup,
+  detachTerminalInputListener,
+  getOutputListenerCleanup,
+  setOutputListenerCleanup,
+} from './terminalListenerRegistry';
+import {
+  BASE_AUTO_RECONNECT_DELAY_MS,
+  clearReconnectAttempts,
+  clearReconnectConfig,
+  clearReconnectInFlight,
+  clearReconnectTimer as clearReconnectTimerState,
+  getReconnectAttempts,
+  getReconnectConfig,
+  getReconnectInFlight,
+  isReconnectSuppressed,
+  MAX_AUTO_RECONNECT_RETRIES,
+  MAX_AUTO_RECONNECT_DELAY_MS,
+  releaseReconnectSuppressionState,
+  rememberReconnectConfig as rememberReconnectConfigState,
+  setReconnectAttempts,
+  setReconnectInFlight,
+  setReconnectTimer,
+  suppressReconnectState,
+} from './terminalReconnectState';
+import {
+  cleanupBufferedIoState,
+  disposeOutputBuffer,
+  enqueueTerminalOutput,
+  initializeOutputBuffer,
+  sendTerminalDataBuffered as queueTerminalDataBuffered,
+  type IoLogger,
+} from './terminalIoBuffer';
+import {
+  canAttemptSessionReconnect,
+  canContinueSessionReconnectFlow,
+  interpretBackendSession,
+  type BackendSessionInfo,
+  type TerminalSessionReconnectContext,
+} from './terminalSessionModel';
 import {
   buildHostKeyConfirmMessage,
   parseHostKeyPrompt,
@@ -38,9 +86,7 @@ import 'xterm/css/xterm.css';
 
 const IS_DEV = import.meta.env.DEV;
 
-/**
- * xterm 6.0: Unified logging with context-aware prefixes
- */
+// Dev-only logger for terminal orchestration.
 const log = {
   info: (component: string, message: string, ...args: any[]) => {
     if (IS_DEV) {
@@ -64,76 +110,31 @@ const log = {
   }
 };
 
-/**
- * xterm 6.0: Error handling with user-friendly messages
- */
-function handleTerminalError(error: unknown, context: string, userMessage?: string) {
+const ioLogger: IoLogger = log;
+
+function reportTerminalError(error: unknown, context: string, userMessage?: string) {
   const errorMsg = error instanceof Error ? error.message : String(error);
 
   if (IS_DEV) {
     log.error('TermError', `${context}: ${errorMsg}`, error);
   }
 
-  // User-facing error message
   if (userMessage) {
     showErrorMessage(userMessage, 5000);
   }
 }
 
-/**
- * Output listeners storage - maps session IDs to cleanup functions
- * These listeners handle terminal output events from the backend
- */
-const outputListeners = new Map<string, () => void>();
-
-/**
- * Input listeners storage - maps session IDs to disposables
- * These listeners handle user input events
- */
-const inputListeners = new Map<string, { dispose: () => void }>();
-
-/**
- * Session status monitoring - maps session IDs to cleanup functions
- */
-const sessionStatusListeners = new Map<string, () => void>();
-
-/**
- * Reconnection tracking
- */
-const reconnectAttempts = new Map<string, number>();
-const reconnectTimers = new Map<string, number>();
-const reconnectKeyListeners = new Map<string, { dispose: () => void }>();
-const reconnectInFlight = new Map<string, Promise<boolean>>();
-const reconnectSuppressed = new Set<string>();
-const reconnectConnectConfigs = new Map<string, any>();
-const MAX_AUTO_RECONNECT_RETRIES = 5;
-const BASE_AUTO_RECONNECT_DELAY_MS = 1500;
-const MAX_AUTO_RECONNECT_DELAY_MS = 30000;
-
-/**
- * Track which terminal sessions have been started
- */
+// Sessions that currently have a live backend terminal.
 const startedTerminalSessions = new Set<string>();
 
-/**
- * Mark a terminal session as started
- * @param sessionId - The session ID to mark
- */
 export function markTerminalStarted(sessionId: string) {
   startedTerminalSessions.add(sessionId);
 }
 
-/**
- * Mark a terminal session as stopped
- * @param sessionId - The session ID to unmark
- */
 export function markTerminalStopped(sessionId: string) {
   startedTerminalSessions.delete(sessionId);
 }
 
-/**
- * Helper to convert hex to rgba
- */
 function hexToRgba(hex: string, alpha: number): string {
   const cleanHex = hex.replace('#', '');
   const r = parseInt(cleanHex.substring(0, 2), 16);
@@ -214,151 +215,109 @@ export function calculateBrightness(color: string): number {
   return (r * 299 + g * 587 + b * 114) / 1000;
 }
 
-/**
- * State for managing terminal output writes in xterm 6.0
- * @property chunks - Array of pending output chunks to write
- * @property chunkIndex - Current position in chunks array
- * @property scheduled - Scheduled write job (RAF or timeout)
- * @property writing - Whether a write is currently in progress
- * @property disposed - Whether the state has been disposed
- * @property chunkBudget - Adaptive budget for chunk size (optimizes performance)
- * @property lastWriteTime - Timing of the last write (for performance monitoring)
- * @property consecutiveSlowWrites - Count of consecutive slow writes (triggers budget reduction)
- */
-type OutputWriteState = {
-  chunks: string[];
-  chunkIndex: number;
-  scheduled: { id: number; kind: 'raf' | 'timeout' } | null;
-  writing: boolean;
-  disposed: boolean;
-  chunkBudget: number;
-  lastWriteTime: number;
-  consecutiveSlowWrites: number;
-};
-
-/**
- * State for managing terminal input sends in xterm 6.0
- * @property buffer - Buffer of pending input to send
- * @property timer - Scheduled flush job (RAF or timeout)
- * @property sending - Whether a send is currently in progress
- * @property lastFlushTime - Timing of the last flush
- * @property pendingChunks - Number of chunks pending to be sent (adaptive throttling)
- */
-type InputSendState = {
-  buffer: string;
-  timer: { id: number; kind: 'raf' | 'timeout' } | null;
-  sending: boolean;
-  disposed: boolean;
-  lastFlushTime: number;
-  pendingChunks: number;
-};
-
-const outputWriteStates = new Map<string, OutputWriteState>();
-const inputSendStates = new Map<string, InputSendState>();
-const commandAuditBuffers = new Map<string, string>();
-// Populated by restoreActiveSessions() so initDetachedTerminal can re-attach to an
-// already-started backend terminal without calling start_terminal again.
+// Sessions discovered during restore that already have a backend terminal.
 const restoredSessionsWithBackendTerminal = new Set<string>();
 
 function cleanupBufferedTerminalState(sessionId: string) {
   markTerminalStopped(sessionId);
-
-  const outputState = outputWriteStates.get(sessionId);
-  if (outputState) {
-    outputState.disposed = true;
-    if (outputState.scheduled !== null) {
-      cancelScheduled(outputState.scheduled);
-    }
-    outputWriteStates.delete(sessionId);
-  }
-
-  const inputState = inputSendStates.get(sessionId);
-  if (inputState) {
-    inputState.disposed = true;
-    inputState.buffer = '';
-    if (inputState.timer !== null) {
-      cancelScheduled(inputState.timer);
-    }
-    inputSendStates.delete(sessionId);
-  }
-
-  commandAuditBuffers.delete(sessionId);
-  reconnectConnectConfigs.delete(sessionId);
+  cleanupBufferedIoState(sessionId);
+  clearReconnectConfig(sessionId);
 }
 
-function cleanupTerminalListeners(sessionId: string) {
-  const unlisten = outputListeners.get(sessionId);
-  if (unlisten) {
-    unlisten();
-    outputListeners.delete(sessionId);
-  }
-
-  const inputListener = inputListeners.get(sessionId);
-  if (inputListener) {
-    inputListener.dispose();
-    inputListeners.delete(sessionId);
-  }
-
-  const statusUnlisten = sessionStatusListeners.get(sessionId);
-  if (statusUnlisten) {
-    statusUnlisten();
-    sessionStatusListeners.delete(sessionId);
-  }
-}
-
-function nowMs(): number {
-  if (typeof performance !== 'undefined' && typeof performance.now === 'function') return performance.now();
-  return Date.now();
-}
-
-function cloneConnectConfig(config: any): any {
-  if (typeof structuredClone === 'function') {
-    try {
-      return structuredClone(config);
-    } catch {
-      // fall through to JSON clone
-    }
-  }
-  try {
-    return JSON.parse(JSON.stringify(config));
-  } catch {
-    return config;
-  }
-}
-
-function rememberReconnectConfig(sessionId: string, connectConfig: any) {
-  reconnectConnectConfigs.set(sessionId, cloneConnectConfig(connectConfig));
-}
-
-function writeTerminalAsync(term: Terminal, data: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    try {
-      term.write(data, () => resolve());
-    } catch (error) {
-      reject(error);
-    }
+function updateSessionLifecycleState(
+  sessionId: string,
+  connectionPhase: 'connected' | 'reconnecting' | 'closing' | 'closed',
+  terminalPhase: 'detached' | 'starting' | 'attached' | 'closed',
+  reason: string | null = null,
+  restored = false
+) {
+  setTerminalSessionState(sessionId, {
+    connectionPhase,
+    terminalPhase,
+    reason,
+    restored,
   });
 }
 
-function scheduleNext(callback: () => void): { id: number; kind: 'raf' | 'timeout' } {
-  const hidden = typeof document !== 'undefined' && document.hidden === true;
-  if (!hidden && typeof requestAnimationFrame === 'function') {
-    return { id: requestAnimationFrame(callback), kind: 'raf' };
-  }
-  const timeout = (typeof window !== 'undefined' ? window.setTimeout : setTimeout) as typeof setTimeout;
-  return { id: timeout(callback, 0) as unknown as number, kind: 'timeout' };
+function getSessionReconnectContext(sessionId: string): TerminalSessionReconnectContext {
+  return {
+    inUi: get(activeTerminalSessionIds).has(sessionId),
+    reconnectSuppressed: isReconnectSuppressed(sessionId),
+    reconnectInFlight: Boolean(getReconnectInFlight(sessionId)),
+  };
 }
 
-function cancelScheduled(job: { id: number; kind: 'raf' | 'timeout' } | null) {
-  if (!job) return;
-  if (job.kind === 'raf') {
-    cancelAnimationFrame(job.id);
-    return;
-  }
-  const clear = (typeof window !== 'undefined' ? window.clearTimeout : clearTimeout) as typeof clearTimeout;
-  clear(job.id as unknown as ReturnType<typeof setTimeout>);
+function canAttemptReconnectForSession(sessionId: string): boolean {
+  const context = getSessionReconnectContext(sessionId);
+  const state = get(terminalSessionStates).get(sessionId);
+  return canAttemptSessionReconnect(state, context);
 }
 
+function canContinueReconnectForSession(sessionId: string): boolean {
+  const context = getSessionReconnectContext(sessionId);
+  const state = get(terminalSessionStates).get(sessionId);
+  return canContinueSessionReconnectFlow(state, {
+    inUi: context.inUi,
+    reconnectSuppressed: context.reconnectSuppressed,
+  });
+}
+
+function attachTerminalInputListener(sessionId: string, term: Terminal) {
+  attachTerminalInputListenerRegistry(sessionId, term, (data: string) => {
+    handleTerminalInput(sessionId, data);
+  });
+}
+
+function cleanupTerminalListeners(sessionId: string) {
+  clearOutputListenerCleanup(sessionId);
+  detachTerminalInputListener(sessionId);
+}
+
+function removeSessionReferences(sessionId: string) {
+  broadcastSessionIds.update(ids => ids.filter(id => id !== sessionId));
+  terminalSessionMap.update(map => {
+    map.delete(sessionId);
+    for (const children of map.values()) {
+      children.delete(sessionId);
+    }
+    return map;
+  });
+}
+
+function removeTerminalFromUi(sessionId: string): boolean {
+  const terminals = get(activeTerminals);
+  const removedIndex = terminals.findIndex(t => t.sessionId === sessionId);
+  if (removedIndex < 0) {
+    removeSessionReferences(sessionId);
+    return false;
+  }
+
+  const currentIndex = get(selectedTerminalIndex);
+  activeTerminals.update(items => items.filter(t => t.sessionId !== sessionId));
+  removeSessionReferences(sessionId);
+  selectedTerminalIndex.set(
+    computeNextSelectedIndexAfterRemoval(currentIndex, removedIndex, terminals.length)
+  );
+  return true;
+}
+
+function shouldTreatMissingSessionAsClosed(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  return message.includes('Session not found');
+}
+
+function finalizeTerminalClosure(sessionId: string) {
+  cleanupBufferedTerminalState(sessionId);
+  terminalPool.destroyInstance(sessionId);
+  cleanupTerminalListeners(sessionId);
+  removeTerminalFromUi(sessionId);
+  releaseReconnectSuppression(sessionId);
+  removeTerminalSessionState(sessionId);
+}
+
+function cacheReconnectConfig(sessionId: string, connectConfig: any) {
+  rememberReconnectConfigState(sessionId, connectConfig);
+}
 
 async function invokeWithTimeout<T>(cmd: string, args: any, timeoutMs: number = 30000): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -431,7 +390,8 @@ export async function connectAndOpen(connection: Connection, connectConfig?: any
 
     if (protocol === 'Telnet') {
       const sessionId = await invokeWithTimeout<string>('connect', { config: baseConfig });
-      rememberReconnectConfig(sessionId, baseConfig);
+      cacheReconnectConfig(sessionId, baseConfig);
+      updateSessionLifecycleState(sessionId, 'connected', 'detached');
 
       let nextSelectedIndex = -1;
       let alreadyExists = false;
@@ -484,7 +444,8 @@ export async function connectAndOpen(connection: Connection, connectConfig?: any
     }
 
     const { sessionId, connectConfig: effectiveConnectConfig } = await connectWithInteractivePrompts(baseConfig, connection.name);
-    rememberReconnectConfig(sessionId, effectiveConnectConfig);
+    cacheReconnectConfig(sessionId, effectiveConnectConfig);
+    updateSessionLifecycleState(sessionId, 'connected', 'detached');
     
     let nextSelectedIndex = -1;
     let alreadyExists = false;
@@ -611,7 +572,8 @@ function applyPromptedPassword(config: any, password: string): any {
 
 export async function createTerminalSession(connection: Connection): Promise<string> {
   const { sessionId, connectConfig } = await connectWithInteractivePrompts(connection, connection.name);
-  rememberReconnectConfig(sessionId, connectConfig);
+  cacheReconnectConfig(sessionId, connectConfig);
+  updateSessionLifecycleState(sessionId, 'connected', 'detached');
   return sessionId;
 }
 
@@ -655,7 +617,7 @@ function resetTerminalInitState(sessionId: string, term?: Terminal | null) {
     try {
       term.dispose();
     } catch {
-      // Ignore disposal failures while resetting a terminal instance.
+      // Best-effort cleanup only.
     }
   }
 }
@@ -774,7 +736,6 @@ async function fitTerminalLayout(
 async function initializeTerminalCore(
   container: HTMLElement,
   sessionId: string,
-  connection: Connection,
   mode: TerminalInitMode
 ): Promise<TerminalInitCommon> {
   resetTerminalInitState(sessionId);
@@ -802,10 +763,7 @@ async function initializeTerminalCore(
   const webglAddon = attachWebglAddon(term, mode);
   await fitTerminalLayout(container, fitAddon, mode);
 
-  const inputDisposable = term.onData((data: string) => {
-    handleTerminalInput(sessionId, data, connection);
-  });
-  inputListeners.set(sessionId, inputDisposable);
+  attachTerminalInputListener(sessionId, term);
   await setupTerminalListeners(sessionId, term);
 
   return { appSettings, term, fitAddon, searchAddon, webglAddon };
@@ -820,8 +778,11 @@ async function startBackendTerminalSession(
     // Renderer was restarted while backend terminal still exists; we can re-attach
     // by setting up listeners only. Do NOT call start_terminal again.
     markTerminalStarted(sessionId);
+    updateSessionLifecycleState(sessionId, 'connected', 'attached', null, true);
     return true;
   }
+
+  updateSessionLifecycleState(sessionId, 'connected', 'starting');
 
   let result: unknown;
   try {
@@ -835,21 +796,27 @@ async function startBackendTerminalSession(
     // Be tolerant to backend already having a terminal attached (e.g. restore path).
     if (msg.toLowerCase().includes('already started')) {
       markTerminalStarted(sessionId);
+      updateSessionLifecycleState(sessionId, 'connected', 'attached');
       return true;
     }
 
     if (logFailure) {
       log.error('TermInit', 'Failed to start terminal session', error);
     }
+    updateSessionLifecycleState(sessionId, 'connected', 'closed', 'start_failed');
     void term.write('\r\n\x1b[31mFailed to start terminal session\x1b[0m\r\n');
     showErrorMessage('启动终端会话失败', 5000);
     return false;
   }
 
-  if (result) return true;
+  if (result) {
+    updateSessionLifecycleState(sessionId, 'connected', 'attached');
+    return true;
+  }
   if (logFailure) {
     log.error('TermInit', 'Failed to start terminal session', null);
   }
+  updateSessionLifecycleState(sessionId, 'connected', 'closed', 'start_failed');
   void term.write('\r\n\x1b[31mFailed to start terminal session\x1b[0m\r\n');
   showErrorMessage('启动终端会话失败', 5000);
   return false;
@@ -858,7 +825,7 @@ async function startBackendTerminalSession(
 export async function initTerminal(container: HTMLElement, sessionId: string, connection: Connection): Promise<ActiveTerminal | null> {
   let initialized: TerminalInitCommon | null = null;
   try {
-    initialized = await initializeTerminalCore(container, sessionId, connection, 'attached');
+    initialized = await initializeTerminalCore(container, sessionId, 'attached');
     const { appSettings, term, fitAddon, searchAddon, webglAddon } = initialized;
     const started = await startBackendTerminalSession(sessionId, term, true);
     if (!started) {
@@ -905,19 +872,36 @@ export async function initTerminal(container: HTMLElement, sessionId: string, co
     };
   } catch (error) {
     resetTerminalInitState(sessionId, initialized?.term);
-    handleTerminalError(error, 'initTerminal', '初始化终端失败');
+    reportTerminalError(error, 'initTerminal', '初始化终端失败');
     return null;
   }
 }
 
 export async function initDetachedTerminal(container: HTMLElement, sessionId: string, connection: Connection): Promise<ActiveTerminal | null> {
+  const recoverFromInitFailure = async (term?: Terminal) => {
+    resetTerminalInitState(sessionId, term);
+    suppressReconnect(sessionId);
+    cleanupBufferedTerminalState(sessionId);
+    cleanupTerminalListeners(sessionId);
+    terminalPool.destroyInstance(sessionId);
+    removeTerminalFromUi(sessionId);
+    try {
+      await invoke('disconnect', { sessionId });
+    } catch (disconnectError) {
+      log.warn('TermInit', 'Best-effort disconnect failed after detached init failure', disconnectError, {
+        sessionId,
+      });
+    }
+    removeTerminalSessionState(sessionId);
+  };
+
   let initialized: TerminalInitCommon | null = null;
   try {
-    initialized = await initializeTerminalCore(container, sessionId, connection, 'detached');
+    initialized = await initializeTerminalCore(container, sessionId, 'detached');
     const { appSettings, term, fitAddon, searchAddon, webglAddon } = initialized;
     const started = await startBackendTerminalSession(sessionId, term, false);
     if (!started) {
-      resetTerminalInitState(sessionId, term);
+      await recoverFromInitFailure(term);
       return null;
     }
 
@@ -946,8 +930,8 @@ export async function initDetachedTerminal(container: HTMLElement, sessionId: st
       searchAddon,
     };
   } catch (error) {
-    resetTerminalInitState(sessionId, initialized?.term);
-    handleTerminalError(error, 'initDetachedTerminal', '初始化终端失败');
+    await recoverFromInitFailure(initialized?.term);
+    reportTerminalError(error, 'initDetachedTerminal', '初始化终端失败');
     return null;
   }
 }
@@ -960,257 +944,16 @@ export async function sendTerminalData(sessionId: string, data: string) {
   }
 }
 
-/**
- * xterm 6.0: Get or create input send state with tracking
- */
-function getInputSendState(sessionId: string): InputSendState {
-  const existing = inputSendStates.get(sessionId);
-  if (existing && !existing.disposed) return existing;
-  const created: InputSendState = {
-    buffer: '',
-    timer: null,
-    sending: false,
-    disposed: false,
-    lastFlushTime: 0,
-    pendingChunks: 0,
-  };
-  inputSendStates.set(sessionId, created);
-  return created;
-}
-
-/**
- * xterm 6.0: Optimized input flushing with better batching
- */
-async function flushTerminalInput(sessionId: string, state: InputSendState) {
-  if (state.disposed) return;
-  if (inputSendStates.get(sessionId) !== state) return;
-  if (state.sending) return;
-  if (!state.buffer) return;
-
-  state.sending = true;
-  const now = nowMs();
-
-  try {
-    if (state.disposed || inputSendStates.get(sessionId) !== state) return;
-    // xterm 6.0: Adaptive payload size based on recent performance
-    const maxPayload = state.pendingChunks > 5 ? 4096 : 2048;
-    const payload = state.buffer.slice(0, maxPayload);
-    state.buffer = state.buffer.slice(payload.length);
-
-    state.pendingChunks++;
-    await invoke('send_terminal_data', { sessionId, data: payload });
-    state.lastFlushTime = nowMs() - now;
-
-    // xterm 6.0: Reduce pending chunk counter on successful send
-    if (state.pendingChunks > 0) {
-      state.pendingChunks--;
-    }
-  } catch (error) {
-    log.error('TermInput', 'Failed to send terminal data', error, {
-      sessionId,
-      bufferLength: state.buffer.length,
-      pendingChunks: state.pendingChunks,
-    });
-  } finally {
-    state.sending = false;
-  }
-
-  if (state.disposed || inputSendStates.get(sessionId) !== state) return;
-  if (state.buffer.length > 0 && state.timer === null) {
-    state.timer = scheduleNext(() => {
-      // This state may have been cleaned up while the callback was pending.
-      if (inputSendStates.get(sessionId) !== state || state.disposed) return;
-      state.timer = null;
-      void flushTerminalInput(sessionId, state);
-    });
-  }
-}
-
-/**
- * xterm 6.0: Enhanced input buffering with adaptive thresholds
- */
 function sendTerminalDataBuffered(sessionId: string, data: string, immediate: boolean) {
-  const state = getInputSendState(sessionId);
-  if (state.disposed || inputSendStates.get(sessionId) !== state) return;
-  state.buffer += data;
-
-  // xterm 6.0: Dynamic threshold based on recent activity
-  const threshold = state.pendingChunks > 10 ? 2048 : 1024;
-  if (state.buffer.length >= threshold) {
-    if (!immediate) {
-      log.info('TermInput', 'Force immediate flush', {
-        bufferLength: state.buffer.length,
-        threshold,
-        pendingChunks: state.pendingChunks,
-      });
-    }
-    immediate = true;
-  }
-
-  if (state.timer !== null) {
-    if (!immediate) return;
-    cancelScheduled(state.timer);
-    state.timer = null;
-  }
-
-  if (immediate) {
-    log.info('TermInput', 'Immediate flush', {
-      dataLength: data.length,
-      bufferLength: state.buffer.length,
-    });
-    void flushTerminalInput(sessionId, state);
-    return;
-  }
-
-  // xterm 6.0: Use minimal delay with RAF for smooth timing
-  state.timer = scheduleNext(() => {
-    if (inputSendStates.get(sessionId) !== state || state.disposed) return;
-    state.timer = null;
-    void flushTerminalInput(sessionId, state);
+  queueTerminalDataBuffered(sessionId, data, immediate, {
+    invokeSend: async (targetSessionId: string, payload: string) => {
+      await invoke('send_terminal_data', { sessionId: targetSessionId, data: payload });
+    },
+    logger: ioLogger,
   });
 }
 
 function handleTerminalInputSingle(sessionId: string, data: string) {
-  void handleTerminalInputSingleAsync(sessionId, data);
-}
-
-function extractCommandsForAudit(sessionId: string, data: string): string[] {
-  let buffer = commandAuditBuffers.get(sessionId) ?? '';
-  const commands: string[] = [];
-
-  for (const ch of data) {
-    if (ch === '\r' || ch === '\n') {
-      const command = buffer.trim();
-      if (command) {
-        commands.push(command);
-      }
-      buffer = '';
-      continue;
-    }
-
-    if (ch === '\u007f' || ch === '\b') {
-      buffer = buffer.slice(0, -1);
-      continue;
-    }
-
-    if (ch === '\u0015') {
-      buffer = '';
-      continue;
-    }
-
-    if (ch === '\u0003' || ch === '\u001b') {
-      buffer = '';
-      continue;
-    }
-
-    if (ch >= ' ' || ch === '\t') {
-      buffer += ch;
-    }
-  }
-
-  commandAuditBuffers.set(sessionId, buffer);
-  return commands;
-}
-
-function summarizeCommandForAudit(command: string, riskLevel: string): string {
-  let summary = command.replace(/\s+/g, ' ').trim();
-  if (!summary) return '<empty>';
-
-  summary = summary.replace(
-    /\b([A-Za-z_][A-Za-z0-9_]*(?:pass(word)?|token|secret|api[_-]?key|access[_-]?key|private[_-]?key|pwd))\s*=\s*(?:'[^']*'|"[^"]*"|[^\s;]+)/gi,
-    '$1=<redacted>',
-  );
-  summary = summary.replace(
-    /(--?(?:password|passphrase|passwd|token|secret|api[_-]?key|access[_-]?key|private[_-]?key)\b(?:=|\s+))(?:'[^']*'|"[^"]*"|[^\s;]+)/gi,
-    '$1<redacted>',
-  );
-  summary = summary.replace(
-    /\b(-p)\s+(?:'[^']*'|"[^"]*"|[^\s;]+)/g,
-    '$1 <redacted>',
-  );
-  summary = summary.replace(
-    /(https?:\/\/[^/\s:@]+:)[^@\s]+@/gi,
-    '$1<redacted>@',
-  );
-  summary = summary.replace(
-    /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g,
-    '<redacted-jwt>',
-  );
-
-  if (riskLevel === 'HIGH' || riskLevel === 'CRITICAL') {
-    const head = summary.split(/\s+/).slice(0, 4).join(' ');
-    summary = `[${riskLevel}] ${head || '<command>'} [summary]`;
-  }
-
-  const maxLen = 200;
-  if (summary.length > maxLen) {
-    summary = `${summary.slice(0, maxLen)}...`;
-  }
-
-  return summary;
-}
-
-async function auditTerminalCommands(sessionId: string, data: string): Promise<boolean> {
-  const commands = extractCommandsForAudit(sessionId, data);
-  for (const command of commands) {
-    const analysis = auditService.analyzeCommand(command);
-    const auditCommand = summarizeCommandForAudit(command, analysis.riskLevel);
-    if (auditService.requiresConfirmation(analysis.riskLevel)) {
-      const confirmed = window.confirm(
-        [
-          `检测到高风险命令: ${auditCommand}`,
-          `风险等级: ${analysis.riskLevel}`,
-          `原因: ${analysis.description}`,
-          '',
-          '提示: 上方命令已脱敏显示',
-          '确认继续执行吗？'
-        ].join('\n')
-      );
-
-      await auditService.recordEvent(
-        auditService.createEvent({
-          command: auditCommand,
-          sessionId,
-          action: confirmed ? 'WARNED' : 'BLOCKED',
-          details: {
-            source: 'terminal-input',
-            riskLevel: analysis.riskLevel,
-            detectedPatterns: analysis.detectedPatterns,
-            commandWasSanitized: true,
-          },
-        })
-      );
-
-      if (!confirmed) {
-        showErrorMessage(`已阻止高风险命令: ${auditCommand}`, 5000);
-        return false;
-      }
-      continue;
-    }
-
-    await auditService.recordEvent(
-      auditService.createEvent({
-        command: auditCommand,
-        sessionId,
-        action: 'ALLOWED',
-        details: {
-          source: 'terminal-input',
-          riskLevel: analysis.riskLevel,
-          detectedPatterns: analysis.detectedPatterns,
-          commandWasSanitized: true,
-        },
-      })
-    );
-  }
-
-  return true;
-}
-
-async function handleTerminalInputSingleAsync(sessionId: string, data: string) {
-  if (!(await auditTerminalCommands(sessionId, data))) {
-    return;
-  }
-
   const hasControl =
     data.includes('\r') ||
     data.includes('\n') ||
@@ -1218,24 +961,32 @@ async function handleTerminalInputSingleAsync(sessionId: string, data: string) {
     data.includes('\x1b');
 
   const shouldImmediate = hasControl;
-  
+
   // Debug log for control character detection
   if (shouldImmediate) {
-     log.info('TermInput', 'Control char detected', { data: JSON.stringify(data) });
+    log.info('TermInput', 'Control char detected', { data: JSON.stringify(data) });
   }
 
   void sendTerminalDataBuffered(sessionId, data, shouldImmediate);
 }
 
-export function handleTerminalInput(sessionId: string, data: string, connection: Connection) {
+export function handleTerminalInput(sessionId: string, data: string, connection?: Connection) {
+  void connection;
   const enabled = get(broadcastInputEnabled);
   if (!enabled) {
     handleTerminalInputSingle(sessionId, data);
     return;
   }
 
+  const terminals = get(activeTerminals);
+  const activeSessionIds = new Set(terminals.map(t => t.sessionId));
   const selected = get(broadcastSessionIds);
-  const baseTargets = selected.length > 0 ? selected : [sessionId];
+  const liveSelected = selected.filter(id => activeSessionIds.has(id));
+  if (liveSelected.length !== selected.length) {
+    broadcastSessionIds.set(liveSelected);
+  }
+
+  const baseTargets = liveSelected.length > 0 ? liveSelected : [sessionId];
   // Expand targets to include all child sessions from split panes
   const expandedTargets = new Set<string>();
   const sessionMap = get(terminalSessionMap);
@@ -1249,16 +1000,15 @@ export function handleTerminalInput(sessionId: string, data: string, connection:
     }
   }
   
-  const targets = Array.from(expandedTargets);
-  if (!targets.includes(sessionId)) {
-      targets.push(sessionId);
+  const targets = Array.from(expandedTargets).filter(id => activeSessionIds.has(id));
+  if (activeSessionIds.has(sessionId) && !targets.includes(sessionId)) {
+    targets.push(sessionId);
   }
 
-  const terminals = get(activeTerminals);
   const connectionBySessionId = new Map(terminals.map(t => [t.sessionId, t.connection] as const));
 
   for (const targetSessionId of targets) {
-    const targetConnection = connectionBySessionId.get(targetSessionId) ?? connection;
+    const targetConnection = connectionBySessionId.get(targetSessionId);
     if (!targetConnection) continue;
     handleTerminalInputSingle(targetSessionId, data);
   }
@@ -1278,93 +1028,45 @@ export async function sendTerminalResize(sessionId: string, width: number, heigh
   }
 }
 
-export async function monitorSessionStatus(sessionId: string) {
-  try {
-    // Listen for session status changes from backend
-    const statusUnlisten = await listen(`session-status-${sessionId}`, (event: any) => {
-      if (event.payload && event.payload.status) {
-        log.info('SessionStatus', 'Status changed', {
-          sessionId,
-          status: event.payload.status,
-        });
-
-        // Handle different status changes
-        switch (event.payload.status) {
-          case 'disconnected':
-            showErrorMessage(`会话已断开: ${sessionId}`, 5000);
-            // Optionally attempt to reconnect
-            break;
-          case 'error':
-            if (event.payload.error) {
-              showErrorMessage(`会话错误: ${event.payload.error}`, 5000);
-            }
-            break;
-          case 'connected':
-            showSuccessMessage('会话已连接', 3000);
-            break;
-        }
-      }
-    });
-
-    sessionStatusListeners.set(sessionId, statusUnlisten);
-  } catch (error) {
-    log.error('SessionStatus', 'Failed to monitor session status', error, { sessionId });
-  }
-}
-
-/**
- * xterm 6.0: Enhanced terminal cleanup with better resource management
- */
-
 export async function closeSplitSession(sessionId: string) {
+  suppressReconnect(sessionId);
+
   try {
-    suppressReconnect(sessionId);
-    terminalPool.destroyInstance(sessionId);
     await closeDetachedTerminal(sessionId);
     await invoke('disconnect', { sessionId });
-    cleanupTerminalListeners(sessionId);
-    
-    log.info('TermCleanup', 'Split session closed', { sessionId });
   } catch (e) {
-    log.error('TermCleanup', 'Failed to close split session', e);
+    if (!shouldTreatMissingSessionAsClosed(e)) {
+      log.error('TermCleanup', 'Failed to close split session', e, { sessionId });
+      throw e;
+    }
+    log.warn('TermCleanup', 'Split session already closed in backend; cleaning UI state', e, {
+      sessionId,
+    });
   }
+
+  finalizeTerminalClosure(sessionId);
+  log.info('TermCleanup', 'Split session closed', { sessionId });
 }
 
 export async function closeTerminal(sessionId: string) {
   suppressReconnect(sessionId);
-  const terminals = get(activeTerminals);
-  const index = terminals.findIndex(t => t.sessionId === sessionId);
+  if (!get(activeTerminalSessionIds).has(sessionId)) return;
 
-  if (index !== -1) {
-    cleanupBufferedTerminalState(sessionId);
-    terminalPool.destroyInstance(sessionId);
-
-    // Remove from store
-    activeTerminals.update(items => items.filter(t => t.sessionId !== sessionId));
-    broadcastSessionIds.update(ids => ids.filter(id => id !== sessionId));
-    
-    // Remove from session map
-    terminalSessionMap.update(map => {
-      map.delete(sessionId);
-      return map;
+  try {
+    await invoke('close_terminal', { sessionId });
+  } catch (e) {
+    if (!shouldTreatMissingSessionAsClosed(e)) {
+      log.error('TermCleanup', 'Failed to close terminal', e, { sessionId });
+      showErrorMessage('关闭终端失败', 5000);
+      throw e;
+    }
+    log.warn('TermCleanup', 'Terminal already closed in backend; cleaning UI state', e, {
+      sessionId,
     });
-
-    // Adjust selected index
-    const currentIndex = get(selectedTerminalIndex);
-    if (currentIndex >= terminals.length - 1) {
-      selectedTerminalIndex.set(Math.max(0, terminals.length - 2));
-    }
-
-    cleanupTerminalListeners(sessionId);
-
-    // Notify backend to close terminal
-    try {
-      await invoke('close_terminal', { sessionId });
-      log.info('TermCleanup', 'Terminal closed', { sessionId });
-    } catch (error) {
-      log.error('TermCleanup', 'Failed to close terminal', error, { sessionId });
-    }
   }
+
+  finalizeTerminalClosure(sessionId);
+  log.info('TermCleanup', 'Terminal closed', { sessionId });
 }
 
 export async function closeDetachedTerminal(sessionId: string) {
@@ -1395,47 +1097,50 @@ export async function disconnectTerminal(sessionId: string) {
     }
   }
 
+  const closedChildren = new Set<string>();
   if (splitSessionIds.size > 1) {
     for (const childId of splitSessionIds) {
       if (childId === sessionId) continue;
       suppressReconnect(childId);
       try {
         await closeSplitSession(childId);
+        closedChildren.add(childId);
       } catch (error) {
         log.warn('Disconnect', 'Failed to close split child session', error, { sessionId, childId });
       }
     }
 
     // Ensure UI does not keep stale child sessions/broadcast targets.
-    activeTerminals.update(items => items.filter(t => !splitSessionIds.has(t.sessionId) || t.sessionId === sessionId));
-    broadcastSessionIds.update(ids => ids.filter(id => !splitSessionIds.has(id) || id === sessionId));
+    if (closedChildren.size > 0) {
+      activeTerminals.update(items => items.filter(t => !closedChildren.has(t.sessionId)));
+      for (const childId of closedChildren) {
+        removeSessionReferences(childId);
+      }
+    }
   }
 
   const terminals = get(activeTerminals);
   const terminal = terminals.find(t => t.sessionId === sessionId);
   const name = terminal?.connection?.name ?? sessionId;
-  const hadTerminal = Boolean(terminal);
 
   suppressReconnect(sessionId);
 
-  await closeTerminal(sessionId);
-
-  if (!hadTerminal) {
-    markTerminalStopped(sessionId);
-    try {
-      await invoke('close_terminal', { sessionId });
-    } catch (error) {
-      log.warn('Disconnect', 'Failed to close_terminal during disconnect', error, { sessionId });
-    }
-  }
-
   try {
     await invoke('disconnect', { sessionId });
-    showSuccessMessage(`已断开连接: ${name}`, 3000);
   } catch (error) {
-    showErrorMessage(`断开连接失败: ${name}`, 5000);
-    log.warn('Disconnect', 'Failed to disconnect', error, { sessionId, name });
+    if (!shouldTreatMissingSessionAsClosed(error)) {
+      showErrorMessage(`断开连接失败: ${name}`, 5000);
+      log.warn('Disconnect', 'Failed to disconnect', error, { sessionId, name });
+      return;
+    }
+    log.warn('Disconnect', 'Session already missing in backend; cleaning UI state', error, {
+      sessionId,
+      name,
+    });
   }
+
+  finalizeTerminalClosure(sessionId);
+  showSuccessMessage(`已断开连接: ${name}`, 3000);
 }
 
 export async function closeAllTerminals() {
@@ -1458,13 +1163,6 @@ async function closeBackendTerminalsBestEffort(sessionId: string) {
   }
 }
 
-type BackendSessionInfo = {
-  id: string;
-  connection_id: string;
-  status: string;
-  terminal_id?: string | null;
-};
-
 export async function restoreActiveSessions() {
   const current = get(activeTerminals);
   if (current.length > 0) return;
@@ -1480,29 +1178,34 @@ export async function restoreActiveSessions() {
   const connectionList = get(connections);
   const connectionById = new Map(connectionList.map(c => [c.id, c] as const));
 
-  const connectedSessions = sessions.filter(s => {
-    const status = String((s as any)?.status ?? '');
-    return status.toLowerCase() === 'connected';
-  });
-
-  const connectedById = new Map<string, BackendSessionInfo>();
-  for (const s of connectedSessions) {
-    const sid = String((s as any)?.id ?? '');
-    if (sid) connectedById.set(sid, s);
-  }
+  const interpretedSessions = sessions
+    .map((session) => interpretBackendSession(session))
+    .filter((session): session is NonNullable<typeof session> => session !== null);
 
   const uiState = getStoredTerminalUiState();
   const orderIndex = new Map(uiState.order.map((id, i) => [id, i] as const));
 
-  const entries = connectedSessions
-    .map(s => {
-      const sessionId = String((s as any)?.id ?? '');
-      const connectionId = String((s as any)?.connection_id ?? '');
-      if (!sessionId || !connectionId) return null;
-      const connection = connectionById.get(connectionId);
+  restoredSessionsWithBackendTerminal.clear();
+  for (const session of interpretedSessions) {
+    updateSessionLifecycleState(
+      session.sessionId,
+      session.connectionPhase,
+      session.terminalPhase,
+      null,
+      session.canRestoreTerminal
+    );
+    if (session.canRestoreTerminal) {
+      restoredSessionsWithBackendTerminal.add(session.sessionId);
+    }
+  }
+
+  const entries = interpretedSessions
+    .filter((session) => session.canRestoreTerminal)
+    .map((session) => {
+      const connection = connectionById.get(session.connectionId);
       if (!connection) return null;
       return {
-        sessionId,
+        sessionId: session.sessionId,
         connection,
         terminal: null as any,
         fitAddon: null as any,
@@ -1510,15 +1213,6 @@ export async function restoreActiveSessions() {
       } satisfies ActiveTerminal;
     })
     .filter(Boolean) as ActiveTerminal[];
-
-  restoredSessionsWithBackendTerminal.clear();
-  for (const entry of entries) {
-    const backend = connectedById.get(entry.sessionId);
-    const terminalId = (backend as any)?.terminal_id;
-    if (terminalId) {
-      restoredSessionsWithBackendTerminal.add(entry.sessionId);
-    }
-  }
 
   entries.sort((a, b) => {
     const ai = orderIndex.get(a.sessionId);
@@ -1543,138 +1237,36 @@ export async function restoreActiveSessions() {
 }
 
 export async function setupTerminalListeners(sessionId: string, term: Terminal) {
-    log.info('TermOutput', 'Setting up terminal listeners', { sessionId });
+  log.info('TermOutput', 'Setting up terminal listeners', { sessionId });
 
-    const outputState: OutputWriteState = {
-      chunks: [],
-      chunkIndex: 0,
-      scheduled: null,
-      writing: false,
-      disposed: false,
-      chunkBudget: 256 * 1024,
-      lastWriteTime: 0,
-      consecutiveSlowWrites: 0,
-    };
-    outputWriteStates.set(sessionId, outputState);
+  const previousCleanup = getOutputListenerCleanup(sessionId);
+  if (previousCleanup) {
+    previousCleanup();
+    deleteOutputListenerCleanup(sessionId);
+  }
 
-    const TARGET_WRITE_MS = 12;
-    const MIN_CHUNK_SIZE = 1024; // xterm 6.0: Optimize minimum chunk size for better batching
+  initializeOutputBuffer(sessionId);
 
-    // Immediately write a test message to verify terminal is working
-    void term.write('\r\n\x1b[33mTerminal initialized...\x1b[0m\r\n');
-    log.info('TermOutput', 'Test message written to terminal', { sessionId });
-
-    /**
-     * xterm 6.0: Optimized flush using Promise-based write API
-     * - Improved batching with adaptive chunk sizing
-     * - Better memory management with aggressive pruning
-     * - Enhanced performance monitoring and adaptive budgeting
-     */
-    async function flushOutput() {
-      if (outputState.disposed) return;
-      outputState.scheduled = null;
-      if (outputState.writing) return;
-      if (outputState.chunkIndex >= outputState.chunks.length) return;
-
-      // Debug log on first few flushes
-      if (IS_DEV && outputState.chunkIndex === 0) {
-        log.info('TermOutput', 'Starting flush', {
-          sessionId,
-          totalChunks: outputState.chunks.length,
-          chunkBudget: outputState.chunkBudget,
-        });
-      }
-
-      const CHUNK_LIMIT = outputState.chunkBudget;
-      let count = 0;
-      const parts: string[] = [];
-
-      // xterm 6.0: Improved chunking logic with minimum size threshold
-      while (outputState.chunkIndex < outputState.chunks.length) {
-        const nextChunk = outputState.chunks[outputState.chunkIndex];
-        const wouldExceed = count + nextChunk.length > CHUNK_LIMIT && count > 0;
-
-        // Don't break if we haven't reached minimum chunk size yet
-        if (wouldExceed && count >= MIN_CHUNK_SIZE) break;
-
-        parts.push(nextChunk);
-        count += nextChunk.length;
-        outputState.chunkIndex += 1;
-
-        if (count >= CHUNK_LIMIT) break;
-      }
-
-      // xterm 6.0: Aggressive memory pruning to prevent bloat
-      if (outputState.chunks.length > 4096 || outputState.chunkIndex > Math.floor(outputState.chunks.length * 0.7)) {
-        outputState.chunks.splice(0, outputState.chunkIndex);
-        outputState.chunkIndex = 0;
-      }
-
-      const payload = parts.join('').split('\u0000').join('');
-      if (payload.length === 0) return;
-
-      // Debug log before writing
-      if (IS_DEV && outputState.chunkIndex <= 2) {
-        log.info('TermOutput', 'Writing to terminal', {
-          sessionId,
-          payloadLength: payload.length,
-          payloadPreview: payload.substring(0, 50),
-        });
-      }
-
-      outputState.writing = true;
-      const writeStart = nowMs();
+  const unlisteners: Array<() => void> = [];
+  let disposed = false;
+  const teardown = () => {
+    if (disposed) return;
+    disposed = true;
+    disposeOutputBuffer(sessionId);
+    while (unlisteners.length > 0) {
+      const fn = unlisteners.pop();
+      if (!fn) continue;
       try {
-        // xterm 5.x write is callback-based; use explicit async wrapper.
-        await writeTerminalAsync(term, payload);
-        const writeDuration = nowMs() - writeStart;
-        outputState.lastWriteTime = writeDuration;
-
-        // xterm 6.0: Adaptive budgeting with improved responsiveness
-        if (writeDuration > TARGET_WRITE_MS) {
-          outputState.consecutiveSlowWrites++;
-          const reductionFactor = 0.5 + (0.2 / Math.max(1, outputState.consecutiveSlowWrites));
-          outputState.chunkBudget = Math.max(32 * 1024, Math.floor(outputState.chunkBudget * reductionFactor));
-
-          log.perf('TermOutput', 'write', writeDuration, {
-            sessionId,
-            payloadLength: payload.length,
-            pendingChunks: outputState.chunks.length - outputState.chunkIndex,
-            budget: outputState.chunkBudget,
-            consecutiveSlowWrites: outputState.consecutiveSlowWrites,
-          });
-        } else if (writeDuration < TARGET_WRITE_MS / 2) {
-          // Reset consecutive counter on good performance
-          if (outputState.consecutiveSlowWrites > 0) {
-            outputState.consecutiveSlowWrites = Math.max(0, outputState.consecutiveSlowWrites - 1);
-          }
-          outputState.chunkBudget = Math.min(2 * 1024 * 1024, Math.floor(outputState.chunkBudget * 1.1));
-        }
-
-        outputState.writing = false;
-        if (outputState.chunkIndex < outputState.chunks.length && !outputState.disposed) {
-          scheduleFlush();
-        }
-      } catch (error) {
-        // xterm 6.0: Better error handling with context
-        log.error('TermOutput', `write failed for session ${sessionId}`, error, {
-          payloadLength: payload.length,
-          pendingChunks: outputState.chunks.length - outputState.chunkIndex,
-          budget: outputState.chunkBudget,
-        });
-        outputState.writing = false;
-        // xterm 6.0: Add a small delay before retrying to prevent error storms
-        const retryDelay = Math.min(100, outputState.consecutiveSlowWrites * 10);
-        outputState.scheduled = { id: setTimeout(() => scheduleFlush(), retryDelay) as unknown as number, kind: 'timeout' };
+        fn();
+      } catch {
+        // Best-effort cleanup only.
       }
     }
+  };
 
-    const scheduleFlush = () => {
-      if (outputState.disposed) return;
-      if (outputState.scheduled !== null) return;
-      outputState.scheduled = scheduleNext(flushOutput);
-    };
+  setOutputListenerCleanup(sessionId, teardown);
 
+  try {
     // Output listener
     const outputUnlisten = await listen(`terminal-output-${sessionId}`, (event: any) => {
       // Debug log to verify events are received
@@ -1687,111 +1279,128 @@ export async function setupTerminalListeners(sessionId: string, term: Terminal) 
         });
       }
 
-
       if (event.payload && event.payload.data) {
         const data = String(event.payload.data);
-
-        outputState.chunks.push(data);
-        if (IS_DEV && outputState.chunks.length <= 5) {
-          log.info('TermOutput', 'Chunk added', {
-            sessionId,
-            chunkIndex: outputState.chunks.length - 1,
-            isWriting: outputState.writing,
-          });
-        }
-        if (!outputState.writing) scheduleFlush();
+        enqueueTerminalOutput(sessionId, term, data, { logger: ioLogger, isDev: IS_DEV });
       }
     });
+    if (disposed) {
+      outputUnlisten();
+      return;
+    }
+    unlisteners.push(outputUnlisten);
 
     // Error listener
     const errorUnlisten = await listen(`terminal-error-${sessionId}`, (event: any) => {
       if (event.payload && event.payload.error) {
-        log.error('TermError', 'Terminal error reported from backend', event.payload.error, { sessionId });
+        log.error('TermError', 'Terminal error reported from backend', event.payload.error, {
+          sessionId,
+        });
         void term.write(`\r\n\x1b[31mError: ${event.payload.error}\x1b[0m\r\n`);
         showErrorMessage(`终端错误: ${event.payload.error}`, 5000);
       }
     });
+    if (disposed) {
+      errorUnlisten();
+      return;
+    }
+    unlisteners.push(errorUnlisten);
 
     // Session Closed listener
     const closedUnlisten = await listen(`session-closed-${sessionId}`, (event: any) => {
-        const reason = event.payload?.reason || 'unknown';
-        log.info('SessionClosed', 'Session closed', { sessionId, reason });
-        markTerminalStopped(sessionId);
+      const reason = event.payload?.reason || 'unknown';
+      log.info('SessionClosed', 'Session closed', { sessionId, reason });
+      markTerminalStopped(sessionId);
 
-        // Only show message if not manually closed
-        if (reason !== 'user_closed') {
-             void term.write(`\r\n\x1b[33mSession closed (Reason: ${reason})\x1b[0m\r\n`);
+      // Only show message if not manually closed
+      if (reason !== 'user_closed') {
+        void term.write(`\r\n\x1b[33mSession closed (Reason: ${reason})\x1b[0m\r\n`);
+      }
+
+      if (
+        reason === 'connection_lost' ||
+        reason === 'server_closed' ||
+        reason === 'keepalive_failed'
+      ) {
+        updateSessionLifecycleState(sessionId, 'reconnecting', 'closed', reason);
+        const appSettings = get(settings);
+        if (appSettings.connection?.autoReconnect) {
+          scheduleAutoReconnect(sessionId, term, false);
+        } else {
+          void term.write('\r\n\x1b[36mPress R to reconnect...\x1b[0m\r\n');
+
+          detachTerminalInputListener(sessionId);
+          armManualReconnectKey(sessionId, term);
         }
-
-        if (reason === 'connection_lost' || reason === 'server_closed' || reason === 'keepalive_failed') {
-            const appSettings = get(settings);
-            if (appSettings.connection?.autoReconnect) {
-                scheduleAutoReconnect(sessionId, term, false);
-            } else {
-                void term.write('\r\n\x1b[36mPress R to reconnect...\x1b[0m\r\n');
-
-                clearReconnectKeyListener(sessionId);
-                const disposable = term.onData(async (data: string) => {
-                    if (data === 'r' || data === 'R') {
-                        disposable.dispose();
-                        reconnectKeyListeners.delete(sessionId);
-                        await reconnectTerminal(sessionId);
-                    }
-                });
-                reconnectKeyListeners.set(sessionId, disposable);
-            }
-        }
+      } else if (reason === 'user_closed') {
+        updateSessionLifecycleState(sessionId, 'closed', 'closed', reason);
+      } else {
+        updateSessionLifecycleState(sessionId, 'connected', 'closed', reason);
+      }
     });
-
-    outputListeners.set(sessionId, () => {
-        outputState.disposed = true;
-        if (outputState.scheduled !== null) {
-          cancelScheduled(outputState.scheduled);
-        }
-        outputWriteStates.delete(sessionId);
-
-        outputUnlisten();
-        errorUnlisten();
-        closedUnlisten();
-    });
+    if (disposed) {
+      closedUnlisten();
+      return;
+    }
+    unlisteners.push(closedUnlisten);
+  } catch (error) {
+    teardown();
+    deleteOutputListenerCleanup(sessionId);
+    throw error;
+  }
 }
 
 function clearReconnectTimer(sessionId: string) {
-  const timer = reconnectTimers.get(sessionId);
-  if (timer !== undefined) {
-    clearTimeout(timer);
-    reconnectTimers.delete(sessionId);
-  }
-}
-
-function clearReconnectKeyListener(sessionId: string) {
-  const listener = reconnectKeyListeners.get(sessionId);
-  if (listener) {
-    listener.dispose();
-    reconnectKeyListeners.delete(sessionId);
-  }
+  clearReconnectTimerState(sessionId);
 }
 
 function clearReconnectState(sessionId: string) {
   clearReconnectTimer(sessionId);
   clearReconnectKeyListener(sessionId);
-  reconnectAttempts.delete(sessionId);
+  clearReconnectAttempts(sessionId);
 }
 
 function suppressReconnect(sessionId: string) {
-  reconnectSuppressed.add(sessionId);
+  suppressReconnectState(sessionId);
   clearReconnectState(sessionId);
 }
 
+function releaseReconnectSuppression(sessionId: string) {
+  if (getReconnectInFlight(sessionId)) {
+    return;
+  }
+  releaseReconnectSuppressionState(sessionId);
+}
+
+function armReconnectKeyListener(
+  sessionId: string,
+  term: Terminal,
+  onTrigger: () => void | Promise<void>
+) {
+  armTerminalKeyListener(sessionId, term, (data: string) => data === 'r' || data === 'R', onTrigger);
+}
+
+function armManualReconnectKey(sessionId: string, term: Terminal) {
+  armReconnectKeyListener(sessionId, term, async () => {
+    const ok = await reconnectTerminal(sessionId);
+    if (ok || !canAttemptReconnectForSession(sessionId)) {
+      return;
+    }
+    void term.write('\r\n\x1b[36mPress R to reconnect...\x1b[0m\r\n');
+    armManualReconnectKey(sessionId, term);
+  });
+}
+
 function scheduleAutoReconnect(sessionId: string, term: Terminal, immediate: boolean) {
-  if (reconnectSuppressed.has(sessionId)) {
+  if (!canAttemptReconnectForSession(sessionId)) {
     return;
   }
 
   clearReconnectTimer(sessionId);
   clearReconnectKeyListener(sessionId);
+  detachTerminalInputListener(sessionId);
 
-  const attempts = reconnectAttempts.get(sessionId) ?? 0;
+  const attempts = getReconnectAttempts(sessionId);
   if (attempts >= MAX_AUTO_RECONNECT_RETRIES) {
     void term.write(`\r\n\x1b[31mAuto reconnect stopped after ${MAX_AUTO_RECONNECT_RETRIES} attempts.\x1b[0m\r\n`);
     showErrorMessage('自动重连已停止：超过最大重试次数', 5000);
@@ -1804,47 +1413,42 @@ function scheduleAutoReconnect(sessionId: string, term: Terminal, immediate: boo
   const seconds = Math.max(0, Math.ceil(delay / 1000));
   void term.write(`\r\n\x1b[33mAuto reconnect attempt ${attempts + 1}/${MAX_AUTO_RECONNECT_RETRIES} in ${seconds}s... (Press R to immediate)\x1b[0m\r\n`);
 
-  const disposable = term.onData((data: string) => {
-    if (data === 'r' || data === 'R') {
-      disposable.dispose();
-      reconnectKeyListeners.delete(sessionId);
-      scheduleAutoReconnect(sessionId, term, true);
-    }
+  armReconnectKeyListener(sessionId, term, () => {
+    scheduleAutoReconnect(sessionId, term, true);
   });
-  reconnectKeyListeners.set(sessionId, disposable);
 
   const timer = window.setTimeout(async () => {
-    reconnectTimers.delete(sessionId);
+    clearReconnectTimerState(sessionId);
     clearReconnectKeyListener(sessionId);
-    if (reconnectSuppressed.has(sessionId)) {
+    if (!canAttemptReconnectForSession(sessionId)) {
       return;
     }
 
-    reconnectAttempts.set(sessionId, attempts + 1);
+    setReconnectAttempts(sessionId, attempts + 1);
     try {
       const ok = await reconnectTerminal(sessionId);
       if (ok) {
-        reconnectAttempts.delete(sessionId);
+        clearReconnectAttempts(sessionId);
         return;
       }
     } catch (e) {
       log.warn('Reconnect', 'Auto reconnect attempt failed', e, {
         sessionId,
-        attempt: reconnectAttempts.get(sessionId) || 0,
+        attempt: getReconnectAttempts(sessionId),
       });
     }
 
     const appSettings = get(settings);
-    if (appSettings.connection?.autoReconnect && !reconnectSuppressed.has(sessionId)) {
+    if (appSettings.connection?.autoReconnect && canAttemptReconnectForSession(sessionId)) {
       scheduleAutoReconnect(sessionId, term, false);
     }
   }, delay);
 
-  reconnectTimers.set(sessionId, timer);
+  setReconnectTimer(sessionId, timer);
 }
 
 async function reconnectTerminalInternal(oldSessionId: string): Promise<boolean> {
-  if (reconnectSuppressed.has(oldSessionId)) {
+  if (!canContinueReconnectForSession(oldSessionId)) {
     return false;
   }
 
@@ -1857,33 +1461,25 @@ async function reconnectTerminalInternal(oldSessionId: string): Promise<boolean>
     return false;
   }
   let newSessionId: string | null = null;
-  let hadOldInputListener = false;
-  let oldInputDetached = false;
+
+  clearReconnectTimer(oldSessionId);
+  clearReconnectKeyListener(oldSessionId);
+  cleanupTerminalListeners(oldSessionId);
+  updateSessionLifecycleState(oldSessionId, 'reconnecting', 'closed');
 
   void term.write('\r\n\x1b[33mReconnecting...\x1b[0m\r\n');
 
   try {
-      const reconnectConfig = reconnectConnectConfigs.get(oldSessionId) ?? terminalEntry.connection;
+      const reconnectConfig = getReconnectConfig(oldSessionId) ?? terminalEntry.connection;
       const { sessionId: createdSessionId, connectConfig: effectiveReconnectConfig } =
         await connectWithInteractivePrompts(reconnectConfig, terminalEntry.connection.name);
       newSessionId = createdSessionId;
       const nextSessionId = createdSessionId;
-
-      hadOldInputListener = inputListeners.has(oldSessionId);
-      const oldInputListener = inputListeners.get(oldSessionId);
-      if (oldInputListener) {
-        oldInputListener.dispose();
-        inputListeners.delete(oldSessionId);
-        oldInputDetached = true;
-      }
+      updateSessionLifecycleState(nextSessionId, 'connected', 'detached');
 
       cleanupTerminalListeners(nextSessionId);
       cleanupBufferedTerminalState(nextSessionId);
       await setupTerminalListeners(nextSessionId, term);
-      const newInputListener = term.onData((data: string) => {
-        handleTerminalInput(nextSessionId, data, terminalEntry.connection);
-      });
-      inputListeners.set(nextSessionId, newInputListener);
       
       // Start terminal
       const result = await invoke('start_terminal', {
@@ -1894,19 +1490,13 @@ async function reconnectTerminalInternal(oldSessionId: string): Promise<boolean>
 
       if (!result) throw new Error('Failed to start terminal');
 
-      rememberReconnectConfig(nextSessionId, effectiveReconnectConfig);
+      cacheReconnectConfig(nextSessionId, effectiveReconnectConfig);
 
-      if (reconnectSuppressed.has(oldSessionId)) {
+      if (!canContinueReconnectForSession(oldSessionId)) {
         cleanupTerminalListeners(nextSessionId);
         cleanupBufferedTerminalState(nextSessionId);
-        if (hadOldInputListener) {
-          const restored = term.onData((data: string) => {
-            handleTerminalInput(oldSessionId, data, terminalEntry.connection);
-          });
-          inputListeners.set(oldSessionId, restored);
-          oldInputDetached = false;
-        }
         markTerminalStopped(nextSessionId);
+        removeTerminalSessionState(nextSessionId);
         try {
           await invoke('close_terminal', { sessionId: nextSessionId });
         } catch (error) {
@@ -1947,14 +1537,8 @@ async function reconnectTerminalInternal(oldSessionId: string): Promise<boolean>
       if (!replaced) {
         cleanupTerminalListeners(nextSessionId);
         cleanupBufferedTerminalState(nextSessionId);
-        if (hadOldInputListener) {
-          const restored = term.onData((data: string) => {
-            handleTerminalInput(oldSessionId, data, terminalEntry.connection);
-          });
-          inputListeners.set(oldSessionId, restored);
-          oldInputDetached = false;
-        }
         markTerminalStopped(nextSessionId);
+        removeTerminalSessionState(nextSessionId);
         try {
           await invoke('close_terminal', { sessionId: nextSessionId });
         } catch (error) {
@@ -1990,11 +1574,16 @@ async function reconnectTerminalInternal(oldSessionId: string): Promise<boolean>
         }
         return map;
       });
-      reconnectAttempts.delete(oldSessionId);
+      clearReconnectAttempts(oldSessionId);
       clearReconnectTimer(oldSessionId);
       clearReconnectKeyListener(oldSessionId);
       cleanupBufferedTerminalState(oldSessionId);
       cleanupTerminalListeners(oldSessionId);
+      releaseReconnectSuppressionState(oldSessionId);
+      releaseReconnectSuppressionState(nextSessionId);
+      attachTerminalInputListener(nextSessionId, term);
+      removeTerminalSessionState(oldSessionId);
+      updateSessionLifecycleState(nextSessionId, 'connected', 'attached');
 
       try {
         await invoke('close_terminal', { sessionId: oldSessionId });
@@ -2017,13 +1606,14 @@ async function reconnectTerminalInternal(oldSessionId: string): Promise<boolean>
 
       return true;
   } catch (e) {
-      if (reconnectSuppressed.has(oldSessionId)) {
+      if (!canContinueReconnectForSession(oldSessionId)) {
         return false;
       }
       if (newSessionId) {
         cleanupTerminalListeners(newSessionId);
         cleanupBufferedTerminalState(newSessionId);
         markTerminalStopped(newSessionId);
+        removeTerminalSessionState(newSessionId);
         try {
           await invoke('close_terminal', { sessionId: newSessionId });
         } catch (error) {
@@ -2035,11 +1625,17 @@ async function reconnectTerminalInternal(oldSessionId: string): Promise<boolean>
           log.warn('Reconnect', 'Failed to disconnect new session after reconnect failure', error, { oldSessionId, newSessionId });
         }
       }
-      if (oldInputDetached && hadOldInputListener && !inputListeners.has(oldSessionId)) {
-        const restored = term.onData((data: string) => {
-          handleTerminalInput(oldSessionId, data, terminalEntry.connection);
-        });
-        inputListeners.set(oldSessionId, restored);
+      const appSettings = get(settings);
+      if (appSettings.connection?.autoReconnect) {
+        updateSessionLifecycleState(oldSessionId, 'reconnecting', 'closed', 'reconnect_failed');
+      } else {
+        updateSessionLifecycleState(oldSessionId, 'connected', 'closed', 'reconnect_failed');
+      }
+      if (!appSettings.connection?.autoReconnect) {
+        if (canAttemptReconnectForSession(oldSessionId)) {
+          void term.write('\r\n\x1b[36mPress R to reconnect...\x1b[0m\r\n');
+          armManualReconnectKey(oldSessionId, term);
+        }
       }
       void term.write(`\r\n\x1b[31mReconnection failed: ${e}\x1b[0m\r\n`);
       showErrorMessage(`重连失败: ${terminalEntry.connection.name}`, 5000);
@@ -2048,17 +1644,16 @@ async function reconnectTerminalInternal(oldSessionId: string): Promise<boolean>
 }
 
 export async function reconnectTerminal(oldSessionId: string) {
-  const existing = reconnectInFlight.get(oldSessionId);
+  const existing = getReconnectInFlight(oldSessionId);
   if (existing) {
     return existing;
   }
 
   const reconnectPromise = reconnectTerminalInternal(oldSessionId).finally(() => {
-    if (reconnectInFlight.get(oldSessionId) === reconnectPromise) {
-      reconnectInFlight.delete(oldSessionId);
-    }
+    clearReconnectInFlight(oldSessionId, reconnectPromise);
+    releaseReconnectSuppression(oldSessionId);
   });
 
-  reconnectInFlight.set(oldSessionId, reconnectPromise);
+  setReconnectInFlight(oldSessionId, reconnectPromise);
   return reconnectPromise;
 }

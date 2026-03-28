@@ -173,14 +173,16 @@
       if (isDestroyed || currentMountVersion !== mountVersion) {
         return;
       }
-      if (result) {
-        terminal = result.terminal;
-        fitAddon = result.fitAddon;
-        searchAddon = result.searchAddon;
-        attachTerminalKeybindings(terminal);
-
-        if (onInit) onInit(terminalPool.getProxy(sessionId));
+      if (!result) {
+        return;
       }
+
+      terminal = result.terminal;
+      fitAddon = result.fitAddon;
+      searchAddon = result.searchAddon;
+      attachTerminalKeybindings(terminal);
+
+      if (onInit) onInit(terminalPool.getProxy(sessionId));
     }
 
     if (isDestroyed || currentMountVersion !== mountVersion) {

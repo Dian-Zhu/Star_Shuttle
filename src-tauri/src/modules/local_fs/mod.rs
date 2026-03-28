@@ -14,10 +14,11 @@ use self::handles::{close_handle, insert_handle, with_handle};
 use serde::Serialize;
 use serde_json::json;
 use std::collections::HashMap;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use tauri::State;
 
 pub struct LocalFsState {
@@ -30,11 +31,13 @@ struct LocalFileHandle {
     file: File,
     writable: bool,
     size: u64,
+    last_touched: Instant,
 }
 
 const MAX_LOCAL_FS_CHUNK_BYTES: usize = 4 * 1024 * 1024;
 const MAX_LOCAL_FS_TEXT_BYTES: u64 = 8 * 1024 * 1024;
 const PATH_GRANT_TTL_SECONDS: u64 = 180;
+const LOCAL_FS_HANDLE_IDLE_TTL_SECONDS: u64 = 300;
 const LOCAL_FS_TEXT_TOO_LARGE_ERR: &str = "LOCAL_FS_TEXT_TOO_LARGE";
 
 #[derive(Serialize)]
@@ -91,6 +94,73 @@ fn ensure_text_limit(size_bytes: u64) -> Result<(), String> {
     Ok(())
 }
 
+fn open_authorized_path_for_write(path: &Path, truncate: bool) -> Result<File, String> {
+    let mut options = OpenOptions::new();
+    options.create(true).write(true).truncate(truncate);
+    apply_no_follow_flag(&mut options);
+    options.open(path).map_err(|e| e.to_string())
+}
+
+fn open_authorized_path_for_read(path: &Path) -> Result<File, String> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    apply_no_follow_flag(&mut options);
+    options.open(path).map_err(|e| e.to_string())
+}
+
+#[cfg(unix)]
+fn apply_no_follow_flag(options: &mut OpenOptions) {
+    use std::os::unix::fs::OpenOptionsExt;
+    options.custom_flags(unix_o_nofollow_flag());
+}
+
+#[cfg(windows)]
+fn apply_no_follow_flag(options: &mut OpenOptions) {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    // Open the reparse point itself instead of transparently following it.
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+}
+
+#[cfg(not(any(unix, windows)))]
+fn apply_no_follow_flag(_options: &mut OpenOptions) {}
+
+#[cfg(unix)]
+fn unix_o_nofollow_flag() -> i32 {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    {
+        // linux/include/uapi/asm-generic/fcntl.h
+        return 0o400000;
+    }
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd",
+        target_os = "dragonfly"
+    ))]
+    {
+        // BSD/macOS fcntl.h
+        return 0x00000100;
+    }
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd",
+        target_os = "dragonfly"
+    )))]
+    {
+        // Keep behavior for unknown Unix targets.
+        0
+    }
+}
+
 #[tauri::command]
 pub fn local_fs_open_read(
     db: State<'_, Arc<Mutex<DatabaseManager>>>,
@@ -102,7 +172,7 @@ pub fn local_fs_open_read(
     ensure_unlocked(&db, &app_lock_state)?;
     let path = normalize_path(&path);
     let authorized_path = authorize_path(&state, &path, AccessMode::Read, access_token.as_deref())?;
-    let file = File::open(&authorized_path).map_err(|e| e.to_string())?;
+    let file = open_authorized_path_for_read(&authorized_path)?;
     let size = file.metadata().map_err(|e| e.to_string())?.len();
     let handle_id = insert_handle(
         &state,
@@ -110,6 +180,7 @@ pub fn local_fs_open_read(
             file,
             writable: false,
             size,
+            last_touched: Instant::now(),
         },
     )?;
     Ok(LocalOpenHandle { handle_id, size })
@@ -159,18 +230,14 @@ pub fn local_fs_open_write(
     let path = normalize_path(&path);
     let authorized_path =
         authorize_path(&state, &path, AccessMode::Write, access_token.as_deref())?;
-    let file = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(truncate)
-        .open(&authorized_path)
-        .map_err(|e| e.to_string())?;
+    let file = open_authorized_path_for_write(&authorized_path, truncate)?;
     let handle_id = insert_handle(
         &state,
         LocalFileHandle {
             file,
             writable: true,
             size: 0,
+            last_touched: Instant::now(),
         },
     )?;
     Ok(handle_id)
@@ -248,7 +315,7 @@ pub fn local_fs_read_text(
 
     // Prevent huge or unbounded streams from being loaded into memory in one shot.
     // Read at most MAX+1 bytes, then error if the file is larger than the limit.
-    let file = File::open(&authorized_path).map_err(|e| e.to_string())?;
+    let file = open_authorized_path_for_read(&authorized_path)?;
     let mut limited = file.take(MAX_LOCAL_FS_TEXT_BYTES + 1);
     let mut bytes = Vec::new();
     limited.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
@@ -270,12 +337,15 @@ pub fn local_fs_write_text(
     let path = normalize_path(&path);
     let authorized_path =
         authorize_path(&state, &path, AccessMode::Write, access_token.as_deref())?;
-    fs::write(authorized_path, content).map_err(|e| e.to_string())
+    let mut file = open_authorized_path_for_write(&authorized_path, true)?;
+    file.write_all(content.as_bytes())
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use std::io::Write;
     use uuid::Uuid;
 
@@ -315,6 +385,7 @@ mod tests {
                 file: file_handle,
                 writable: false,
                 size: 5,
+                last_touched: Instant::now(),
             },
         )
         .expect("failed to insert handle");
@@ -341,6 +412,7 @@ mod tests {
                 .expect("failed to open file"),
             writable: true,
             size: 0,
+            last_touched: Instant::now(),
         };
 
         let content = b"hello world";
@@ -545,5 +617,244 @@ mod tests {
             .expect_err("oversized text should be rejected");
         assert!(err.starts_with(LOCAL_FS_TEXT_TOO_LARGE_ERR));
         assert!(err.contains("max_bytes"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_open_rejects_symlink_swapped_after_authorization() {
+        let outside_root = tempfile_path("outside-swap-read");
+        fs::create_dir_all(&outside_root).expect("failed to create outside root");
+
+        let granted_path = outside_root.join("granted-read.txt");
+        let victim_path = outside_root.join("victim-read.txt");
+        fs::write(&victim_path, "victim-read").expect("failed to create victim file");
+
+        let state = LocalFsState {
+            handles: Mutex::new(HashMap::new()),
+            allowed_roots: vec![],
+            path_grants: Mutex::new(HashMap::new()),
+        };
+
+        let token = issue_path_grant(
+            &state,
+            &granted_path,
+            AccessMode::Read,
+            PathGrantSource::TrustedDialog,
+        )
+        .expect("grant should issue");
+        let authorized =
+            authorize_path(&state, &granted_path, AccessMode::Read, Some(&token)).expect("auth");
+
+        std::os::unix::fs::symlink(&victim_path, &authorized).expect("failed to create symlink");
+        let err = open_authorized_path_for_read(&authorized)
+            .expect_err("symlink target must be rejected");
+
+        assert!(!err.is_empty());
+        assert_eq!(
+            fs::read_to_string(&victim_path).expect("failed to read victim"),
+            "victim-read"
+        );
+
+        let _ = fs::remove_file(&granted_path);
+        let _ = fs::remove_file(&victim_path);
+        let _ = fs::remove_dir_all(outside_root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_token_is_consumed_even_when_open_rejected_after_symlink_swap() {
+        let outside_root = tempfile_path("outside-swap-token-read");
+        fs::create_dir_all(&outside_root).expect("failed to create outside root");
+
+        let granted_path = outside_root.join("granted-consume-read.txt");
+        let victim_path = outside_root.join("victim-consume-read.txt");
+        fs::write(&victim_path, "victim-consume-read").expect("failed to create victim file");
+
+        let state = LocalFsState {
+            handles: Mutex::new(HashMap::new()),
+            allowed_roots: vec![],
+            path_grants: Mutex::new(HashMap::new()),
+        };
+
+        let token = issue_path_grant(
+            &state,
+            &granted_path,
+            AccessMode::Read,
+            PathGrantSource::TrustedDialog,
+        )
+        .expect("grant should issue");
+
+        let authorized =
+            authorize_path(&state, &granted_path, AccessMode::Read, Some(&token)).expect("auth");
+        std::os::unix::fs::symlink(&victim_path, &authorized).expect("failed to create symlink");
+        let _ = open_authorized_path_for_read(&authorized)
+            .expect_err("symlink target must be rejected");
+
+        let retry_err = authorize_path(&state, &granted_path, AccessMode::Read, Some(&token))
+            .expect_err("token should still be consumed even when open fails");
+        assert!(retry_err.contains("denied"));
+
+        let _ = fs::remove_file(&granted_path);
+        let _ = fs::remove_file(&victim_path);
+        let _ = fs::remove_dir_all(outside_root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_open_rejects_symlink_swapped_after_authorization() {
+        let outside_root = tempfile_path("outside-swap");
+        fs::create_dir_all(&outside_root).expect("failed to create outside root");
+
+        let granted_path = outside_root.join("granted.txt");
+        let victim_path = outside_root.join("victim.txt");
+        fs::write(&victim_path, "victim").expect("failed to create victim file");
+
+        let state = LocalFsState {
+            handles: Mutex::new(HashMap::new()),
+            allowed_roots: vec![],
+            path_grants: Mutex::new(HashMap::new()),
+        };
+
+        let token = issue_path_grant(
+            &state,
+            &granted_path,
+            AccessMode::Write,
+            PathGrantSource::TrustedDialog,
+        )
+        .expect("grant should issue");
+        let authorized =
+            authorize_path(&state, &granted_path, AccessMode::Write, Some(&token)).expect("auth");
+
+        std::os::unix::fs::symlink(&victim_path, &authorized).expect("failed to create symlink");
+        let err = open_authorized_path_for_write(&authorized, true)
+            .expect_err("symlink target must be rejected");
+
+        assert!(!err.is_empty());
+        assert_eq!(
+            fs::read_to_string(&victim_path).expect("failed to read victim"),
+            "victim"
+        );
+
+        let _ = fs::remove_file(&granted_path);
+        let _ = fs::remove_file(&victim_path);
+        let _ = fs::remove_dir_all(outside_root);
+    }
+
+    #[test]
+    fn stale_handles_are_pruned_on_next_handle_access() {
+        use std::time::Duration;
+
+        let state = LocalFsState::default();
+        let stale_file = tempfile_path("stale-handle");
+        let fresh_file = tempfile_path("fresh-handle");
+        fs::write(&stale_file, "stale").expect("failed to create stale file");
+        fs::write(&fresh_file, "fresh").expect("failed to create fresh file");
+
+        let stale = LocalFileHandle {
+            file: File::open(&stale_file).expect("open stale file"),
+            writable: false,
+            size: 5,
+            last_touched: Instant::now()
+                - Duration::from_secs(LOCAL_FS_HANDLE_IDLE_TTL_SECONDS + 1),
+        };
+        let stale_handle_id = insert_handle(&state, stale).expect("insert stale handle");
+
+        let fresh = LocalFileHandle {
+            file: File::open(&fresh_file).expect("open fresh file"),
+            writable: false,
+            size: 5,
+            last_touched: Instant::now(),
+        };
+        let fresh_handle_id = insert_handle(&state, fresh).expect("insert fresh handle");
+
+        let fresh_data = with_handle(&state, &fresh_handle_id, |handle| {
+            let mut buf = Vec::new();
+            handle
+                .file
+                .read_to_end(&mut buf)
+                .map_err(|e| e.to_string())?;
+            Ok(buf)
+        })
+        .expect("fresh handle should still work");
+        assert_eq!(fresh_data, b"fresh");
+
+        let stale_err = with_handle(&state, &stale_handle_id, |_handle| Ok(()))
+            .expect_err("stale handle should be evicted");
+        assert!(stale_err.contains("Unknown local file handle"));
+
+        let _ = fs::remove_file(stale_file);
+        let _ = fs::remove_file(fresh_file);
+    }
+
+    #[test]
+    fn stale_handles_are_pruned_on_insert_path() {
+        use std::time::Duration;
+
+        let state = LocalFsState::default();
+        let stale_file = tempfile_path("stale-handle-insert");
+        let fresh_file = tempfile_path("fresh-handle-insert");
+        fs::write(&stale_file, "stale").expect("failed to create stale file");
+        fs::write(&fresh_file, "fresh").expect("failed to create fresh file");
+
+        let stale = LocalFileHandle {
+            file: File::open(&stale_file).expect("open stale file"),
+            writable: false,
+            size: 5,
+            last_touched: Instant::now()
+                - Duration::from_secs(LOCAL_FS_HANDLE_IDLE_TTL_SECONDS + 1),
+        };
+        let stale_handle_id = insert_handle(&state, stale).expect("insert stale handle");
+
+        let fresh = LocalFileHandle {
+            file: File::open(&fresh_file).expect("open fresh file"),
+            writable: false,
+            size: 5,
+            last_touched: Instant::now(),
+        };
+        let _fresh_handle_id = insert_handle(&state, fresh).expect("insert fresh handle");
+
+        let stale_err = with_handle(&state, &stale_handle_id, |_handle| Ok(()))
+            .expect_err("stale handle should be evicted by insert path cleanup");
+        assert!(stale_err.contains("Unknown local file handle"));
+
+        let _ = fs::remove_file(stale_file);
+        let _ = fs::remove_file(fresh_file);
+    }
+
+    #[test]
+    fn stale_handles_are_pruned_on_close_path() {
+        use std::time::Duration;
+
+        let state = LocalFsState::default();
+        let stale_file = tempfile_path("stale-handle-close");
+        let fresh_file = tempfile_path("fresh-handle-close");
+        fs::write(&stale_file, "stale").expect("failed to create stale file");
+        fs::write(&fresh_file, "fresh").expect("failed to create fresh file");
+
+        let stale = LocalFileHandle {
+            file: File::open(&stale_file).expect("open stale file"),
+            writable: false,
+            size: 5,
+            last_touched: Instant::now()
+                - Duration::from_secs(LOCAL_FS_HANDLE_IDLE_TTL_SECONDS + 1),
+        };
+        let stale_handle_id = insert_handle(&state, stale).expect("insert stale handle");
+
+        let fresh = LocalFileHandle {
+            file: File::open(&fresh_file).expect("open fresh file"),
+            writable: false,
+            size: 5,
+            last_touched: Instant::now(),
+        };
+        let fresh_handle_id = insert_handle(&state, fresh).expect("insert fresh handle");
+
+        close_handle(&state, &fresh_handle_id).expect("close fresh handle");
+
+        let stale_err = with_handle(&state, &stale_handle_id, |_handle| Ok(()))
+            .expect_err("stale handle should be evicted by close path cleanup");
+        assert!(stale_err.contains("Unknown local file handle"));
+
+        let _ = fs::remove_file(stale_file);
+        let _ = fs::remove_file(fresh_file);
     }
 }

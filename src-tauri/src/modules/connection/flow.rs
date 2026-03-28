@@ -11,6 +11,41 @@ use std::sync::{Arc, Mutex};
 use tokio::runtime::Runtime;
 use uuid::Uuid;
 
+fn ensure_terminal_start_allowed(session: &SessionInfo) -> Result<(), ConnectionError> {
+    if session.status != ConnectionStatus::Connected {
+        return Err(ConnectionError::ConnectionFailed(
+            "Session is not connected".to_string(),
+        ));
+    }
+    if session.terminal_id.is_some() {
+        return Err(ConnectionError::ConnectionFailed(
+            "Terminal is already started for this session".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn clear_session_terminal_if_matches(
+    sessions: &mut HashMap<Uuid, SessionInfo>,
+    session_id: Uuid,
+    expected_terminal_id: Option<Uuid>,
+) -> bool {
+    let Some(session) = sessions.get_mut(&session_id) else {
+        return false;
+    };
+
+    if let Some(expected) = expected_terminal_id {
+        if session.terminal_id != Some(expected) {
+            return false;
+        }
+    } else if session.terminal_id.is_none() {
+        return false;
+    }
+
+    session.terminal_id = None;
+    true
+}
+
 pub(crate) fn new_connecting_session(session_id: Uuid, connection_id: Uuid) -> SessionInfo {
     SessionInfo {
         id: session_id,
@@ -76,7 +111,14 @@ pub(crate) fn prepare_disconnect(
     let session = sessions
         .get_mut(&session_id)
         .ok_or(ConnectionError::SessionNotFound(session_id))?;
-    session.status = ConnectionStatus::Disconnecting;
+
+    if !matches!(
+        session.status,
+        ConnectionStatus::Disconnecting | ConnectionStatus::Disconnected
+    ) {
+        session.status = ConnectionStatus::Disconnecting;
+    }
+
     Ok(())
 }
 
@@ -111,17 +153,7 @@ pub(crate) fn prepare_start_terminal(
     let session = sessions
         .get(session_id)
         .ok_or(ConnectionError::SessionNotFound(*session_id))?;
-
-    if session.status != ConnectionStatus::Connected {
-        return Err(ConnectionError::ConnectionFailed(
-            "Session is not connected".to_string(),
-        ));
-    }
-    if session.terminal_id.is_some() {
-        return Err(ConnectionError::ConnectionFailed(
-            "Terminal is already started for this session".to_string(),
-        ));
-    }
+    ensure_terminal_start_allowed(session)?;
 
     let protocol = connections
         .get(&session.connection_id)
@@ -160,19 +192,10 @@ pub(crate) fn finish_start_terminal(
 ) -> Result<bool, ConnectionError> {
     let session = sessions
         .get(&started.session_id)
-        .cloned()
         .ok_or(ConnectionError::SessionNotFound(started.session_id))?;
-    if session.status != ConnectionStatus::Connected {
+    if let Err(err) = ensure_terminal_start_allowed(session) {
         let _ = try_send_terminal_command(&started.terminal.sender, TerminalCommand::Close);
-        return Err(ConnectionError::ConnectionFailed(
-            "Terminal start was canceled".to_string(),
-        ));
-    }
-    if session.terminal_id.is_some() {
-        let _ = try_send_terminal_command(&started.terminal.sender, TerminalCommand::Close);
-        return Err(ConnectionError::ConnectionFailed(
-            "Terminal is already attached to this session".to_string(),
-        ));
+        return Err(err);
     }
 
     terminals.insert(started.terminal_id, started.terminal);

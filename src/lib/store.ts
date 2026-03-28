@@ -3,6 +3,11 @@ import type { ITheme, Terminal } from 'xterm';
 import type { FitAddon } from 'xterm-addon-fit';
 import type { SearchAddon } from 'xterm-addon-search';
 import { normalizeShortcut } from './shortcuts';
+import {
+  mergeTerminalSessionState,
+  type TerminalSessionState,
+  type TerminalSessionStatePatch,
+} from './terminalSessionModel';
 
 export type ConnectionAuthMethod = {
   Password?: {
@@ -34,6 +39,7 @@ export type ConnectionProxyType =
         port: number;
         username: string | null;
         password: string | null;
+        has_password?: boolean;
       };
     }
   | {
@@ -42,6 +48,7 @@ export type ConnectionProxyType =
         port: number;
         username: string | null;
         password: string | null;
+        has_password?: boolean;
       };
     }
   | {
@@ -111,6 +118,9 @@ export type FileClipboardItem = {
 // Stores
 export const connections = writable<Connection[]>([]);
 export const activeTerminals = writable<ActiveTerminal[]>([]);
+export const activeTerminalSessionIds = derived(activeTerminals, ($activeTerminals) => {
+  return new Set($activeTerminals.map((item) => item.sessionId));
+});
 export const selectedTerminalIndex = writable<number>(0);
 export const broadcastInputEnabled = writable<boolean>(false);
 export const broadcastSessionIds = writable<string[]>([]);
@@ -129,7 +139,31 @@ export const fileClipboard = writable<FileClipboardItem | null>(null);
 export const terminalSplitConfigs = writable<Map<string, SplitConfig>>(new Map());
 // Map root sessionId -> Set of all child sessionIds (including root itself)
 export const terminalSessionMap = writable<Map<string, Set<string>>>(new Map());
+export const terminalSessionStates = writable<Map<string, TerminalSessionState>>(new Map());
 export const closeSplitRequest = writable<string | null>(null);
+
+export function setTerminalSessionState(
+  sessionId: string,
+  patch: TerminalSessionStatePatch & {
+    connectionPhase?: TerminalSessionState['connectionPhase'];
+    terminalPhase?: TerminalSessionState['terminalPhase'];
+  }
+): void {
+  terminalSessionStates.update((current) => {
+    const next = new Map(current);
+    next.set(sessionId, mergeTerminalSessionState(current.get(sessionId), patch));
+    return next;
+  });
+}
+
+export function removeTerminalSessionState(sessionId: string): void {
+  terminalSessionStates.update((current) => {
+    if (!current.has(sessionId)) return current;
+    const next = new Map(current);
+    next.delete(sessionId);
+    return next;
+  });
+}
 
 let errorMessageTimer: ReturnType<typeof setTimeout> | null = null;
 let successMessageTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1220,10 +1254,7 @@ export function getXtermTheme(appSettings: AppSettings): ITheme {
 
 export const settings = writable<AppSettings>(loadSettings());
 
-// Create a derived store for backward compatibility or ease of use if needed, 
-// but we should prefer using settings directly.
-// For now, let's keep isSidebarCollapsed as a derived store that can also be set? 
-// No, let's replace usages of isSidebarCollapsed with settings.
+// Legacy writable facade kept for existing call sites. New code should use `settings` directly.
 export const isSidebarCollapsed = {
     subscribe: (run: (value: boolean) => void) => {
         return settings.subscribe(s => run(s.ui.sidebarCollapsed));
