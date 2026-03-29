@@ -136,9 +136,6 @@ export class TerminalInstance {
       return;
     }
 
-    // 确保容器干净
-    containerManager.ensureClean(container);
-
     // 如果已经挂载到同一个容器，不做任何操作
     if (this.mountedContainer === container) {
       return;
@@ -149,21 +146,26 @@ export class TerminalInstance {
       this.unmount();
     }
 
-    // 获取或创建 xterm 元素
-    const xtermElement = container.querySelector('.xterm');
-    
-    if (!xtermElement) {
+    // 确保容器干净
+    containerManager.ensureClean(container);
+
+    const terminalElement = this.terminal.element;
+
+    if (!terminalElement) {
       // 首次挂载，直接 open
       this.terminal.open(container);
       this._ensureFocusListener();
+      this._ensureBlurListener();
     } else {
-      // 已有 xterm 元素，确保它属于当前实例
-      if (!this.terminal.element) {
-        // 元素存在但不属于当前实例（不应该发生）
-        containerManager.cleanupContainer(container);
-        this.terminal.open(container);
-        this._ensureFocusListener();
+      // 终端已经初始化过，直接复用现有 DOM，避免重复 open() 导致会话内容丢失
+      if (terminalElement.parentElement !== container) {
+        if (terminalElement.parentElement) {
+          terminalElement.parentElement.removeChild(terminalElement);
+        }
+        container.appendChild(terminalElement);
       }
+      this._ensureFocusListener();
+      this._ensureBlurListener();
     }
 
     this.mountedContainer = container;
@@ -183,7 +185,10 @@ export class TerminalInstance {
       return;
     }
 
-    // 清理容器
+    const terminalElement = this.terminal.element;
+    if (terminalElement && terminalElement.parentElement === this.mountedContainer) {
+      this.mountedContainer.removeChild(terminalElement);
+    }
     containerManager.cleanupContainer(this.mountedContainer);
 
     this.mountedContainer = null;

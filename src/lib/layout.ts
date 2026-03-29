@@ -23,6 +23,34 @@ export interface SplitNode {
 
 export type LayoutNode = TerminalPaneNode | SplitNode;
 
+export function getSplitDirectionFromDrag(
+  initialDirection: SplitNode['direction'],
+  start: { x: number; y: number },
+  current: { x: number; y: number },
+  threshold = 48
+): SplitNode['direction'] {
+  const dx = current.x - start.x;
+  const dy = current.y - start.y;
+
+  if (
+    initialDirection === 'vertical' &&
+    Math.abs(dy) >= threshold &&
+    Math.abs(dy) > Math.abs(dx) + 16
+  ) {
+    return 'horizontal';
+  }
+
+  if (
+    initialDirection === 'horizontal' &&
+    Math.abs(dx) >= threshold &&
+    Math.abs(dx) > Math.abs(dy) + 16
+  ) {
+    return 'vertical';
+  }
+
+  return initialDirection;
+}
+
 // Helper to generate unique IDs
 export function generateId(): string {
   return Math.random().toString(36).substring(2, 9);

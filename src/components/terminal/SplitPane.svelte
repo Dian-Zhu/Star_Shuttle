@@ -1,7 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
   import type { LayoutNode } from '../../lib/layout';
-  import { getPaneIndex } from '../../lib/layout';
+  import { getPaneIndex, getSplitDirectionFromDrag } from '../../lib/layout';
   import TerminalPane from './TerminalPane.svelte';
 
   export let node: LayoutNode;
@@ -15,10 +15,18 @@
   // Resize logic
   let isResizing = false;
   let splitContainer: HTMLElement;
+  let dragStartX = 0;
+  let dragStartY = 0;
+  let dragInitialDirection: 'horizontal' | 'vertical' | null = null;
+  let dragDirectionLocked = false;
 
   function handleSplitStart(e: MouseEvent) {
     if (node.type !== 'split') return;
     isResizing = true;
+    dragStartX = e.clientX;
+    dragStartY = e.clientY;
+    dragInitialDirection = node.direction;
+    dragDirectionLocked = false;
     document.addEventListener('mousemove', handleSplitMove);
     document.addEventListener('mouseup', handleSplitEnd);
     e.preventDefault();
@@ -26,6 +34,18 @@
 
   function handleSplitMove(e: MouseEvent) {
     if (!isResizing || !splitContainer || node.type !== 'split') return;
+
+    if (!dragDirectionLocked && dragInitialDirection) {
+      const nextDirection = getSplitDirectionFromDrag(
+        dragInitialDirection,
+        { x: dragStartX, y: dragStartY },
+        { x: e.clientX, y: e.clientY }
+      );
+      if (nextDirection !== node.direction) {
+        node.direction = nextDirection;
+        dragDirectionLocked = true;
+      }
+    }
     
     const rect = splitContainer.getBoundingClientRect();
     let newRatio = node.splitRatio;
@@ -43,6 +63,8 @@
 
   function handleSplitEnd() {
     isResizing = false;
+    dragInitialDirection = null;
+    dragDirectionLocked = false;
     document.removeEventListener('mousemove', handleSplitMove);
     document.removeEventListener('mouseup', handleSplitEnd);
   }
@@ -98,6 +120,7 @@
     <button
       type="button"
       aria-label="调整分割"
+      title="拖拽调整分割；沿另一方向大幅拖动可切换上下或左右排版"
       class="bg-app-border hover:bg-primary-500 transition-colors z-10 p-0 border-0 shrink-0"
       style:width={node.direction === 'vertical' ? '4px' : '100%'}
       style:height={node.direction === 'horizontal' ? '4px' : '100%'}

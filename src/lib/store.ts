@@ -291,7 +291,7 @@ export interface AppSettings {
     backgroundImage?: string | null;
     backgroundOpacity?: number; // 0-1, 默认 0.5
     backgroundBlur?: number; // 0-20, 默认 0
-    ansiColorPreset: 'classic' | 'standard-light' | 'solarized' | 'nord-light' | 'monokai' | 'gruvbox' | 'github-light' | 'solarized-light' | 'tango-light' | 'smart' | 'custom';
+    ansiColorPreset: 'classic' | 'standard-light' | 'solarized' | 'solarized-light' | 'github-light' | 'monokai' | 'gruvbox' | 'dracula' | 'one-dark' | 'tokyo-night' | 'custom';
     customAnsiColors?: {
       foreground: string;
       red: string;
@@ -480,6 +480,13 @@ const loadSettings = (): AppSettings => {
       seen.set(normalized, key);
     }
     merged.shortcuts = sanitizedShortcuts;
+    if ((parsed.appearance?.ansiColorPreset as string | undefined) === 'smart') {
+      const terminalTheme = merged.appearance.terminalTheme;
+      const isLightPreference =
+        terminalTheme === 'solarized-light' ||
+        (terminalTheme === 'auto' && merged.theme === 'light');
+      merged.appearance.ansiColorPreset = isLightPreference ? 'standard-light' : 'classic';
+    }
     return merged;
   } catch (e) {
     console.error('Failed to parse settings:', e);
@@ -856,26 +863,6 @@ const ansiColorPresets: Record<AppSettings['appearance']['ansiColorPreset'], {
     brightCyan: '#29b8db',
     brightWhite: '#e5e5e5',
   },
-  'nord-light': {
-    foreground: '#d8dee9',
-    background: '#2e3440',
-    black: '#3b4252',
-    red: '#bf616a',
-    green: '#a3be8c',
-    yellow: '#ebcb8b',
-    blue: '#81a1c1',
-    magenta: '#b48ead',
-    cyan: '#88c0d0',
-    white: '#e5e9f0',
-    brightBlack: '#4c566a',
-    brightRed: '#bf616a',
-    brightGreen: '#a3be8c',
-    brightYellow: '#ebcb8b',
-    brightBlue: '#81a1c1',
-    brightMagenta: '#b48ead',
-    brightCyan: '#8fbcbb',
-    brightWhite: '#eceff4',
-  },
   monokai: {
     foreground: '#f8f8f2',
     background: '#272822',
@@ -915,6 +902,46 @@ const ansiColorPresets: Record<AppSettings['appearance']['ansiColorPreset'], {
     brightMagenta: '#d3869b',
     brightCyan: '#8ec07c',
     brightWhite: '#ebdbb2',
+  },
+  dracula: {
+    foreground: '#f8f8f2',
+    background: '#282a36',
+    black: '#21222c',
+    red: '#ff5555',
+    green: '#50fa7b',
+    yellow: '#f1fa8c',
+    blue: '#bd93f9',
+    magenta: '#ff79c6',
+    cyan: '#8be9fd',
+    white: '#f8f8f2',
+    brightBlack: '#6272a4',
+    brightRed: '#ff6e6e',
+    brightGreen: '#69ff94',
+    brightYellow: '#ffffa5',
+    brightBlue: '#d6acff',
+    brightMagenta: '#ff92df',
+    brightCyan: '#a4ffff',
+    brightWhite: '#ffffff',
+  },
+  'one-dark': {
+    foreground: '#abb2bf',
+    background: '#282c34',
+    black: '#282c34',
+    red: '#e06c75',
+    green: '#98c379',
+    yellow: '#e5c07b',
+    blue: '#61afef',
+    magenta: '#c678dd',
+    cyan: '#56b6c2',
+    white: '#dcdfe4',
+    brightBlack: '#5c6370',
+    brightRed: '#e06c75',
+    brightGreen: '#98c379',
+    brightYellow: '#e5c07b',
+    brightBlue: '#61afef',
+    brightMagenta: '#c678dd',
+    brightCyan: '#56b6c2',
+    brightWhite: '#ffffff',
   },
   'github-light': {
     foreground: '#24292f',
@@ -956,45 +983,25 @@ const ansiColorPresets: Record<AppSettings['appearance']['ansiColorPreset'], {
     brightCyan: '#93a1a1',
     brightWhite: '#fdf6e3',
   },
-  'tango-light': {
-    foreground: '#2e3436',
-    background: '#eeeeec',
-    black: '#2e3436',
-    red: '#cc0000',
-    green: '#4e9a06',
-    yellow: '#c4a000',
-    blue: '#3465a4',
-    magenta: '#75507b',
-    cyan: '#06989a',
-    white: '#d3d7cf',
-    brightBlack: '#555753',
-    brightRed: '#ef2929',
-    brightGreen: '#8ae234',
-    brightYellow: '#fce94f',
-    brightBlue: '#729fcf',
-    brightMagenta: '#ad7fa8',
-    brightCyan: '#34e2e2',
-    brightWhite: '#eeeeec',
-  },
-  smart: {
-    foreground: '#e0e0e0',
-    background: 'rgba(0,0,0,0)',
-    black: '#1a1a1a',
-    red: '#ff5252',
-    green: '#69f0ae',
-    yellow: '#ffd740',
-    blue: '#448aff',
-    magenta: '#e040fb',
-    cyan: '#18ffff',
-    white: '#ffffff',
-    brightBlack: '#555555',
-    brightRed: '#ff80ab',
-    brightGreen: '#b9f6ca',
-    brightYellow: '#ffe57f',
-    brightBlue: '#82b1ff',
-    brightMagenta: '#ea80fc',
-    brightCyan: '#84ffff',
-    brightWhite: '#ffffff',
+  'tokyo-night': {
+    foreground: '#c0caf5',
+    background: '#1a1b26',
+    black: '#15161e',
+    red: '#f7768e',
+    green: '#9ece6a',
+    yellow: '#e0af68',
+    blue: '#7aa2f7',
+    magenta: '#bb9af7',
+    cyan: '#7dcfff',
+    white: '#a9b1d6',
+    brightBlack: '#414868',
+    brightRed: '#f7768e',
+    brightGreen: '#9ece6a',
+    brightYellow: '#e0af68',
+    brightBlue: '#7aa2f7',
+    brightMagenta: '#bb9af7',
+    brightCyan: '#7dcfff',
+    brightWhite: '#c0caf5',
   },
   custom: {
     foreground: '#ffffff',
@@ -1017,118 +1024,6 @@ const ansiColorPresets: Record<AppSettings['appearance']['ansiColorPreset'], {
     brightWhite: '#ffffff',
   },
 };
-
-// Helper function to generate smart ANSI colors based on current settings
-function generateSmartColors(appSettings: AppSettings) {
-  const hasBackgroundImage = !!appSettings.appearance.backgroundImage;
-  const terminalTheme = appSettings.appearance.terminalTheme;
-
-  // If has background image, use image-optimized style
-  if (hasBackgroundImage) {
-    return {
-      foreground: '#e0e0e0',
-      background: 'rgba(0, 0, 0, 0)',
-      black: '#0a0a14',
-      red: '#ff5252',
-      green: '#69f0ae',
-      yellow: '#ffd740',
-      blue: '#448aff',
-      magenta: '#e040fb',
-      cyan: '#18ffff',
-      white: '#ffffff',
-      brightBlack: '#37474f',
-      brightRed: '#ff80ab',
-      brightGreen: '#b9f6ca',
-      brightYellow: '#ffe57f',
-      brightBlue: '#82b1ff',
-      brightMagenta: '#ea80fc',
-      brightCyan: '#84ffff',
-      brightWhite: '#ffffff',
-    };
-  }
-
-  // Otherwise, match the terminal theme
-  const themeMap: Record<string, { hue: number; saturation: number }> = {
-    'auto': { hue: 220, saturation: 30 },           // dark blue-gray
-    'dracula': { hue: 270, saturation: 60 },         // purple
-    'nord': { hue: 220, saturation: 30 },            // arctic blue
-    'solarized-dark': { hue: 195, saturation: 80 },   // deep blue
-    'solarized-light': { hue: 45, saturation: 60 },   // warm cream
-    'monokai': { hue: 40, saturation: 50 },         // warm gray
-    'one-dark': { hue: 220, saturation: 25 },        // dark blue
-    'github-dark': { hue: 210, saturation: 40 },      // deep dark
-    'tokyo-night': { hue: 240, saturation: 30 },     // dark purple-blue
-    'catppuccin': { hue: 240, saturation: 30 },      // mauve
-    'custom': { hue: 220, saturation: 30 },         // default
-  };
-
-  const themeColors = themeMap[terminalTheme] || themeMap['auto'];
-  const hue = themeColors.hue;
-
-  // Determine if theme is light based on theme preset.
-  const isLightTheme = terminalTheme.includes('light');
-
-  // Generate colors based on theme
-  const foreground = isLightTheme ? '#2c3e50' : '#e0e0e0';
-
-  // Generate harmonious colors using color theory
-  // Complementary colors for better contrast
-  const colorSaturation = isLightTheme ? 70 : 80;
-  const red = hslToHex(hue + 350, colorSaturation, 60);
-  const green = hslToHex(hue + 120, colorSaturation, 55);
-  const yellow = hslToHex(hue + 60, colorSaturation, 55);
-  const blue = hslToHex(hue, colorSaturation, 55);
-  const magenta = hslToHex(hue + 300, colorSaturation, 55);
-  const cyan = hslToHex(hue + 180, colorSaturation, 55);
-
-  // Bright versions
-  const brightRed = hslToHex(hue + 350, colorSaturation, 70);
-  const brightGreen = hslToHex(hue + 120, colorSaturation, 65);
-  const brightYellow = hslToHex(hue + 60, colorSaturation, 65);
-  const brightBlue = hslToHex(hue, colorSaturation, 65);
-  const brightMagenta = hslToHex(hue + 300, colorSaturation, 65);
-  const brightCyan = hslToHex(hue + 180, colorSaturation, 65);
-
-  return {
-    foreground,
-    background: 'rgba(0,0,0,0)',
-    black: isLightTheme ? '#e8e8e8' : '#1a1a1a',
-    red,
-    green,
-    yellow,
-    blue,
-    magenta,
-    cyan,
-    white: isLightTheme ? '#1a1a1a' : '#ffffff',
-    brightBlack: isLightTheme ? '#d0d0d0' : '#555555',
-    brightRed,
-    brightGreen,
-    brightYellow,
-    brightBlue,
-    brightMagenta,
-    brightCyan,
-    brightWhite: isLightTheme ? '#000000' : '#ffffff',
-  };
-}
-
-// Convert HSL to Hex
-function hslToHex(h: number, s: number, l: number): string {
-  h = ((h % 360) + 360) % 360;
-  s /= 100;
-  l /= 100;
-
-  const a = s * Math.min(l, 1 - l);
-  const f = (n: number) => {
-    const k = (n + h / 30) % 12;
-    return l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
-  };
-
-  const r = Math.round(255 * f(0));
-  const g = Math.round(255 * f(8));
-  const b = Math.round(255 * f(4));
-
-  return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
-}
 
 // Helper function to generate complete ANSI color scheme from 6 core colors
 function generateAnsiColorsFromCustom(customColors: NonNullable<AppSettings['appearance']['customAnsiColors']>) {
@@ -1204,9 +1099,7 @@ export function getXtermTheme(appSettings: AppSettings): ITheme {
   const baseTheme = getBaseXtermTheme(appSettings);
   let preset = appSettings.appearance?.ansiColorPreset || 'classic';
 
-  // Smart preset selection for light themes
-  // If the user has a light background (theme) but is using a dark-only preset (like classic),
-  // we override it to a smart/light preset to ensure readability.
+  // Align stale dark/light ANSI presets with the active terminal background brightness.
   const bgHex = baseTheme.background || '#000000';
   // Calculate brightness inline to avoid circular dependency with terminalService
   const r = parseInt(bgHex.slice(1, 3), 16);
@@ -1215,17 +1108,18 @@ export function getXtermTheme(appSettings: AppSettings): ITheme {
   const brightness = (r * 299 + g * 587 + b * 114) / 1000;
   
   const isLightBackground = brightness > 128;
-  const isDarkPreset = ['classic', 'high-contrast', 'neon-dark', 'matrix-green', 'night-owl'].includes(preset);
+  const isDarkPreset = ['classic', 'solarized', 'monokai', 'gruvbox', 'dracula', 'one-dark', 'tokyo-night'].includes(preset);
+  const isLightPreset = ['standard-light', 'solarized-light', 'github-light'].includes(preset);
 
   if (isLightBackground && isDarkPreset) {
-    preset = 'smart';
+    preset = 'standard-light';
+  } else if (!isLightBackground && isLightPreset) {
+    preset = 'classic';
   }
 
   // Get ANSI colors from preset or custom
   const ansiColors = preset === 'custom' && appSettings.appearance?.customAnsiColors
     ? generateAnsiColorsFromCustom(appSettings.appearance.customAnsiColors)
-    : preset === 'smart'
-    ? generateSmartColors(appSettings)
     : ansiColorPresets[preset] || ansiColorPresets['classic'];
 
   // Apply ANSI colors to theme

@@ -16,6 +16,7 @@
   import FolderIcon from './icons/FolderIcon.svelte';
   import UploadIcon from './icons/UploadIcon.svelte';
   import DownloadIcon from './icons/DownloadIcon.svelte';
+  import SidebarToggleIcon from './icons/SidebarToggleIcon.svelte';
   import { importConnections, exportConnections } from '../lib/importExportService';
   import { confirm } from '@tauri-apps/plugin-dialog';
   import { successMessage } from '../lib/store';
@@ -432,7 +433,16 @@
     />
 {/if}
 
-<aside class="flex flex-col bg-app-bg text-app-text-secondary transition-all duration-300 ease-in-out {$isSidebarCollapsed ? 'w-[47px]' : 'w-64'}">
+<aside class="group relative flex flex-col overflow-visible bg-app-bg text-app-text-secondary transition-all duration-300 ease-in-out {$isSidebarCollapsed ? 'w-[47px]' : 'w-64'}">
+  <button
+    class="absolute right-0 top-1/2 z-30 flex h-20 w-20 translate-x-1/2 -translate-y-1/2 items-center justify-center text-app-text-secondary transition-all duration-200 hover:scale-105 hover:text-app-text opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto"
+    on:click={() => isSidebarCollapsed.update(v => !v)}
+    title={$isSidebarCollapsed ? '展开侧栏' : '收起侧栏'}
+    aria-label={$isSidebarCollapsed ? '展开侧栏' : '收起侧栏'}
+  >
+    <SidebarToggleIcon class="h-20 w-20 transition-transform duration-200 {$isSidebarCollapsed ? 'rotate-180' : ''}" />
+  </button>
+
   <!-- Sidebar Header -->
   <div class="{$isSidebarCollapsed ? 'p-2' : 'p-4'} border-b border-app-border flex flex-col gap-4">
     <div class="flex gap-2">
@@ -762,7 +772,7 @@
         <span>文件</span>
       {/if}
     </button>
-    
+
     <!-- Settings button removed -->
     
     <div class="text-xs text-app-text-secondary text-center mt-1 opacity-50">

@@ -30,6 +30,10 @@
   let confirmPassword = '';
   let securityMessage = '';
   let securityError = '';
+  let ansiPresetDropdownOpen = false;
+  let ansiPresetDropdownEl: HTMLDivElement | null = null;
+  let terminalThemeDropdownOpen = false;
+  let terminalThemeDropdownEl: HTMLDivElement | null = null;
 
   type ShortcutKey = keyof AppSettings['shortcuts'];
 
@@ -68,7 +72,46 @@
 
   onMount(() => {
     checkLockStatus();
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (ansiPresetDropdownOpen && ansiPresetDropdownEl && !ansiPresetDropdownEl.contains(event.target as Node)) {
+        ansiPresetDropdownOpen = false;
+      }
+      if (terminalThemeDropdownOpen && terminalThemeDropdownEl && !terminalThemeDropdownEl.contains(event.target as Node)) {
+        terminalThemeDropdownOpen = false;
+      }
+    };
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        ansiPresetDropdownOpen = false;
+        terminalThemeDropdownOpen = false;
+      }
+    };
+
+    window.addEventListener('mousedown', handlePointerDown, true);
+    window.addEventListener('keydown', handleEscape);
+
+    return () => {
+      window.removeEventListener('mousedown', handlePointerDown, true);
+      window.removeEventListener('keydown', handleEscape);
+    };
   });
+
+  function getAutoLinkedAnsiPreset(
+    terminalTheme: AppSettings['appearance']['terminalTheme'],
+    appTheme: AppSettings['theme']
+  ): AppSettings['appearance']['ansiColorPreset'] {
+    if (terminalTheme === 'custom') {
+      return 'custom';
+    }
+
+    if (terminalTheme === 'auto') {
+      return appTheme === 'light' ? 'standard-light' : 'classic';
+    }
+
+    return terminalTheme === 'solarized-light' ? 'standard-light' : 'classic';
+  }
 
   function updateTheme(theme: AppSettings['theme']) {
     settings.update(s => {
@@ -80,22 +123,43 @@
           customUITheme: { ...defaultCustomUITheme }
         };
       }
+
+      if (s.appearance.terminalTheme === 'auto' && s.appearance.ansiColorPreset !== 'custom') {
+        newSettings.appearance = {
+          ...newSettings.appearance,
+          ansiColorPreset: getAutoLinkedAnsiPreset('auto', theme)
+        };
+      }
+
       return newSettings;
     });
   }
 
   function updateTerminalTheme(theme: 'auto' | 'dracula' | 'nord' | 'solarized-dark' | 'solarized-light' | 'monokai' | 'one-dark' | 'github-dark' | 'tokyo-night' | 'catppuccin' | 'custom') {
-    settings.update(s => ({
-      ...s,
-      appearance: {
-        ...s.appearance,
-        terminalTheme: theme,
-        customTheme: theme === 'custom' ? s.appearance.customTheme || defaultCustomTheme : undefined
-      }
-    }));
+    let nextSettings: AppSettings | null = null;
+
+    settings.update(s => {
+      const nextAnsiPreset = getAutoLinkedAnsiPreset(theme, s.theme);
+      nextSettings = {
+        ...s,
+        appearance: {
+          ...s.appearance,
+          terminalTheme: theme,
+          ansiColorPreset: nextAnsiPreset,
+          customTheme: theme === 'custom' ? s.appearance.customTheme || defaultCustomTheme : undefined,
+          customAnsiColors: nextAnsiPreset === 'custom'
+            ? s.appearance.customAnsiColors || { ...defaultCustomAnsiColors }
+            : undefined
+        }
+      };
+
+      return nextSettings;
+    });
 
     // Update scrollbar colors immediately after theme change
-    applyScrollbarColor($settings);
+    if (nextSettings) {
+      applyScrollbarColor(nextSettings);
+    }
   }
 
   function updateAccentColorSetting(color: string) {
@@ -356,10 +420,28 @@
   // Pre-defined font families
   const fontFamilies = [
     { label: 'Monospace (Default)', value: 'Menlo, Monaco, "Courier New", monospace' },
+    { label: 'Cascadia Code', value: '"Cascadia Code", "Cascadia Mono", monospace' },
+    { label: 'Consolas', value: 'Consolas, "Courier New", monospace' },
     { label: 'Fira Code', value: '"Fira Code", monospace' },
+    { label: 'IBM Plex Mono', value: '"IBM Plex Mono", monospace' },
     { label: 'JetBrains Mono', value: '"JetBrains Mono", monospace' },
-    { label: 'Source Code Pro', value: '"Source Code Pro", monospace' }
+    { label: '宋体', value: 'SimSun, "Songti SC", serif' },
+    { label: '仿宋', value: 'FangSong, STFangsong, serif' },
+    { label: '楷体', value: 'KaiTi, STKaiti, serif' },
+    { label: '微软雅黑', value: '"Microsoft YaHei", "PingFang SC", sans-serif' },
+    { label: 'SF Mono', value: '"SF Mono", Menlo, Monaco, monospace' },
+    { label: 'Source Code Pro', value: '"Source Code Pro", monospace' },
+    { label: 'Ubuntu Mono', value: '"Ubuntu Mono", monospace' },
+    { label: 'DejaVu Sans Mono', value: '"DejaVu Sans Mono", monospace' }
   ];
+
+  function isPresetFontFamily(value: string): boolean {
+    return fontFamilies.some((font) => font.value === value);
+  }
+
+  function getSelectedFontFamilyOption(value: string): string {
+    return isPresetFontFamily(value) ? value : '__custom__';
+  }
 
   // Terminal theme presets
   type TerminalThemePreset = AppSettings['appearance']['terminalTheme'];
@@ -668,21 +750,6 @@
       }
     },
     {
-      id: 'nord-light',
-      name: 'Nord Light',
-      description: '北极光主题,清新淡雅',
-      previewColors: {
-        black: '#3b4252',
-        red: '#bf616a',
-        green: '#a3be8c',
-        yellow: '#ebcb8b',
-        blue: '#81a1c1',
-        magenta: '#b48ead',
-        cyan: '#88c0d0',
-        white: '#e5e9f0',
-      }
-    },
-    {
       id: 'github-light',
       name: 'GitHub Light',
       description: 'GitHub 风格的浅色主题',
@@ -695,21 +762,6 @@
         magenta: '#8250df',
         cyan: '#1b7c83',
         white: '#6e7781',
-      }
-    },
-    {
-      id: 'tango-light',
-      name: 'Tango Light',
-      description: '经典的 Linux 终端浅色主题',
-      previewColors: {
-        black: '#2e3436',
-        red: '#cc0000',
-        green: '#4e9a06',
-        yellow: '#c4a000',
-        blue: '#3465a4',
-        magenta: '#75507b',
-        cyan: '#06989a',
-        white: '#d3d7cf',
       }
     },
     {
@@ -743,18 +795,48 @@
       }
     },
     {
-      id: 'smart',
-      name: '智能配色',
-      description: '根据背景自动匹配配色',
+      id: 'dracula',
+      name: 'Dracula',
+      description: '非常常见的紫调深色终端配色',
       previewColors: {
-        black: '#1a1a1a',
-        red: '#ff5252',
-        green: '#69f0ae',
-        yellow: '#ffd740',
-        blue: '#448aff',
-        magenta: '#e040fb',
-        cyan: '#18ffff',
-        white: '#ffffff',
+        black: '#21222c',
+        red: '#ff5555',
+        green: '#50fa7b',
+        yellow: '#f1fa8c',
+        blue: '#bd93f9',
+        magenta: '#ff79c6',
+        cyan: '#8be9fd',
+        white: '#f8f8f2',
+      }
+    },
+    {
+      id: 'one-dark',
+      name: 'One Dark',
+      description: 'Atom 与 VS Code 用户常见的深色配色',
+      previewColors: {
+        black: '#282c34',
+        red: '#e06c75',
+        green: '#98c379',
+        yellow: '#e5c07b',
+        blue: '#61afef',
+        magenta: '#c678dd',
+        cyan: '#56b6c2',
+        white: '#dcdfe4',
+      }
+    },
+    {
+      id: 'tokyo-night',
+      name: 'Tokyo Night',
+      description: '近年很常用的蓝紫调深色配色',
+      previewColors: {
+        black: '#15161e',
+        red: '#f7768e',
+        green: '#9ece6a',
+        yellow: '#e0af68',
+        blue: '#7aa2f7',
+        magenta: '#bb9af7',
+        cyan: '#7dcfff',
+        white: '#a9b1d6',
       }
     },
     {
@@ -795,6 +877,27 @@
       }
     }));
   }
+
+  function getAnsiColorPresetById(presetId: AnsiColorPreset) {
+    return ansiColorPresets.find((preset) => preset.id === presetId);
+  }
+
+  function isLightAnsiPreset(presetId: AnsiColorPreset): boolean {
+    return ['standard-light', 'solarized-light', 'github-light'].includes(presetId);
+  }
+
+  function selectAnsiPreset(preset: AnsiColorPreset) {
+    updateAnsiColorPreset(preset);
+    ansiPresetDropdownOpen = false;
+  }
+
+  function selectTerminalTheme(theme: TerminalThemePreset) {
+    updateTerminalTheme(theme);
+    terminalThemeDropdownOpen = false;
+  }
+
+  $: selectedAnsiPreset = getAnsiColorPresetById($settings.appearance.ansiColorPreset);
+  $: selectedTerminalTheme = terminalThemes.find((theme) => theme.id === $settings.appearance.terminalTheme);
 
   function updateCustomAnsiColor(key: AnsiColorKey, value: string) {
     if (!$settings.appearance.customAnsiColors) {
@@ -1334,14 +1437,36 @@
               </label>
               <select
                 id="fontFamily"
-                value={$settings.terminal.fontFamily}
-                on:change={(e) => updateTerminalSetting('fontFamily', (e.target as HTMLSelectElement).value)}
+                value={getSelectedFontFamilyOption($settings.terminal.fontFamily)}
+                on:change={(e) => {
+                  const value = (e.target as HTMLSelectElement).value;
+                  if (value !== '__custom__') {
+                    updateTerminalSetting('fontFamily', value);
+                  }
+                }}
                 class="settings-select w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text focus:border-primary-500 outline-none"
               >
                 {#each fontFamilies as font}
                   <option value={font.value}>{font.label}</option>
                 {/each}
+                <option value="__custom__">自定义字体</option>
               </select>
+              <div class="mt-3">
+                <label class="block text-xs text-app-text-secondary mb-1.5" for="customFontFamily">
+                  自定义字体
+                </label>
+                <input
+                  id="customFontFamily"
+                  type="text"
+                  value={$settings.terminal.fontFamily}
+                  placeholder={'例如: "Maple Mono", monospace'}
+                  on:input={(e) => updateTerminalSetting('fontFamily', (e.target as HTMLInputElement).value)}
+                  class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-sm text-app-text font-mono focus:border-primary-500 outline-none"
+                />
+                <p class="mt-1.5 text-xs text-app-text-secondary">
+                  可输入系统已安装的字体名，支持字体回退写法，例如 `"Maple Mono", "Microsoft YaHei", monospace`
+                </p>
+              </div>
               <p class="mt-2 text-xs text-app-text-secondary">
                 当前字体预览: <span style="font-family: {$settings.terminal.fontFamily}">The quick brown fox jumps over the lazy dog 0123456789</span>
               </p>
@@ -1431,100 +1556,52 @@
 
         {:else if activeTab === 'appearance'}
           <div class="space-y-6" in:slide={{ duration: 200 }}>
-            <!-- Theme Mode -->
-            <div>
-              <span class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-3">主题模式</span>
-              <div class="grid grid-cols-3 gap-4">
-                <button
-                  class="relative p-4 border rounded-xl flex flex-col items-center gap-2 transition-all {$settings.theme === 'dark' ? 'border-primary-500 bg-primary-50 dark:bg-primary-500/10' : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'}"
-                  on:click={() => updateTheme('dark')}
-                >
-                  <div class="w-full h-20 bg-slate-900 rounded-lg border border-slate-800 shadow-sm overflow-hidden relative">
-                    <div class="absolute left-0 top-0 bottom-0 w-8 bg-slate-800 border-r border-slate-700"></div>
-                    <div class="absolute right-2 top-2 w-12 h-2 bg-slate-700 rounded"></div>
-                  </div>
-                  <span class="text-sm font-medium text-slate-900 dark:text-slate-200">深色模式</span>
-                  {#if $settings.theme === 'dark'}
-                    <div class="absolute top-2 right-2 w-2 h-2 bg-primary-500 rounded-full"></div>
-                  {/if}
-                </button>
-
-                <button
-                  class="relative p-4 border rounded-xl flex flex-col items-center gap-2 transition-all {$settings.theme === 'light' ? 'border-primary-500 bg-primary-50 dark:bg-primary-500/10' : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'}"
-                  on:click={() => updateTheme('light')}
-                >
-                  <div class="w-full h-20 bg-slate-100 rounded-lg border border-slate-200 shadow-sm overflow-hidden relative">
-                    <div class="absolute left-0 top-0 bottom-0 w-8 bg-white border-r border-slate-200"></div>
-                    <div class="absolute right-2 top-2 w-12 h-2 bg-slate-200 rounded"></div>
-                  </div>
-                  <span class="text-sm font-medium text-slate-900 dark:text-slate-200">浅色模式</span>
-                  {#if $settings.theme === 'light'}
-                    <div class="absolute top-2 right-2 w-2 h-2 bg-primary-500 rounded-full"></div>
-                  {/if}
-                </button>
-
-                <button
-                  class="relative p-4 border rounded-xl flex flex-col items-center gap-2 transition-all {$settings.theme === 'custom' ? 'border-primary-500 bg-primary-50 dark:bg-primary-500/10' : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'}"
-                  on:click={() => updateTheme('custom')}
-                >
-                  <div class="w-full h-20 bg-gradient-to-br from-slate-900 to-slate-800 rounded-lg border border-slate-700 shadow-sm overflow-hidden relative">
-                    <div class="absolute left-0 top-0 bottom-0 w-8 bg-slate-800/50 border-r border-slate-700/50"></div>
-                    <div class="absolute right-2 top-2 w-12 h-2 bg-slate-700/50 rounded"></div>
-                  </div>
-                  <span class="text-sm font-medium text-slate-900 dark:text-slate-200">自定义</span>
-                  {#if $settings.theme === 'custom'}
-                    <div class="absolute top-2 right-2 w-2 h-2 bg-primary-500 rounded-full"></div>
-                  {/if}
-                </button>
-              </div>
-
-              {#if $settings.theme === 'custom'}
-                <div class="mt-4 p-4 border border-slate-200 dark:border-slate-700 rounded-xl space-y-3" transition:slide={{ duration: 200 }}>
-                   <div class="flex items-center justify-between">
-                     <h4 class="text-sm font-medium text-slate-900 dark:text-slate-200">自定义颜色</h4>
-                     <button
-                       class="text-xs px-3 py-1 bg-primary-600 hover:bg-primary-500 text-white rounded transition-colors"
-                       on:click={resetCustomUITheme}
-                     >
-                       重置
-                     </button>
-                   </div>
-                   <div class="grid grid-cols-2 gap-4">
-                    {#each Object.entries(customUIColorLabels) as [k, label] (k)}
-                       {@const key = k as CustomUIThemeKey}
-                       {@const inputId = `custom-ui-color-${key}`}
-                       <div>
-                         <label for={inputId} class="block text-xs text-slate-500 mb-1">{label}</label>
-                         <div class="flex gap-2">
-                           <input
-                             id={inputId}
-                             type="color"
-                             value={$settings.appearance.customUITheme?.[key] || defaultCustomUITheme[key]}
-                             on:input={(e) => updateCustomUITheme(key, e.currentTarget.value)}
-                             class="h-8 w-12 rounded cursor-pointer border border-slate-300 dark:border-slate-600 p-0.5 bg-transparent"
-                           />
-                           <input
-                             type="text"
-                             value={$settings.appearance.customUITheme?.[key] || defaultCustomUITheme[key]}
-                             on:input={(e) => updateCustomUITheme(key, e.currentTarget.value)}
-                             class="flex-1 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded px-2 text-xs font-mono"
-                           />
-                           {#if 'EyeDropper' in window}
-                             <button
-                               class="p-1.5 border border-slate-200 dark:border-slate-700 rounded bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-500 hover:text-primary-500 transition-colors"
-                               title="取色器"
-                               on:click={() => handleEyeDropper((c) => updateCustomUITheme(key, c))}
-                             >
-                               <EyeDropperIcon class="w-4 h-4" />
-                             </button>
-                           {/if}
-                         </div>
+            {#if $settings.theme === 'custom'}
+              <div class="p-4 border border-slate-200 dark:border-slate-700 rounded-xl space-y-3" transition:slide={{ duration: 200 }}>
+                 <div class="flex items-center justify-between">
+                   <h4 class="text-sm font-medium text-slate-900 dark:text-slate-200">自定义界面颜色</h4>
+                   <button
+                     class="text-xs px-3 py-1 bg-primary-600 hover:bg-primary-500 text-white rounded transition-colors"
+                     on:click={resetCustomUITheme}
+                   >
+                     重置
+                   </button>
+                 </div>
+                 <div class="grid grid-cols-2 gap-4">
+                  {#each Object.entries(customUIColorLabels) as [k, label] (k)}
+                     {@const key = k as CustomUIThemeKey}
+                     {@const inputId = `custom-ui-color-${key}`}
+                     <div>
+                       <label for={inputId} class="block text-xs text-slate-500 mb-1">{label}</label>
+                       <div class="flex gap-2">
+                         <input
+                           id={inputId}
+                           type="color"
+                           value={$settings.appearance.customUITheme?.[key] || defaultCustomUITheme[key]}
+                           on:input={(e) => updateCustomUITheme(key, e.currentTarget.value)}
+                           class="h-8 w-12 rounded cursor-pointer border border-slate-300 dark:border-slate-600 p-0.5 bg-transparent"
+                         />
+                         <input
+                           type="text"
+                           value={$settings.appearance.customUITheme?.[key] || defaultCustomUITheme[key]}
+                           on:input={(e) => updateCustomUITheme(key, e.currentTarget.value)}
+                           class="flex-1 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded px-2 text-xs font-mono"
+                         />
+                         {#if 'EyeDropper' in window}
+                           <button
+                             class="p-1.5 border border-slate-200 dark:border-slate-700 rounded bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-500 hover:text-primary-500 transition-colors"
+                             title="取色器"
+                             on:click={() => handleEyeDropper((c) => updateCustomUITheme(key, c))}
+                           >
+                             <EyeDropperIcon class="w-4 h-4" />
+                           </button>
+                         {/if}
                        </div>
-                     {/each}
-                   </div>
-                </div>
-              {/if}
-            </div>
+                     </div>
+                   {/each}
+                 </div>
+              </div>
+            {/if}
 
             <!-- Accent Color -->
             <div>
@@ -1546,31 +1623,95 @@
             <!-- ANSI Color Presets -->
             <div>
               <span class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-3">ANSI颜色预设</span>
-              <div class="flex flex-col gap-3">
-                {#each ansiColorPresets as preset}
-                  <button
-                    class="relative p-3 border rounded-lg flex items-center justify-between gap-4 transition-all {$settings.appearance.ansiColorPreset === preset.id ? 'border-primary-500 bg-primary-50 dark:bg-primary-500/10' : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'}"
-                    on:click={() => updateAnsiColorPreset(preset.id)}
-                    title={preset.description}
-                  >
-                    <div class="flex-1 text-left min-w-0">
-                      <div class="flex items-center gap-2 mb-0.5">
-                        <span class="text-sm font-medium text-slate-700 dark:text-slate-300 truncate">{preset.name}</span>
-                        {#if $settings.appearance.ansiColorPreset === preset.id}
-                          <div class="w-2 h-2 bg-primary-500 rounded-full shrink-0"></div>
-                        {/if}
+              <div class="relative" bind:this={ansiPresetDropdownEl}>
+                <button
+                  type="button"
+                  class="w-full flex items-center justify-between gap-3 bg-app-bg border border-app-border rounded-lg px-3 py-2 text-left text-app-text focus:border-primary-500 outline-none"
+                  aria-haspopup="listbox"
+                  aria-expanded={ansiPresetDropdownOpen}
+                  on:click={() => ansiPresetDropdownOpen = !ansiPresetDropdownOpen}
+                >
+                  {#if selectedAnsiPreset}
+                    <div class="flex items-center gap-3 min-w-0 flex-1">
+                      {#if selectedAnsiPreset.id === 'custom'}
+                        <div class="w-20 h-6 rounded border border-slate-300 dark:border-slate-600 bg-slate-100 dark:bg-slate-800 shrink-0"></div>
+                      {:else}
+                        <div
+                          class="flex gap-0.5 p-1 rounded border border-slate-300 dark:border-slate-600 shrink-0"
+                          style="background-color: {isLightAnsiPreset(selectedAnsiPreset.id) ? '#f8fafc' : '#1a1a1a'}"
+                        >
+                          {#each Object.entries(selectedAnsiPreset.previewColors) as [name, color]}
+                            <div class="w-2.5 h-4 rounded-sm" style="background-color: {color}" title={name}></div>
+                          {/each}
+                        </div>
+                      {/if}
+                      <div class="min-w-0 flex-1">
+                        <div class="text-sm font-medium text-app-text truncate">{selectedAnsiPreset.name}</div>
                       </div>
-                      <span class="text-xs text-slate-500 dark:text-slate-400 truncate block">{preset.description}</span>
+                    </div>
+                  {/if}
+                  <svg
+                    class="w-4 h-4 text-app-text-secondary shrink-0 transition-transform {ansiPresetDropdownOpen ? 'rotate-180' : ''}"
+                    viewBox="0 0 20 20"
+                    fill="none"
+                  >
+                    <path d="m5 7.5 5 5 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
+                  </svg>
+                </button>
+
+                {#if ansiPresetDropdownOpen}
+                  <div
+                    class="absolute left-0 right-0 top-full mt-2 z-30 rounded-lg border border-app-border bg-app-surface shadow-xl overflow-hidden"
+                    role="listbox"
+                  >
+                    <div class="max-h-80 overflow-y-auto custom-scrollbar py-1">
+                      {#each ansiColorPresets as preset}
+                        <button
+                          type="button"
+                          class="w-full px-3 py-2 flex items-center justify-between gap-3 text-left transition-colors {$settings.appearance.ansiColorPreset === preset.id ? 'bg-primary-50 dark:bg-primary-500/10' : 'hover:bg-app-bg'}"
+                          role="option"
+                          aria-selected={$settings.appearance.ansiColorPreset === preset.id}
+                          on:click={() => selectAnsiPreset(preset.id)}
+                        >
+                          <div class="flex items-center gap-3 min-w-0 flex-1">
+                            {#if preset.id === 'custom'}
+                              <div class="w-20 h-6 rounded border border-slate-300 dark:border-slate-600 bg-slate-100 dark:bg-slate-800 shrink-0"></div>
+                            {:else}
+                              <div
+                                class="flex gap-0.5 p-1 rounded border border-slate-300 dark:border-slate-600 shrink-0"
+                                style="background-color: {isLightAnsiPreset(preset.id) ? '#f8fafc' : '#1a1a1a'}"
+                              >
+                                {#each Object.entries(preset.previewColors) as [name, color]}
+                                  <div class="w-2.5 h-4 rounded-sm" style="background-color: {color}" title={name}></div>
+                                {/each}
+                              </div>
+                            {/if}
+                            <div class="min-w-0 flex-1">
+                              <div class="text-sm font-medium text-slate-700 dark:text-slate-300 truncate">{preset.name}</div>
+                              <div class="text-xs text-slate-500 dark:text-slate-400 truncate">{preset.description}</div>
+                            </div>
+                          </div>
+
+                          {#if $settings.appearance.ansiColorPreset === preset.id}
+                            <div class="w-2 h-2 bg-primary-500 rounded-full shrink-0"></div>
+                          {/if}
+                        </button>
+                      {/each}
+                    </div>
+                  </div>
+                {/if}
+              </div>
+
+              {#if selectedAnsiPreset}
+                <div class="mt-3 p-3 border border-slate-200 dark:border-slate-700 rounded-lg bg-slate-50 dark:bg-slate-900/50">
+                  <div class="flex items-center justify-between gap-4">
+                    <div class="min-w-0">
+                      <div class="text-sm font-medium text-slate-700 dark:text-slate-300 truncate">{selectedAnsiPreset.name}</div>
+                      <div class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{selectedAnsiPreset.description}</div>
                     </div>
 
                     <div class="shrink-0">
-                      {#if preset.id === 'smart'}
-                        <div class="w-48 h-8 rounded shadow-sm border border-slate-300 dark:border-slate-600 bg-gradient-to-br from-primary-400 to-purple-500 flex items-center justify-center">
-                          <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
-                          </svg>
-                        </div>
-                      {:else if preset.id === 'custom'}
+                      {#if selectedAnsiPreset.id === 'custom'}
                         <div class="w-48 h-8 rounded shadow-sm border border-slate-300 dark:border-slate-600 bg-slate-100 dark:bg-slate-800 flex items-center justify-center">
                           <svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path>
@@ -1579,17 +1720,17 @@
                       {:else}
                         <div
                           class="flex gap-1 p-1 rounded border border-slate-300 dark:border-slate-600"
-                          style="background-color: {['standard-light', 'classic', 'solarized', 'nord-light'].includes(preset.id) ? '#f8fafc' : '#1a1a1a'}"
+                          style="background-color: {isLightAnsiPreset(selectedAnsiPreset.id) ? '#f8fafc' : '#1a1a1a'}"
                         >
-                          {#each Object.entries(preset.previewColors) as [name, color]}
+                          {#each Object.entries(selectedAnsiPreset.previewColors) as [name, color]}
                             <div class="w-5 h-6 rounded-sm" style="background-color: {color}" title={name}></div>
                           {/each}
                         </div>
                       {/if}
                     </div>
-                  </button>
-                {/each}
-              </div>
+                  </div>
+                </div>
+              {/if}
 
               {#if $settings.appearance.ansiColorPreset === 'custom'}
                 <div class="mt-4 p-4 border border-slate-200 dark:border-slate-700 rounded-lg bg-slate-50 dark:bg-slate-900/50" transition:slide={{ duration: 200 }}>
@@ -1627,28 +1768,88 @@
             <!-- Terminal Theme -->
             <div>
               <span class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-3">终端主题</span>
-              <div class="grid grid-cols-5 gap-2">
-                {#each terminalThemes as theme}
-                  <button
-                    class="relative p-2 border rounded-lg flex flex-col items-center gap-2 transition-all {$settings.appearance.terminalTheme === theme.id ? 'border-primary-500 bg-primary-50 dark:bg-primary-500/10' : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'}"
-                    on:click={() => updateTerminalTheme(theme.id)}
-                    title={theme.name}
-                  >
-                    <div
-                      class="w-full h-12 rounded shadow-sm"
-                      style="background-color: {theme.preview.background}"
-                    >
-                      <div class="p-1 text-xs font-mono" style="color: {theme.preview.foreground}">
-                        Aa
+              <div class="relative" bind:this={terminalThemeDropdownEl}>
+                <button
+                  type="button"
+                  class="w-full flex items-center justify-between gap-3 bg-app-bg border border-app-border rounded-lg px-3 py-2 text-left text-app-text focus:border-primary-500 outline-none"
+                  aria-haspopup="listbox"
+                  aria-expanded={terminalThemeDropdownOpen}
+                  on:click={() => terminalThemeDropdownOpen = !terminalThemeDropdownOpen}
+                >
+                  {#if selectedTerminalTheme}
+                    <div class="flex items-center gap-3 min-w-0 flex-1">
+                      <div
+                        class="w-20 h-6 rounded border border-slate-300 dark:border-slate-600 shrink-0"
+                        style="background-color: {selectedTerminalTheme.preview.background}"
+                      >
+                        <div class="px-1 py-0.5 text-[10px] font-mono truncate" style="color: {selectedTerminalTheme.preview.foreground}">
+                          Aa
+                        </div>
+                      </div>
+                      <div class="min-w-0 flex-1">
+                        <div class="text-sm font-medium text-app-text truncate">{selectedTerminalTheme.name}</div>
                       </div>
                     </div>
-                    <span class="text-xs text-slate-700 dark:text-slate-300 truncate w-full text-center">{theme.name}</span>
-                    {#if $settings.appearance.terminalTheme === theme.id}
-                      <div class="absolute top-1 right-1 w-2 h-2 bg-primary-500 rounded-full"></div>
-                    {/if}
-                  </button>
-                {/each}
+                  {/if}
+                  <svg
+                    class="w-4 h-4 text-app-text-secondary shrink-0 transition-transform {terminalThemeDropdownOpen ? 'rotate-180' : ''}"
+                    viewBox="0 0 20 20"
+                    fill="none"
+                  >
+                    <path d="m5 7.5 5 5 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
+                  </svg>
+                </button>
+
+                {#if terminalThemeDropdownOpen}
+                  <div
+                    class="absolute left-0 right-0 top-full mt-2 z-30 rounded-lg border border-app-border bg-app-surface shadow-xl overflow-hidden"
+                    role="listbox"
+                  >
+                    <div class="max-h-80 overflow-y-auto custom-scrollbar py-1">
+                      {#each terminalThemes as theme}
+                        <button
+                          type="button"
+                          class="w-full px-3 py-2 flex items-center justify-between gap-3 text-left transition-colors {$settings.appearance.terminalTheme === theme.id ? 'bg-primary-50 dark:bg-primary-500/10' : 'hover:bg-app-bg'}"
+                          role="option"
+                          aria-selected={$settings.appearance.terminalTheme === theme.id}
+                          on:click={() => selectTerminalTheme(theme.id)}
+                        >
+                          <div class="flex items-center gap-3 min-w-0 flex-1">
+                            <div
+                              class="w-20 h-6 rounded border border-slate-300 dark:border-slate-600 shrink-0"
+                              style="background-color: {theme.preview.background}"
+                            >
+                              <div class="px-1 py-0.5 text-[10px] font-mono truncate" style="color: {theme.preview.foreground}">
+                                Aa
+                              </div>
+                            </div>
+                            <div class="min-w-0 flex-1">
+                              <div class="text-sm font-medium text-slate-700 dark:text-slate-300 truncate">{theme.name}</div>
+                            </div>
+                          </div>
+
+                          {#if $settings.appearance.terminalTheme === theme.id}
+                            <div class="w-2 h-2 bg-primary-500 rounded-full shrink-0"></div>
+                          {/if}
+                        </button>
+                      {/each}
+                    </div>
+                  </div>
+                {/if}
               </div>
+
+              {#if selectedTerminalTheme}
+                <div class="mt-3 p-3 border border-slate-200 dark:border-slate-700 rounded-lg bg-slate-50 dark:bg-slate-900/50">
+                  <div
+                    class="w-full h-12 rounded shadow-sm"
+                    style="background-color: {selectedTerminalTheme.preview.background}"
+                  >
+                    <div class="p-2 text-xs font-mono" style="color: {selectedTerminalTheme.preview.foreground}">
+                      The quick brown fox
+                    </div>
+                  </div>
+                </div>
+              {/if}
             </div>
 
             <!-- Custom Theme Editor -->
