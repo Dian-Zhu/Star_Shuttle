@@ -4,6 +4,7 @@
   import { listen } from '@tauri-apps/api/event';
   import Sidebar from './Sidebar.svelte';
   import RightSidebar from './RightSidebar.svelte';
+  let rightSidebarEl: RightSidebar;
   import TitleBar from './TitleBar.svelte';
   import TerminalManager from './TerminalManager.svelte';
   import ConnectionModal from './ConnectionModal.svelte';
@@ -322,6 +323,14 @@
       return;
     }
 
+    // Toggle AI Panel (Ctrl+Shift+A)
+    if (event.ctrlKey && event.shiftKey && event.key === 'A') {
+      event.preventDefault();
+      isRightSidebarOpen.set(true);
+      rightSidebarEl?.switchToAi();
+      return;
+    }
+
     // New Connection
     if (matchShortcut(event, shortcuts.newConnection)) {
       event.preventDefault();
@@ -434,7 +443,7 @@
 
         {#if $isRightSidebarOpen}
           <div transition:fly={{ x: $settings.ui.rightSidebarWidth || 400, duration: 200 }} class="h-full flex-shrink-0 z-20 shadow-lg">
-            <RightSidebar />
+            <RightSidebar bind:this={rightSidebarEl} />
           </div>
         {/if}
       </main>
