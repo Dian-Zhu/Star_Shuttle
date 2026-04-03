@@ -531,11 +531,16 @@ Sandbox mode: {mode}"#,
             StepStatus::Running,
         );
 
-        let result = {
-            let mgr = self.connection_manager.read().map_err(|e| e.to_string())?;
-            mgr.exec_command(&session_id, command)
+        // exec_command is sync and uses block_on internally — must run on a blocking thread
+        let cm = self.connection_manager.clone();
+        let cmd = command.to_string();
+        let result = tokio::task::spawn_blocking(move || {
+            let mgr = cm.read().map_err(|e| e.to_string())?;
+            mgr.exec_command(&session_id, &cmd)
                 .map_err(|e| e.to_string())
-        };
+        })
+        .await
+        .map_err(|e| e.to_string())?;
 
         // 记录审计日志
         let _ = self.log_command_audit(task_id, session_id, command, result.as_deref().ok());
