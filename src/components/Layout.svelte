@@ -4,7 +4,6 @@
   import { listen } from '@tauri-apps/api/event';
   import Sidebar from './Sidebar.svelte';
   import RightSidebar from './RightSidebar.svelte';
-  let rightSidebarEl: RightSidebar;
   import AiChatPanel from './ai/AiChatPanel.svelte';
   let isAiPanelOpen = false;
   let aiPanelWidth = 400;
@@ -43,7 +42,7 @@
   import AdvancedModal from './AdvancedModal.svelte';
   import PasswordPromptModal from './PasswordPromptModal.svelte';
   import { showConnectionForm, editingConnection, showSettings, successMessage, errorMessage, settings, isSidebarCollapsed, isRightSidebarOpen, activeTerminals, selectedTerminalIndex, showCommandPalette, isLocked, showAdvancedModal, passwordPromptRequest } from '../lib/store';
-  import { closeAllTerminals, disconnectTerminal, restoreActiveSessions } from '../lib/terminalService';
+  import { closeAllTerminals, disconnectTerminal, restoreActiveSessions, sendTerminalData } from '../lib/terminalService';
   import { loadConnections } from '../lib/connectionService';
   import { themeColors, type ThemeColorKey } from '../lib/themeColors';
   import { isEditableShortcutTarget, matchShortcut } from '../lib/shortcuts';
@@ -270,6 +269,7 @@
     // TitleBar AI button listener
     const handleOpenAi = () => { isAiPanelOpen = !isAiPanelOpen; };
     window.addEventListener('titlebar:open-ai', handleOpenAi);
+    window.addEventListener('ai:run-command', handleAiRunCommand as EventListener);
 
     return () => {
         mediaQuery.removeEventListener('change', handleSystemThemeChange);
@@ -281,6 +281,7 @@
         if (idleTimer) clearTimeout(idleTimer);
         if (unlistenKeyboardInteractive) unlistenKeyboardInteractive();
         window.removeEventListener('titlebar:open-ai', handleOpenAi);
+        window.removeEventListener('ai:run-command', handleAiRunCommand as EventListener);
     };
   });
 
@@ -310,6 +311,13 @@
 
   function handleBeforeUnload() {
     void closeAllTerminals();
+  }
+
+  async function handleAiRunCommand(event: Event) {
+    const customEvent = event as CustomEvent<string>;
+    const command = customEvent.detail?.trim();
+    if (!command || !aiSessionId) return;
+    await sendTerminalData(aiSessionId, `${command}\n`);
   }
 
   function handleKeydown(event: KeyboardEvent) {
@@ -505,7 +513,7 @@
         {/if}
         {#if $isRightSidebarOpen}
           <div transition:fly={{ x: $settings.ui.rightSidebarWidth || 400, duration: 200 }} class="h-full flex-shrink-0 z-20 shadow-lg">
-            <RightSidebar bind:this={rightSidebarEl} />
+            <RightSidebar />
           </div>
         {/if}
       </main>

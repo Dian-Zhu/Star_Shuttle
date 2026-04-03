@@ -1,19 +1,10 @@
 use crate::modules::ai::types::{AiConfig, ChatMessage, StreamEvent};
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::json;
 use std::time::Duration;
+use tokio::sync::oneshot;
 use tokio_stream::StreamExt;
-
-/// OpenAI 兼容请求体
-#[derive(Serialize)]
-struct ChatRequest<'a> {
-    model: &'a str,
-    messages: &'a [ChatMessage],
-    temperature: f32,
-    max_tokens: u32,
-    stream: bool,
-}
 
 /// SSE 数据行中的 delta
 #[derive(Deserialize)]
@@ -67,6 +58,7 @@ impl LlmClient {
         config: &AiConfig,
         messages: &[ChatMessage],
         mut on_event: F,
+        mut cancel_rx: Option<oneshot::Receiver<()>>,
     ) -> Result<String, String>
     where
         F: FnMut(StreamEvent),
@@ -104,7 +96,22 @@ impl LlmClient {
         let mut full_content = String::new();
         let mut buffer = String::new();
 
-        while let Some(chunk) = stream.next().await {
+        loop {
+            let next_chunk = if let Some(cancel) = cancel_rx.as_mut() {
+                tokio::select! {
+                    _ = cancel => {
+                        return Err("Request cancelled".to_string());
+                    }
+                    chunk = stream.next() => chunk,
+                }
+            } else {
+                stream.next().await
+            };
+
+            let Some(chunk) = next_chunk else {
+                break;
+            };
+
             let chunk = chunk.map_err(|e| format!("Stream error: {}", e))?;
             let text = String::from_utf8_lossy(&chunk);
             buffer.push_str(&text);
@@ -133,6 +140,14 @@ impl LlmClient {
                 }
             }
         }
+
+        if let Some(cancel) = cancel_rx.as_mut() {
+            if cancel.try_recv().is_ok() {
+                return Err("Request cancelled".to_string());
+            }
+        }
+
+
 
         Ok(full_content)
     }

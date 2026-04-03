@@ -45,9 +45,11 @@
   class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
   transition:fade={{ duration: 150 }}
   on:click|self={() => dispatch('confirm', false)}
+  on:keydown={(e) => e.key === 'Escape' && dispatch('confirm', false)}
   role="dialog"
   aria-modal="true"
   aria-labelledby="confirm-title"
+  tabindex="-1"
 >
   <!-- Modal -->
   <div

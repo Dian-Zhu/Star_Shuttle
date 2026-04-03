@@ -1,8 +1,21 @@
 <script lang="ts">
+  import { marked } from 'marked';
   import type { AgentStep } from '../../lib/aiAgentService';
 
   export let step: AgentStep;
   let expanded = false;
+
+  function renderMarkdown(content: string): string {
+    try {
+      return marked.parse(content, { async: false, gfm: true, breaks: true }) as string;
+    } catch {
+      return content;
+    }
+  }
+
+  $: isResultStep = step.kind === 'result';
+  $: isExpanded = isResultStep && hasOutput ? true : expanded;
+  $: renderedOutput = hasOutput ? renderMarkdown(step.output ?? '') : '';
 
   const KIND_LABELS: Record<string, string> = {
     thinking: '思考中',
@@ -12,16 +25,6 @@
     get_system_info: '获取系统信息',
     awaiting_confirm: '等待确认',
     result: '任务结果',
-  };
-
-  const STATUS_COLORS: Record<string, string> = {
-    pending:          'text-app-text-secondary',
-    running:          'text-blue-400',
-    waiting_confirm:  'text-yellow-400',
-    confirmed:        'text-green-400',
-    rejected:         'text-red-400',
-    completed:        'text-green-400',
-    failed:           'text-red-400',
   };
 
   const RISK_COLORS: Record<string, string> = {
@@ -36,14 +39,16 @@
     medium:   '注意',
   };
 
-  $: statusColor = STATUS_COLORS[step.status] ?? 'text-app-text-secondary';
   $: isRunning = step.status === 'running';
   $: hasOutput = !!step.output;
   $: riskColor = step.risk_level ? RISK_COLORS[step.risk_level] : '';
   $: riskLabel = step.risk_level ? RISK_LABELS[step.risk_level] : '';
+  $: containerClass = isResultStep
+    ? 'bg-primary-600/10 border border-primary-500/20 rounded-lg'
+    : 'hover:bg-app-surface/50 rounded-md';
 </script>
 
-<div class="flex gap-2.5 py-1.5 px-3 group hover:bg-app-surface/50 transition-colors rounded-md">
+<div class="flex gap-2.5 py-1.5 px-3 group transition-colors {containerClass}">
   <!-- Status indicator -->
   <div class="flex-shrink-0 flex flex-col items-center pt-0.5">
     <div class="w-4 h-4 flex items-center justify-center">
@@ -73,7 +78,7 @@
   <div class="flex-1 min-w-0 pb-1.5">
     <div class="flex items-center gap-2 flex-wrap">
       <!-- Kind label -->
-      <span class="text-xs font-medium text-app-text-secondary">
+      <span class="text-xs font-medium {isResultStep ? 'text-primary-400' : 'text-app-text-secondary'}">
         {KIND_LABELS[step.kind] ?? step.kind}
       </span>
 
@@ -93,30 +98,54 @@
     </div>
 
     <!-- Description -->
-    <p class="text-sm text-app-text mt-0.5 leading-snug">{step.description}</p>
+    <p class="text-sm {isResultStep ? 'text-app-text font-medium' : 'text-app-text'} mt-0.5 leading-snug">{step.description}</p>
 
-    <!-- Command display -->
-    {#if step.command}
-      <div class="mt-1 flex items-center gap-1.5">
-        <code class="text-xs font-mono bg-app-bg border border-app-border rounded px-2 py-0.5 text-app-text-secondary flex-1 truncate">
-          {step.command}
-        </code>
-        {#if hasOutput}
-          <button
-            class="text-xs text-app-text-secondary hover:text-app-text transition-colors"
-            on:click={() => (expanded = !expanded)}
-          >
-            {expanded ? '收起' : '展开'}
-          </button>
-        {/if}
+    {#if isResultStep && hasOutput}
+      <div
+        class="mt-1.5 bg-app-bg/70 border border-app-border rounded-lg p-2.5 max-h-48 overflow-y-auto
+               prose prose-sm dark:prose-invert max-w-none text-app-text
+               prose-code:before:content-none prose-code:after:content-none
+               prose-pre:bg-app-bg prose-pre:border prose-pre:border-app-border prose-pre:rounded-lg prose-pre:text-xs
+               prose-p:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0 break-words"
+      >
+        {@html renderedOutput}
       </div>
-    {/if}
+    {:else}
+      {#if hasOutput && !step.command}
+        <div
+          class="mt-1.5 bg-app-bg border border-app-border rounded-lg p-2 max-h-48 overflow-y-auto
+                 prose prose-sm dark:prose-invert max-w-none text-app-text-secondary
+                 prose-code:before:content-none prose-code:after:content-none
+                 prose-pre:bg-app-bg prose-pre:border prose-pre:border-app-border prose-pre:rounded-lg prose-pre:text-xs
+                 prose-p:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0 break-words"
+        >
+          {@html renderedOutput}
+        </div>
+      {/if}
 
-    <!-- Output (collapsible) -->
-    {#if hasOutput && expanded}
-      <div class="mt-1.5 bg-app-bg border border-app-border rounded-lg p-2 max-h-48 overflow-y-auto">
-        <pre class="text-xs font-mono text-app-text-secondary whitespace-pre-wrap break-all leading-relaxed">{step.output}</pre>
-      </div>
+      <!-- Command display -->
+      {#if step.command}
+        <div class="mt-1 flex items-center gap-1.5">
+          <code class="text-xs font-mono bg-app-bg border border-app-border rounded px-2 py-0.5 text-app-text-secondary flex-1 truncate">
+            {step.command}
+          </code>
+          {#if hasOutput}
+            <button
+              class="text-xs text-app-text-secondary hover:text-app-text transition-colors"
+              on:click={() => (expanded = !expanded)}
+            >
+              {isExpanded ? '收起' : '展开'}
+            </button>
+          {/if}
+        </div>
+      {/if}
+
+      <!-- Output (collapsible) -->
+      {#if hasOutput && isExpanded}
+        <div class="mt-1.5 bg-app-bg border border-app-border rounded-lg p-2 max-h-48 overflow-y-auto">
+          <pre class="text-xs font-mono text-app-text-secondary whitespace-pre-wrap break-all leading-relaxed">{step.output}</pre>
+        </div>
+      {/if}
     {/if}
   </div>
 </div>

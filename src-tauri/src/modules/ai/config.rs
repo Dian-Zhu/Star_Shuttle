@@ -2,6 +2,8 @@ use crate::modules::ai::types::{AiConfig, AiProvider};
 use crate::modules::db::DatabaseManager;
 use std::sync::{Arc, Mutex};
 
+const ANTHROPIC_API_HOST: &str = "api.anthropic.com";
+
 const CONFIG_KEY: &str = "ai_config";
 
 /// 从数据库加载 AI 配置，不存在则返回默认值
@@ -40,4 +42,19 @@ pub fn default_model(provider: &AiProvider) -> &'static str {
         AiProvider::Ollama => "llama3.2",
         AiProvider::Custom => "",
     }
+}
+
+pub fn validate_agent_compatibility(config: &AiConfig) -> Result<(), String> {
+    let base_url = config.base_url.trim();
+    let uses_anthropic_native_api = matches!(config.provider, AiProvider::Claude)
+        && (base_url.contains(ANTHROPIC_API_HOST) || base_url == default_base_url(&AiProvider::Claude));
+
+    if uses_anthropic_native_api {
+        return Err(
+            "当前 Agent 模式仅支持 OpenAI 兼容的 tools/function calling 接口；Anthropic Claude 原生 API 当前仅支持 Chat 模式，请改用 OpenAI 兼容网关或切换到其他兼容 provider。"
+                .to_string(),
+        );
+    }
+
+    Ok(())
 }

@@ -10,7 +10,10 @@ pub mod types;
 use crate::modules::ai::{
     agent::{AgentManager, AgentTask},
     chat::ChatManager,
-    config::{default_base_url, default_model, load_config, save_config},
+    config::{
+        default_base_url, default_model, load_config, save_config,
+        validate_agent_compatibility,
+    },
     context_collector::collect_terminal_context,
     sandbox::SandboxMode,
     types::{AiConfig, AiProvider, Conversation, StoredMessage},
@@ -109,6 +112,14 @@ pub async fn ai_chat_send(
 }
 
 #[tauri::command]
+pub async fn ai_chat_cancel(
+    chat_manager: State<'_, Arc<ChatManager>>,
+    conversation_id: Uuid,
+) -> Result<(), String> {
+    chat_manager.cancel_active_request(conversation_id)
+}
+
+#[tauri::command]
 pub async fn ai_chat_clear(
     chat_manager: State<'_, Arc<ChatManager>>,
     conversation_id: Uuid,
@@ -141,6 +152,7 @@ pub async fn ai_get_terminal_context(
 pub async fn ai_agent_start(
     app: AppHandle,
     agent_manager: State<'_, Arc<AgentManager>>,
+    db: State<'_, Arc<Mutex<DatabaseManager>>>,
     session_id: Uuid,
     instruction: String,
     sandbox_mode: Option<String>,
@@ -149,6 +161,10 @@ pub async fn ai_agent_start(
         Some("strict") => SandboxMode::Strict,
         _ => SandboxMode::Standard,
     };
+
+    let config = load_config(db.inner())?;
+    validate_agent_compatibility(&config)?;
+
     agent_manager
         .inner()
         .clone()

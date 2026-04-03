@@ -33,6 +33,8 @@ export const activeConversationId = writable<string | null>(null);
 export const messages = writable<StoredMessage[]>([]);
 export const isSending = writable(false);
 export const streamingContent = writable('');   // content accumulating during stream
+export const sendingConversationId = writable<string | null>(null);
+export const pendingContextSnapshot = writable<string | null>(null);
 
 // ── API Calls ─────────────────────────────────────────────────────────────────
 
@@ -89,78 +91,107 @@ export async function sendMessage(
   onDelta?: (delta: string) => void,
 ): Promise<void> {
   isSending.set(true);
+  sendingConversationId.set(conversationId);
   streamingContent.set('');
 
-  // Optimistically add user message to UI
-  const tempUserMsg: StoredMessage = {
-    id: crypto.randomUUID(),
-    conversation_id: conversationId,
-    role: 'user',
-    content,
-    context_snapshot: null,
-    created_at: new Date().toISOString(),
-  };
-  messages.update(m => [...m, tempUserMsg]);
-
-  // Placeholder for AI reply during streaming
-  const tempAiId = crypto.randomUUID();
-  const tempAiMsg: StoredMessage = {
-    id: tempAiId,
-    conversation_id: conversationId,
-    role: 'assistant',
-    content: '',
-    context_snapshot: null,
-    created_at: new Date().toISOString(),
-  };
-  messages.update(m => [...m, tempAiMsg]);
-
-  // Listen for stream events BEFORE invoking to avoid race condition
-  const eventName = `ai-chat-stream-${conversationId}`;
-  let unlisten: UnlistenFn | null = null;
-
   try {
-    unlisten = await listen<StreamEventType>(eventName, (ev) => {
-      const event = ev.payload;
-      if (event.type === 'delta') {
-        streamingContent.update(c => c + event.content);
-        onDelta?.(event.content);
-        // Update the streaming placeholder message in real time
-        messages.update(m =>
-          m.map(msg =>
-            msg.id === tempAiId
-              ? { ...msg, content: msg.content + event.content }
-              : msg,
-          ),
-        );
+    let contextSnapshot: string | null = null;
+    if (includeContext && sessionId) {
+      try {
+        const context = await invoke<{ content: string }>('ai_get_terminal_context', {
+          sessionId,
+          lines: 100,
+        });
+        contextSnapshot = context.content;
+        pendingContextSnapshot.set(contextSnapshot);
+      } catch {
+        contextSnapshot = null;
+        pendingContextSnapshot.set(null);
       }
-    });
+    } else {
+      pendingContextSnapshot.set(null);
+    }
 
-    await invoke('ai_chat_send', {
-      conversationId,
+    // Optimistically add user message to UI
+    const tempUserMsg: StoredMessage = {
+      id: crypto.randomUUID(),
+      conversation_id: conversationId,
+      role: 'user',
       content,
-      sessionId: sessionId ?? null,
-      includeTerminalContext: includeContext,
-    });
+      context_snapshot: contextSnapshot,
+      created_at: new Date().toISOString(),
+    };
 
-    // After completion, reload messages from DB to get the real IDs
-    const finalMsgs = await invoke<StoredMessage[]>('ai_chat_messages', { conversationId });
-    messages.set(finalMsgs);
+    messages.update(m => [...m, tempUserMsg]);
 
-    // Refresh conversation list (title may have been set)
-    await loadConversations();
-  } catch (err) {
-    // On error, replace streaming placeholder with error message
-    messages.update(m =>
-      m.map(msg =>
-        msg.id === tempAiId
-          ? { ...msg, content: `(Error: ${err})` }
-          : msg,
-      ),
-    );
-    throw err;
+    // Placeholder for AI reply during streaming
+    const tempAiId = crypto.randomUUID();
+    const tempAiMsg: StoredMessage = {
+      id: tempAiId,
+      conversation_id: conversationId,
+      role: 'assistant',
+      content: '',
+      context_snapshot: null,
+      created_at: new Date().toISOString(),
+    };
+    messages.update(m => [...m, tempAiMsg]);
+
+    // Listen for stream events BEFORE invoking to avoid race condition
+    const eventName = `ai-chat-stream-${conversationId}`;
+    let unlisten: UnlistenFn | null = null;
+
+    try {
+      unlisten = await listen<StreamEventType>(eventName, (ev) => {
+        const event = ev.payload;
+        if (event.type === 'delta') {
+          streamingContent.update(c => c + event.content);
+          onDelta?.(event.content);
+          // Update the streaming placeholder message in real time
+          messages.update(m =>
+            m.map(msg =>
+              msg.id === tempAiId
+                ? { ...msg, content: msg.content + event.content }
+                : msg,
+            ),
+          );
+        }
+      });
+
+      await invoke('ai_chat_send', {
+        conversationId,
+        content,
+        sessionId: sessionId ?? null,
+        includeTerminalContext: includeContext,
+      });
+
+      // After completion, reload messages from DB to get the real IDs
+      const finalMsgs = await invoke<StoredMessage[]>('ai_chat_messages', { conversationId });
+      messages.set(finalMsgs);
+
+      // Refresh conversation list (title may have been set)
+      await loadConversations();
+    } catch (err) {
+      // On error, replace streaming placeholder with error message
+      messages.update(m =>
+        m.map(msg =>
+          msg.id === tempAiId
+            ? { ...msg, content: `(Error: ${err})` }
+            : msg,
+        ),
+      );
+      throw err;
+    } finally {
+      unlisten?.();
+    }
   } finally {
-    unlisten?.();
     isSending.set(false);
+    sendingConversationId.set(null);
     streamingContent.set('');
+    pendingContextSnapshot.set(null);
   }
 }
+
+export async function cancelMessage(conversationId: string): Promise<void> {
+  await invoke('ai_chat_cancel', { conversationId });
+}
+

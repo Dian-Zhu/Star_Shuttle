@@ -1136,6 +1136,7 @@ pub fn run() {
             crate::modules::ai::ai_chat_list,
             crate::modules::ai::ai_chat_messages,
             crate::modules::ai::ai_chat_send,
+            crate::modules::ai::ai_chat_cancel,
             crate::modules::ai::ai_chat_clear,
             crate::modules::ai::ai_chat_delete,
             crate::modules::ai::ai_get_terminal_context,

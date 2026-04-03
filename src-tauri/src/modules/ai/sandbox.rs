@@ -169,7 +169,7 @@ impl Sandbox {
 
     // ── 标准沙箱（白名单） ──────────────────────────────────────────────────
 
-    fn check_standard(&self, stmt: &crate::modules::ai::command_parser::ParsedStatement, raw: &str) -> SandboxVerdict {
+    fn check_standard(&self, stmt: &crate::modules::ai::command_parser::ParsedStatement, _raw: &str) -> SandboxVerdict {
         for cmd in &stmt.commands {
             let name = cmd.name.as_str();
 
@@ -214,7 +214,7 @@ impl Sandbox {
 
     // ── 严格沙箱（黑名单） ──────────────────────────────────────────────────
 
-    fn check_strict(&self, stmt: &crate::modules::ai::command_parser::ParsedStatement, raw: &str) -> SandboxVerdict {
+    fn check_strict(&self, stmt: &crate::modules::ai::command_parser::ParsedStatement, _raw: &str) -> SandboxVerdict {
         for cmd in &stmt.commands {
             let name = cmd.name.as_str();
 

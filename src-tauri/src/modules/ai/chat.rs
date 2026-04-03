@@ -4,9 +4,15 @@ use crate::modules::ai::{
     types::{AiConfig, ChatMessage, Conversation, StoredMessage, StreamEvent, TerminalContext},
 };
 use crate::modules::db::DatabaseManager;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tauri::AppHandle;
 use uuid::Uuid;
+
+struct InflightRequest {
+    conversation_id: Uuid,
+    cancel_tx: tokio::sync::oneshot::Sender<()>,
+}
 
 const SYSTEM_PROMPT_BASE: &str = r#"You are an expert DevOps and system administration assistant embedded in Star Shuttle, an SSH remote management tool.
 
@@ -26,11 +32,34 @@ Guidelines:
 pub struct ChatManager {
     db: Arc<Mutex<DatabaseManager>>,
     client: LlmClient,
+    inflight_requests: Mutex<HashMap<Uuid, InflightRequest>>,
 }
 
 impl ChatManager {
     pub fn new(db: Arc<Mutex<DatabaseManager>>) -> Self {
-        Self { db, client: LlmClient::new() }
+        Self {
+            db,
+            client: LlmClient::new(),
+            inflight_requests: Mutex::new(HashMap::new()),
+        }
+    }
+
+    pub fn cancel_active_request(&self, conversation_id: Uuid) -> Result<(), String> {
+        let inflight = self.inflight_requests.lock().map_err(|e| e.to_string())?;
+        let request_id = inflight
+            .iter()
+            .find_map(|(request_id, request)| (request.conversation_id == conversation_id).then_some(*request_id));
+        drop(inflight);
+
+        let Some(request_id) = request_id else {
+            return Ok(());
+        };
+
+        let mut inflight = self.inflight_requests.lock().map_err(|e| e.to_string())?;
+        if let Some(request) = inflight.remove(&request_id) {
+            let _ = request.cancel_tx.send(());
+        }
+        Ok(())
     }
 
     /// 新建对话
@@ -130,6 +159,20 @@ impl ChatManager {
         // 构建发送给 LLM 的消息列表
         let messages = build_messages(&history, &user_content, &config, terminal_context.as_ref());
 
+        // 注册可取消请求
+        let request_id = Uuid::new_v4();
+        let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+        {
+            let mut inflight = self.inflight_requests.lock().map_err(|e| e.to_string())?;
+            inflight.insert(
+                request_id,
+                InflightRequest {
+                    conversation_id,
+                    cancel_tx,
+                },
+            );
+        }
+
         // 流式调用
         let event_name = format!("ai-chat-stream-{}", conversation_id);
         let app_clone = app.clone();
@@ -139,8 +182,15 @@ impl ChatManager {
             .client
             .stream_chat(&config, &messages, move |event| {
                 let _ = app_clone.emit(&event_name_clone, &event);
-            })
-            .await?;
+            }, Some(cancel_rx))
+            .await;
+
+        {
+            let mut inflight = self.inflight_requests.lock().map_err(|e| e.to_string())?;
+            inflight.remove(&request_id);
+        }
+
+        let full_response = full_response?;
 
         // 发送 Done 事件
         let _ = app.emit(&event_name, StreamEvent::Done { conversation_id });

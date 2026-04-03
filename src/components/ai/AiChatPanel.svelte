@@ -6,14 +6,15 @@
     activeConversationId,
     messages,
     isSending,
+    sendingConversationId,
     loadConversations,
     createConversation,
     loadMessages,
     deleteConversation,
     clearMessages,
     sendMessage,
+    cancelMessage,
     type Conversation,
-    type StoredMessage,
   } from '../../lib/aiChatService';
   import ChatMessage from './ChatMessage.svelte';
   import ChatInput from './ChatInput.svelte';
@@ -86,7 +87,6 @@
 
   async function handleSend(e: CustomEvent<{ content: string; includeContext: boolean }>) {
     if (!$activeConversationId) {
-      // Auto-create conversation on first send
       const id = await createConversation(sessionId ?? undefined);
       await loadMessages(id);
     }
@@ -99,6 +99,19 @@
         sessionId,
         e.detail.includeContext,
       );
+    } catch (err: any) {
+      const message = err?.message ?? String(err);
+      if (!message.includes('Request cancelled')) {
+        sendError = message;
+      }
+    }
+  }
+
+  async function handleCancelSend() {
+    if (!$sendingConversationId) return;
+    sendError = '';
+    try {
+      await cancelMessage($sendingConversationId);
     } catch (err: any) {
       sendError = err?.message ?? String(err);
     }
@@ -205,6 +218,8 @@
           <button
             class="p-1.5 rounded-md hover:bg-app-bg-hover text-app-text-secondary hover:text-app-text transition-colors"
             on:click={() => (showHistory = false)}
+            aria-label="关闭对话历史"
+            title="关闭"
           >
             <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
@@ -306,10 +321,12 @@
     <!-- Input -->
     <ChatInput
       bind:this={inputEl}
-      disabled={$isSending}
+      disabled={false}
+      isSending={$isSending}
       {includeContext}
       hasActiveSession={!!sessionId}
       on:send={handleSend}
+      on:cancel={handleCancelSend}
       on:toggleContext={(e) => (includeContext = e.detail)}
     />
   {/if}

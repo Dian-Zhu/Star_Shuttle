@@ -2,6 +2,7 @@
   import { createEventDispatcher } from 'svelte';
 
   export let disabled = false;
+  export let isSending = false;
   export let includeContext = false;
   export let hasActiveSession = false;
 
@@ -10,6 +11,7 @@
 
   const dispatch = createEventDispatcher<{
     send: { content: string; includeContext: boolean };
+    cancel: void;
     toggleContext: boolean;
   }>();
 
@@ -28,12 +30,17 @@
 
   function submit() {
     const content = value.trim();
-    if (!content || disabled) return;
+    if (!content || disabled || isSending) return;
     dispatch('send', { content, includeContext });
     value = '';
     if (textareaEl) {
       textareaEl.style.height = 'auto';
     }
+  }
+
+  function cancel() {
+    if (!isSending) return;
+    dispatch('cancel');
   }
 
   function toggleContext() {
@@ -76,7 +83,7 @@
       on:keydown={handleKeydown}
       placeholder="问 AI 任何问题... (Enter 发送，Shift+Enter 换行)"
       rows="1"
-      {disabled}
+      disabled={disabled || isSending}
       class="flex-1 resize-none bg-app-surface border border-app-border rounded-lg px-3 py-2
              text-sm text-app-text placeholder-app-text-secondary
              focus:border-primary-500 focus:ring-1 focus:ring-primary-500/30 outline-none
@@ -85,21 +92,18 @@
     ></textarea>
 
     <button
-      on:click={submit}
-      {disabled}
-      class="flex-shrink-0 w-9 h-9 rounded-lg bg-primary-600 hover:bg-primary-500
-             text-white flex items-center justify-center transition-colors
-             disabled:opacity-40 disabled:cursor-not-allowed"
-      title="发送 (Enter)"
+      on:click={isSending ? cancel : submit}
+      disabled={disabled}
+      class="flex-shrink-0 w-9 h-9 rounded-lg text-white flex items-center justify-center transition-colors
+             disabled:opacity-40 disabled:cursor-not-allowed
+             {isSending ? 'bg-red-500 hover:bg-red-400' : 'bg-primary-600 hover:bg-primary-500'}"
+      title={isSending ? '暂停生成' : '发送 (Enter)'}
     >
-      {#if disabled}
-        <!-- Spinner -->
-        <svg class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+      {#if isSending}
+        <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+          <path d="M8 7a1 1 0 011 1v8a1 1 0 11-2 0V8a1 1 0 011-1zm8 0a1 1 0 011 1v8a1 1 0 11-2 0V8a1 1 0 011-1z" />
         </svg>
       {:else}
-        <!-- Send icon -->
         <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
         </svg>

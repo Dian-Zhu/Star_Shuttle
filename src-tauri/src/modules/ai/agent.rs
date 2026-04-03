@@ -2,7 +2,7 @@ use crate::modules::ai::{
     client::LlmClient,
     config::load_config,
     sandbox::{Sandbox, SandboxMode, SandboxVerdict},
-    types::{AiConfig, ChatMessage},
+    types::AiConfig,
 };
 use crate::modules::connection::{ConnectionManager, DefaultConnectionManager};
 use crate::modules::db::DatabaseManager;
@@ -426,7 +426,7 @@ Sandbox mode: {mode}"#,
 
         match verdict {
             SandboxVerdict::Deny { reason: deny_reason } => {
-                let step_id = self.add_step(
+                self.add_step(
                     task_id,
                     StepKind::ExecuteCommand,
                     format!("拒绝执行：{}", deny_reason),
@@ -437,7 +437,7 @@ Sandbox mode: {mode}"#,
                 return Ok(format!("Command was denied by sandbox: {}", deny_reason));
             }
 
-            SandboxVerdict::NeedConfirm { reason: confirm_reason, risk_level, matched_command } => {
+            SandboxVerdict::NeedConfirm { reason: confirm_reason, risk_level, matched_command: _ } => {
                 let step_id = Uuid::new_v4();
                 let risk_str = format!("{:?}", risk_level).to_lowercase();
 

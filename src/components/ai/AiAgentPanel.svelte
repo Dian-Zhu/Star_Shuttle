@@ -1,6 +1,7 @@
 <script lang="ts">
   import { tick } from 'svelte';
   import { slide, fade } from 'svelte/transition';
+  import { marked } from 'marked';
   import {
     currentTask,
     sandboxMode,
@@ -9,11 +10,9 @@
     confirmStep,
     cancelTask,
     cleanup,
-    type AgentTask,
   } from '../../lib/aiAgentService';
   import AgentToolCallStep from './AgentToolCallStep.svelte';
   import CommandConfirmModal from './CommandConfirmModal.svelte';
-  import { onDestroy } from 'svelte';
 
   export let sessionId: string | null = null;
 
@@ -33,8 +32,6 @@
   $: if ($currentTask?.steps) {
     tick().then(() => stepsEl?.lastElementChild?.scrollIntoView({ behavior: 'smooth', block: 'end' }));
   }
-
-  onDestroy(cleanup);
 
   async function handleStart() {
     if (!sessionId) {
@@ -93,9 +90,42 @@
     failed: 'text-red-400',
     cancelled: 'text-app-text-secondary',
   };
+
+  const DONE_CARD_STYLES: Record<string, string> = {
+    completed: 'bg-green-500/10 border-green-500/20',
+    failed: 'bg-red-500/10 border-red-500/20',
+    cancelled: 'bg-app-surface border-app-border',
+  };
+
+  function renderMarkdown(content: string): string {
+    try {
+      return marked.parse(content, { async: false, gfm: true, breaks: true }) as string;
+    } catch {
+      return content;
+    }
+  }
+
+  $: finalResultStep = [...($currentTask?.steps ?? [])]
+    .reverse()
+    .find((step) => step.kind === 'result');
+  $: fallbackOutputStep = [...($currentTask?.steps ?? [])]
+    .reverse()
+    .find((step) => step.output && step.status !== 'running' && step.kind !== 'thinking');
+  $: summaryText = finalResultStep?.output || finalResultStep?.description || fallbackOutputStep?.output || fallbackOutputStep?.description || '';
+  $: summaryHtml = summaryText ? renderMarkdown(summaryText) : '';
+  $: doneCardStyle = $currentTask ? DONE_CARD_STYLES[$currentTask.status] ?? 'bg-app-surface border-app-border' : 'bg-app-surface border-app-border';
+  $: visibleSteps = ($currentTask?.steps ?? []).filter((step) => showThinking || (step.kind !== 'thinking' && step.kind !== 'execute_command' && step.kind !== 'result'));
 </script>
 
+<style>
+  :global(.agent-summary-markdown pre) {
+    margin: 0.5rem 0 0;
+    overflow-x: auto;
+  }
+</style>
+
 <!-- Confirm Modal -->
+
 {#if $pendingConfirm}
   <CommandConfirmModal confirm={$pendingConfirm} on:confirm={handleConfirm} />
 {/if}
@@ -213,9 +243,44 @@
 
       <!-- Steps timeline -->
       <div class="px-1">
-        {#each $currentTask.steps.filter(s => showThinking || s.kind !== 'thinking') as step (step.id)}
+        {#each visibleSteps as step (step.id)}
           <AgentToolCallStep {step} />
         {/each}
+
+        {#if isDone}
+          <div class="px-2 py-2">
+            <div class="rounded-lg border p-3 {doneCardStyle}" transition:fade={{ duration: 200 }}>
+              <div class="flex items-center justify-between gap-3">
+                <div>
+                  <p class="text-xs text-app-text-secondary">处理结果</p>
+                  <p class="text-sm font-medium {STATUS_COLORS[$currentTask.status]}">
+                    {STATUS_LABELS[$currentTask.status]}
+                  </p>
+                </div>
+                {#if finalResultStep || fallbackOutputStep}
+                  <span class="text-xs text-app-text-secondary">已生成最终摘要</span>
+                {/if}
+              </div>
+
+              {#if summaryText}
+                <div
+                  class="agent-summary-markdown mt-2 prose prose-sm dark:prose-invert max-w-none text-app-text
+                         prose-code:before:content-none prose-code:after:content-none
+                         prose-pre:bg-app-bg prose-pre:border prose-pre:border-app-border prose-pre:rounded-lg prose-pre:text-xs
+                         prose-p:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0 break-words"
+                >
+                  {@html summaryHtml}
+                </div>
+              {/if}
+
+              {#if $currentTask.error}
+                <div class="mt-2 rounded-md border border-red-500/20 bg-red-500/10 px-2.5 py-2 text-xs text-red-400 whitespace-pre-wrap break-words">
+                  {$currentTask.error}
+                </div>
+              {/if}
+            </div>
+          </div>
+        {/if}
 
         <!-- Spinning indicator when running -->
         {#if isRunning && !isWaiting}
@@ -227,7 +292,7 @@
       </div>
 
       <!-- Error display -->
-      {#if $currentTask.error}
+      {#if $currentTask.error && !isDone}
         <div
           class="mx-3 mt-2 p-3 bg-red-500/10 border border-red-500/20 rounded-lg text-red-400 text-xs"
           transition:fade={{ duration: 200 }}
