@@ -1,4 +1,5 @@
 // Export all modules
+pub mod ai;
 pub mod app_runtime;
 pub mod config;
 pub mod connection;

@@ -43,3 +43,6 @@ tauri-plugin-dialog = "2.6.0"
 tauri-plugin-fs = "2.4.5"
 bcrypt = "0.18.0"
 bytes = "1.11.1"
+reqwest = { version = "0.12", features = ["json", "stream"] }
+tokio-stream = "0.1"
+regex = "1"

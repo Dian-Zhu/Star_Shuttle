@@ -1,5 +1,6 @@
 mod audit;
 mod command_snippets;
+pub mod ai_store;
 
 use rusqlite::{params, Connection, Result};
 use uuid::Uuid;
@@ -18,6 +19,11 @@ impl DatabaseManager {
         Ok(Self { conn })
     }
 
+    /// 暴露底层连接供子模块直接使用（仅限内部）
+    pub fn conn(&self) -> &Connection {
+        &self.conn
+    }
+
     fn create_tables(conn: &Connection) -> Result<()> {
         conn.execute(
             "CREATE TABLE IF NOT EXISTS settings (
@@ -28,6 +34,7 @@ impl DatabaseManager {
         )?;
         command_snippets::create_table(conn)?;
         audit::create_table(conn)?;
+        ai_store::create_tables(conn)?;
         Ok(())
     }
 
