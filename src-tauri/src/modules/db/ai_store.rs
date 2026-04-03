@@ -21,6 +21,23 @@ pub fn create_tables(conn: &Connection) -> Result<()> {
             context_snapshot TEXT,
             created_at       TEXT NOT NULL DEFAULT (datetime('now'))
         );
+
+        CREATE TABLE IF NOT EXISTS sandbox_rules (
+            id         TEXT PRIMARY KEY,
+            rule_type  TEXT NOT NULL CHECK(rule_type IN ('whitelist','blacklist')),
+            pattern    TEXT NOT NULL,
+            reason     TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS ai_command_audit (
+            id          TEXT PRIMARY KEY,
+            task_id     TEXT NOT NULL,
+            session_id  TEXT NOT NULL,
+            command     TEXT NOT NULL,
+            output      TEXT,
+            executed_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
         ",
     )
 }
@@ -134,6 +151,89 @@ pub fn delete_messages(conn: &Connection, conversation_id: &Uuid) -> Result<()> 
     conn.execute(
         "DELETE FROM ai_messages WHERE conversation_id = ?",
         params![conversation_id.to_string()],
+    )?;
+    Ok(())
+}
+
+// ── Command Audit ─────────────────────────────────────────────────────────────
+
+pub fn save_command_audit(
+    conn: &Connection,
+    id: &Uuid,
+    task_id: &Uuid,
+    session_id: &Uuid,
+    command: &str,
+    output: Option<&str>,
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO ai_command_audit (id, task_id, session_id, command, output) VALUES (?, ?, ?, ?, ?)",
+        params![
+            id.to_string(),
+            task_id.to_string(),
+            session_id.to_string(),
+            command,
+            output,
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn get_command_audit(
+    conn: &Connection,
+    limit: u32,
+) -> Result<Vec<(String, String, String, String, Option<String>, String)>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, task_id, session_id, command, output, executed_at
+         FROM ai_command_audit ORDER BY executed_at DESC LIMIT ?",
+    )?;
+    let rows = stmt.query_map(params![limit], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, Option<String>>(4)?,
+            row.get::<_, String>(5)?,
+        ))
+    })?;
+    rows.collect()
+}
+
+// ── Sandbox Rules ─────────────────────────────────────────────────────────────
+
+pub fn save_sandbox_rule(
+    conn: &Connection,
+    id: &Uuid,
+    rule_type: &str,
+    pattern: &str,
+    reason: Option<&str>,
+) -> Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO sandbox_rules (id, rule_type, pattern, reason) VALUES (?, ?, ?, ?)",
+        params![id.to_string(), rule_type, pattern, reason],
+    )?;
+    Ok(())
+}
+
+pub fn get_sandbox_rules(conn: &Connection) -> Result<Vec<(String, String, String, Option<String>)>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, rule_type, pattern, reason FROM sandbox_rules ORDER BY created_at",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, Option<String>>(3)?,
+        ))
+    })?;
+    rows.collect()
+}
+
+pub fn delete_sandbox_rule(conn: &Connection, id: &Uuid) -> Result<()> {
+    conn.execute(
+        "DELETE FROM sandbox_rules WHERE id = ?",
+        params![id.to_string()],
     )?;
     Ok(())
 }

@@ -1,13 +1,18 @@
+pub mod agent;
 pub mod chat;
 pub mod client;
+pub mod command_parser;
 pub mod config;
 pub mod context_collector;
+pub mod sandbox;
 pub mod types;
 
 use crate::modules::ai::{
+    agent::{AgentManager, AgentTask},
     chat::ChatManager,
     config::{default_base_url, default_model, load_config, save_config},
     context_collector::collect_terminal_context,
+    sandbox::SandboxMode,
     types::{AiConfig, AiProvider, Conversation, StoredMessage},
 };
 use crate::modules::connection::DefaultConnectionManager;
@@ -130,19 +135,48 @@ pub async fn ai_get_terminal_context(
     collect_terminal_context(manager.inner(), session_id, lines.unwrap_or(100))
 }
 
-/// 返回所有注册的 Tauri commands（用于 lib.rs invoke_handler）
-pub fn get_commands() -> impl Fn(tauri::ipc::Invoke) -> bool {
-    tauri::generate_handler![
-        ai_get_config,
-        ai_save_config,
-        ai_get_provider_defaults,
-        ai_test_connection,
-        ai_chat_new,
-        ai_chat_list,
-        ai_chat_messages,
-        ai_chat_send,
-        ai_chat_clear,
-        ai_chat_delete,
-        ai_get_terminal_context,
-    ]
+// ── Agent Commands ────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn ai_agent_start(
+    app: AppHandle,
+    agent_manager: State<'_, Arc<AgentManager>>,
+    session_id: Uuid,
+    instruction: String,
+    sandbox_mode: Option<String>,
+) -> Result<Uuid, String> {
+    let mode = match sandbox_mode.as_deref() {
+        Some("strict") => SandboxMode::Strict,
+        _ => SandboxMode::Standard,
+    };
+    agent_manager
+        .inner()
+        .clone()
+        .start_task(app, session_id, instruction, mode)
+        .await
+}
+
+#[tauri::command]
+pub async fn ai_agent_confirm(
+    agent_manager: State<'_, Arc<AgentManager>>,
+    task_id: Uuid,
+    confirmed: bool,
+) -> Result<(), String> {
+    agent_manager.confirm_step(task_id, confirmed)
+}
+
+#[tauri::command]
+pub async fn ai_agent_cancel(
+    agent_manager: State<'_, Arc<AgentManager>>,
+    task_id: Uuid,
+) -> Result<(), String> {
+    agent_manager.cancel_task(task_id)
+}
+
+#[tauri::command]
+pub async fn ai_agent_status(
+    agent_manager: State<'_, Arc<AgentManager>>,
+    task_id: Uuid,
+) -> Result<Option<AgentTask>, String> {
+    Ok(agent_manager.get_task(task_id))
 }

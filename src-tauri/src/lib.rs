@@ -1012,6 +1012,13 @@ pub fn run() {
             let chat_manager = Arc::new(crate::modules::ai::chat::ChatManager::new(db.clone()));
             app.manage(chat_manager);
 
+            // Initialize AI AgentManager
+            let agent_manager = Arc::new(crate::modules::ai::agent::AgentManager::new(
+                db.clone(),
+                connection_manager_for_setup.clone(),
+            ));
+            app.manage(agent_manager);
+
             let mut manager = connection_manager_for_setup
                 .write()
                 .expect("failed to lock connection manager");
@@ -1132,6 +1139,11 @@ pub fn run() {
             crate::modules::ai::ai_chat_clear,
             crate::modules::ai::ai_chat_delete,
             crate::modules::ai::ai_get_terminal_context,
+            // Agent commands
+            crate::modules::ai::ai_agent_start,
+            crate::modules::ai::ai_agent_confirm,
+            crate::modules::ai::ai_agent_cancel,
+            crate::modules::ai::ai_agent_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
