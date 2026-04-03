@@ -135,6 +135,8 @@ pub struct AgentManager {
     tasks: Mutex<HashMap<Uuid, AgentTask>>,
     // channel to send confirm results back to running tasks
     confirm_senders: Mutex<HashMap<Uuid, tokio::sync::oneshot::Sender<bool>>>,
+    // channel to cancel a running task (drops = cancelled)
+    cancel_senders: Mutex<HashMap<Uuid, tokio::sync::oneshot::Sender<()>>>,
 }
 
 impl AgentManager {
@@ -147,6 +149,7 @@ impl AgentManager {
             connection_manager,
             tasks: Mutex::new(HashMap::new()),
             confirm_senders: Mutex::new(HashMap::new()),
+            cancel_senders: Mutex::new(HashMap::new()),
         }
     }
 
@@ -155,9 +158,25 @@ impl AgentManager {
     }
 
     pub fn cancel_task(&self, task_id: Uuid) -> Result<(), String> {
-        let mut tasks = self.tasks.lock().map_err(|e| e.to_string())?;
-        if let Some(task) = tasks.get_mut(&task_id) {
-            task.status = AgentStatus::Cancelled;
+        // Mark status
+        {
+            let mut tasks = self.tasks.lock().map_err(|e| e.to_string())?;
+            if let Some(task) = tasks.get_mut(&task_id) {
+                task.status = AgentStatus::Cancelled;
+                task.pending_confirm = None;
+            }
+        }
+        // Unblock any pending confirm (send false so loop can exit)
+        if let Ok(mut senders) = self.confirm_senders.lock() {
+            if let Some(tx) = senders.remove(&task_id) {
+                let _ = tx.send(false);
+            }
+        }
+        // Signal cancellation to the run loop
+        if let Ok(mut senders) = self.cancel_senders.lock() {
+            if let Some(tx) = senders.remove(&task_id) {
+                let _ = tx.send(());
+            }
         }
         Ok(())
     }
@@ -196,6 +215,13 @@ impl AgentManager {
             tasks.insert(task_id, task);
         }
 
+        // 注册 cancel channel
+        let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+        {
+            let mut senders = self.cancel_senders.lock().map_err(|e| e.to_string())?;
+            senders.insert(task_id, cancel_tx);
+        }
+
         // 发布初始状态事件
         self.emit_status(&app, task_id);
 
@@ -203,7 +229,7 @@ impl AgentManager {
         let manager = self.clone();
         let app_clone = app.clone();
         tokio::spawn(async move {
-            if let Err(e) = manager.run_agent_loop(&app_clone, task_id, &instruction, sandbox_mode, session_id).await {
+            if let Err(e) = manager.run_agent_loop(&app_clone, task_id, &instruction, sandbox_mode, session_id, cancel_rx).await {
                 let mut tasks = manager.tasks.lock().unwrap();
                 if let Some(task) = tasks.get_mut(&task_id) {
                     task.status = AgentStatus::Failed;
@@ -224,6 +250,7 @@ impl AgentManager {
         instruction: &str,
         sandbox_mode: SandboxMode,
         session_id: Uuid,
+        mut cancel_rx: tokio::sync::oneshot::Receiver<()>,
     ) -> Result<(), String> {
         let config = load_config(&self.db)?;
         let client = LlmClient::new();
@@ -262,7 +289,13 @@ Sandbox mode: {mode}"#,
         let mut step_count = 0;
 
         loop {
-            // 检查任务是否被取消
+            // 检查取消信号（非阻塞）
+            if cancel_rx.try_recv().is_ok() {
+                self.set_task_status(task_id, AgentStatus::Cancelled)?;
+                self.emit_status(app, task_id);
+                return Ok(());
+            }
+            // 检查任务状态
             {
                 let tasks = self.tasks.lock().map_err(|e| e.to_string())?;
                 if let Some(t) = tasks.get(&task_id) {
@@ -283,8 +316,17 @@ Sandbox mode: {mode}"#,
             let think_step_id = self.add_step(task_id, StepKind::Thinking, "AI 正在分析...".to_string(), None, None, StepStatus::Running);
             self.emit_status(app, task_id);
 
-            // 调用 LLM（带 tools）
-            let response = self.call_llm_with_tools(&client, &config, &messages, &tools).await?;
+            // 调用 LLM（带 tools），同时监听取消信号
+            let llm_fut = self.call_llm_with_tools(&client, &config, &messages, &tools);
+            let response = tokio::select! {
+                res = llm_fut => res?,
+                _ = &mut cancel_rx => {
+                    self.update_step(task_id, think_step_id, StepStatus::Failed, Some("已取消".to_string()));
+                    self.set_task_status(task_id, AgentStatus::Cancelled)?;
+                    self.emit_status(app, task_id);
+                    return Ok(());
+                }
+            };
 
             // 解析响应
             let response_msg = response.clone();
@@ -444,10 +486,13 @@ Sandbox mode: {mode}"#,
                 .unwrap_or(Ok(false))
                 .unwrap_or(false);
 
-                // 恢复运行状态
+                // 恢复状态（检查是否被取消）
                 {
                     let mut tasks = self.tasks.lock().map_err(|e| e.to_string())?;
                     if let Some(task) = tasks.get_mut(&task_id) {
+                        if task.status == AgentStatus::Cancelled {
+                            return Ok("Cancelled".to_string());
+                        }
                         task.status = AgentStatus::Running;
                         task.pending_confirm = None;
                         if let Some(step) = task.steps.iter_mut().find(|s| s.id == step_id) {

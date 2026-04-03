@@ -217,14 +217,17 @@
             <p class="text-sm text-app-text-secondary text-center py-8">暂无对话历史</p>
           {:else}
             {#each $conversations as conv (conv.id)}
-              <button
-                class="w-full text-left px-3 py-2 rounded-lg text-sm transition-colors flex items-center justify-between group
+              <div
+                class="w-full text-left px-3 py-2 rounded-lg text-sm transition-colors flex items-center justify-between group cursor-pointer
                   {conv.id === $activeConversationId
                     ? 'bg-primary-600/15 text-primary-400'
                     : 'hover:bg-app-surface text-app-text-secondary hover:text-app-text'}"
                 on:click={() => handleSelectConversation(conv)}
+                role="button"
+                tabindex="0"
+                on:keydown={(e) => e.key === 'Enter' && handleSelectConversation(conv)}
               >
-                <div class="min-w-0">
+                <div class="min-w-0 flex-1">
                   <div class="font-medium truncate">{conv.title}</div>
                   <div class="text-xs opacity-60 mt-0.5">
                     {new Date(conv.updated_at).toLocaleDateString('zh-CN')}
@@ -239,7 +242,7 @@
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
                   </svg>
                 </button>
-              </button>
+              </div>
             {/each}
           {/if}
         </div>

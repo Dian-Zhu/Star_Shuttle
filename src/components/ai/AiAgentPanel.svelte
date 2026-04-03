@@ -17,6 +17,9 @@
 
   export let sessionId: string | null = null;
 
+  // Show AI thinking steps toggle
+  let showThinking = true;
+
   let instruction = '';
   let isStarting = false;
   let startError = '';
@@ -116,6 +119,18 @@
     </div>
 
     <div class="flex items-center gap-2">
+      <!-- Thinking toggle -->
+      <button
+        class="text-xs px-2 py-1 rounded-md border transition-colors
+          {showThinking
+            ? 'bg-primary-600/10 border-primary-500/30 text-primary-400'
+            : 'bg-app-bg border-app-border text-app-text-secondary hover:text-app-text'}"
+        on:click={() => (showThinking = !showThinking)}
+        title={showThinking ? '隐藏思考过程' : '显示思考过程'}
+      >
+        {showThinking ? '🧠 思考' : '🧠'}
+      </button>
+
       <!-- Sandbox mode toggle -->
       <div class="flex items-center gap-1 bg-app-bg border border-app-border rounded-lg p-0.5">
         <button
@@ -198,7 +213,7 @@
 
       <!-- Steps timeline -->
       <div class="px-1">
-        {#each $currentTask.steps as step (step.id)}
+        {#each $currentTask.steps.filter(s => showThinking || s.kind !== 'thinking') as step (step.id)}
           <AgentToolCallStep {step} />
         {/each}
 
