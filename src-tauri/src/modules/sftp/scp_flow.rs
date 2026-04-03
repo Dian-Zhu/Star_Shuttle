@@ -3,7 +3,8 @@ use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
 use super::common::{
-    ensure_max_bytes, ensure_scp_upload_size, validate_scp_file_name, MAX_SFTP_READ_BYTES,
+    ensure_max_bytes, ensure_scp_upload_size, validate_scp_directory, validate_scp_file_name,
+    MAX_SFTP_READ_BYTES,
 };
 use super::generation::{ensure_generation_current, SessionGenerationMap};
 use super::scp::{scp_read_ack, shell_quote, split_remote_path, ScpChannel};
@@ -34,6 +35,7 @@ pub async fn scp_upload(
 ) -> Result<(), String> {
     ensure_scp_upload_size(content.len(), "SCP upload")?;
     let (dir, file_name) = split_remote_path(&remote_path);
+    validate_scp_directory(&dir)?;
     validate_scp_file_name(&file_name)?;
 
     ensure_generation_current(generations.as_ref(), session_id, generation)?;

@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import { auditService, toBackendAuditEvent } from './auditService';
+import { auditService } from './auditService';
 import { summarizeAuditedCommand } from './commandAuditSanitizer';
 
 function summarizeRemoteCommand(command: string, riskLevel: string): string {
@@ -44,8 +44,8 @@ export async function execAuditedRemoteCommand(
   const result = await invoke<unknown>('exec_audited_command', {
     sessionId,
     command,
-    auditEvent: toBackendAuditEvent(event),
-    execute: confirmed,
+    source,
+    confirmed,
   });
   auditService.cacheEvent(event);
 

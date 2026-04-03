@@ -59,14 +59,33 @@ pub(crate) mod commands {
     const APP_LOCK_MIN_PASSWORD_LEN: usize = 8;
     const APP_LOCK_MAX_FAILED_ATTEMPTS: u32 = 5;
     const APP_LOCK_LOCKOUT_SECONDS: u64 = 15;
+    const APP_LOCK_BCRYPT_COST: u32 = 13;
     const APP_LOCK_COMMON_WEAK_PASSWORDS: &[&str] = &[
         "password",
+        "password1",
         "password123",
         "12345678",
         "123456789",
+        "1234567890",
         "qwerty123",
+        "qwerty1234",
+        "admin123",
         "admin1234",
+        "letmein1",
+        "welcome1",
+        "monkey123",
         "11111111",
+        "22222222",
+        "abc12345",
+        "abcd1234",
+        "iloveyou1",
+        "trustno1",
+        "sunshine1",
+        "princess1",
+        "football1",
+        "charlie1",
+        "access14",
+        "master12",
     ];
 
     #[derive(Default)]
@@ -142,6 +161,28 @@ pub(crate) mod commands {
         let normalized = trimmed.to_ascii_lowercase();
         if APP_LOCK_COMMON_WEAK_PASSWORDS.contains(&normalized.as_str()) {
             return Err("Password is too weak".to_string());
+        }
+
+        // Reject 3+ consecutive identical characters (e.g. "aaa", "111")
+        let chars: Vec<char> = trimmed.chars().collect();
+        for window in chars.windows(3) {
+            if window[0] == window[1] && window[1] == window[2] {
+                return Err("Password must not contain 3 or more repeated characters".to_string());
+            }
+        }
+
+        // Reject 4+ sequential ascending/descending characters (e.g. "1234", "abcd", "dcba")
+        for window in chars.windows(4) {
+            let a = window[0] as i32;
+            let b = window[1] as i32;
+            let c = window[2] as i32;
+            let d = window[3] as i32;
+            if b - a == 1 && c - b == 1 && d - c == 1 {
+                return Err("Password must not contain sequential characters".to_string());
+            }
+            if a - b == 1 && b - c == 1 && c - d == 1 {
+                return Err("Password must not contain sequential characters".to_string());
+            }
         }
 
         Ok(())
@@ -269,7 +310,7 @@ pub(crate) mod commands {
         }
 
         validate_app_lock_password_strength(&password)?;
-        let hash = bcrypt::hash(password, bcrypt::DEFAULT_COST).map_err(|e| e.to_string())?;
+        let hash = bcrypt::hash(password, APP_LOCK_BCRYPT_COST).map_err(|e| e.to_string())?;
         db.save_setting("app_lock_hash", &hash)
             .map_err(|e| e.to_string())?;
         drop(db);
@@ -424,7 +465,10 @@ pub(crate) mod commands {
             content.push_str(&format!("username:s:{}\n", username));
         }
         content.push_str("prompt for credentials:i:1\n");
-        let temp_dir = std::env::temp_dir();
+        let temp_dir = std::env::temp_dir().join("starshuttle-rdp");
+        std::fs::create_dir_all(&temp_dir).map_err(|e| {
+            format!("Failed to create RDP temp directory: {}", e)
+        })?;
 
         for _ in 0..8 {
             let filename = format!("starshuttle-{}.rdp", Uuid::new_v4());

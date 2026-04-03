@@ -23,6 +23,20 @@ use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::sync::{watch, Mutex};
 
+/// Classify an authentication error into a safe, non-leaking category string.
+fn classify_auth_error(e: &anyhow::Error) -> &'static str {
+    let msg = e.to_string().to_ascii_lowercase();
+    if msg.contains("timeout") || msg.contains("timed out") {
+        "connection timeout"
+    } else if msg.contains("disconnect") || msg.contains("connection") {
+        "connection error"
+    } else if msg.contains("key") || msg.contains("signature") {
+        "key verification failed"
+    } else {
+        "credentials rejected"
+    }
+}
+
 #[cfg(unix)]
 use self::auth_helpers::authenticate_agent;
 use self::auth_helpers::{
@@ -600,8 +614,8 @@ where
             }
         }
         Err(e) => {
-            error!("Authentication error: {:?}", e);
-            return Err(anyhow!("Authentication error: {:?}", e));
+            error!("Authentication error (details redacted for security)");
+            return Err(anyhow!("Authentication failed: {}", classify_auth_error(&e)));
         }
     };
 

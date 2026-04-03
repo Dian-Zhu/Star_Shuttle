@@ -11,7 +11,8 @@
   import CommandPalette from './CommandPalette.svelte';
   import AppLockOverlay from './AppLockOverlay.svelte';
   import AdvancedModal from './AdvancedModal.svelte';
-  import { showConnectionForm, editingConnection, showSettings, successMessage, errorMessage, settings, isSidebarCollapsed, isRightSidebarOpen, activeTerminals, selectedTerminalIndex, showCommandPalette, isLocked, showAdvancedModal } from '../lib/store';
+  import PasswordPromptModal from './PasswordPromptModal.svelte';
+  import { showConnectionForm, editingConnection, showSettings, successMessage, errorMessage, settings, isSidebarCollapsed, isRightSidebarOpen, activeTerminals, selectedTerminalIndex, showCommandPalette, isLocked, showAdvancedModal, passwordPromptRequest } from '../lib/store';
   import { closeAllTerminals, disconnectTerminal, restoreActiveSessions } from '../lib/terminalService';
   import { loadConnections } from '../lib/connectionService';
   import { themeColors, type ThemeColorKey } from '../lib/themeColors';
@@ -463,6 +464,10 @@
 
 {#if $showAdvancedModal}
   <AdvancedModal />
+{/if}
+
+{#if $passwordPromptRequest}
+  <PasswordPromptModal />
 {/if}
 
 {#if $showCommandPalette}

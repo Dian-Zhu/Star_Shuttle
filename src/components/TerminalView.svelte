@@ -82,13 +82,22 @@ import SplitPane from './terminal/SplitPane.svelte';
     if (!layoutRoot || !terminalData) return;
     const sessionIds = new Set(getAllSessionIds(layoutRoot));
     terminalSessionMap.update(map => {
-      map.set(terminalData.sessionId, sessionIds);
-      return map;
+      const next = new Map(map);
+      next.set(terminalData.sessionId, sessionIds);
+      return next;
     });
   }
 
   onDestroy(() => {
     destroyed = true;
+    const rootSessionId = terminalData?.sessionId;
+    if (!rootSessionId) return;
+    terminalSessionMap.update((map) => {
+      if (!map.has(rootSessionId)) return map;
+      const next = new Map(map);
+      next.delete(rootSessionId);
+      return next;
+    });
   });
 
   async function handleSplit(e: CustomEvent) {

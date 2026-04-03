@@ -105,6 +105,8 @@ pub(crate) async fn resolve_owner_group_maps(
     if !uids.is_empty() {
         let mut uid_list: Vec<u32> = uids.iter().copied().collect();
         uid_list.sort_unstable();
+        // Limit batch size to prevent excessively long commands
+        uid_list.truncate(200);
         let uid_args = uid_list
             .into_iter()
             .map(|u| u.to_string())
@@ -112,7 +114,7 @@ pub(crate) async fn resolve_owner_group_maps(
             .join(" ");
 
         let cmd = format!(
-            "getent passwd {} 2>/dev/null | awk -F: '{{print $3\":\"$1}}'",
+            "getent passwd -- {} 2>/dev/null | awk -F: '{{print $3\":\"$1}}'",
             uid_args
         );
         if let Ok(out) = exec_ssh_command(connection_manager, session_id, cmd).await {
@@ -123,6 +125,7 @@ pub(crate) async fn resolve_owner_group_maps(
     if !gids.is_empty() {
         let mut gid_list: Vec<u32> = gids.iter().copied().collect();
         gid_list.sort_unstable();
+        gid_list.truncate(200);
         let gid_args = gid_list
             .into_iter()
             .map(|g| g.to_string())
@@ -130,7 +133,7 @@ pub(crate) async fn resolve_owner_group_maps(
             .join(" ");
 
         let cmd = format!(
-            "getent group {} 2>/dev/null | awk -F: '{{print $3\":\"$1}}'",
+            "getent group -- {} 2>/dev/null | awk -F: '{{print $3\":\"$1}}'",
             gid_args
         );
         if let Ok(out) = exec_ssh_command(connection_manager, session_id, cmd).await {
