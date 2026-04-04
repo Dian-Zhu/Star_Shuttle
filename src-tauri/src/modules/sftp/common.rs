@@ -37,3 +37,28 @@ pub fn validate_remote_leaf_name(file_name: &str) -> Result<(), String> {
 pub fn validate_scp_file_name(file_name: &str) -> Result<(), String> {
     validate_remote_leaf_name(file_name)
 }
+
+/// Validates the directory component of an SCP remote path to prevent path traversal attacks.
+pub fn validate_scp_directory(dir: &str) -> Result<(), String> {
+    if dir.is_empty() {
+        return Err("SCP directory path cannot be empty".to_string());
+    }
+    if dir.contains('\0') {
+        return Err("SCP directory path contains null byte".to_string());
+    }
+    if dir.chars().any(|ch| ch.is_control()) {
+        return Err("SCP directory path contains unsupported control characters".to_string());
+    }
+    for component in dir.split('/') {
+        if component == ".." {
+            return Err("Path traversal (..) is not allowed in SCP directory".to_string());
+        }
+    }
+    if dir != "." && !dir.starts_with('/') {
+        return Err("SCP directory must be an absolute path or '.'".to_string());
+    }
+    if dir.len() > 4096 {
+        return Err("SCP directory path exceeds maximum length".to_string());
+    }
+    Ok(())
+}

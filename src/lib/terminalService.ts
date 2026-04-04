@@ -14,6 +14,7 @@ import {
   type Connection,
   type ActiveTerminal,
   type AppSettings,
+  type HistoryConnectionSnapshot,
   settings,
   connectionHistory,
   broadcastInputEnabled,
@@ -29,6 +30,7 @@ import {
   clearErrorMessage,
   showErrorMessage,
   showSuccessMessage,
+  requestPasswordPrompt,
 } from './store';
 import { terminalPool } from './terminalPool';
 import { TerminalInstance } from './terminalInstance';
@@ -360,6 +362,32 @@ async function connectWithInteractivePrompts(config: any, connectionName: string
   }
 }
 
+function toHistoryConnectionSnapshot(connection: Connection): HistoryConnectionSnapshot {
+  return {
+    id: connection.id,
+    name: connection.name,
+    protocol: connection.protocol,
+    host: connection.host,
+    port: connection.port,
+    username: connection.username,
+    description: connection.description,
+    tags: Array.isArray(connection.tags) ? [...connection.tags] : [],
+    group_id: connection.group_id,
+  };
+}
+
+function addConnectionHistoryEntry(connection: Connection): void {
+  const snapshot = toHistoryConnectionSnapshot(connection);
+  connectionHistory.update(history => {
+    const newHistory = history.filter(h => h.connection.id !== snapshot.id);
+    newHistory.unshift({
+      connection: snapshot,
+      lastConnected: Date.now()
+    });
+    return newHistory.slice(0, 50);
+  });
+}
+
 export async function connectAndOpen(connection: Connection, connectConfig?: any) {
   try {
     clearErrorMessage();
@@ -373,14 +401,7 @@ export async function connectAndOpen(connection: Connection, connectConfig?: any
     if (protocol === 'Rdp') {
       await invoke('launch_rdp', { config: baseConfig });
 
-      connectionHistory.update(history => {
-        const newHistory = history.filter(h => h.connection.id !== connection.id);
-        newHistory.unshift({
-          connection,
-          lastConnected: Date.now()
-        });
-        return newHistory.slice(0, 50);
-      });
+      addConnectionHistoryEntry(connection);
 
       showSuccessMessage(`已启动 RDP: ${connection.name}`, 3000);
       connectingConnections.update(s => {
@@ -428,14 +449,7 @@ export async function connectAndOpen(connection: Connection, connectConfig?: any
         return;
       }
 
-      connectionHistory.update(history => {
-        const newHistory = history.filter(h => h.connection.id !== connection.id);
-        newHistory.unshift({
-          connection,
-          lastConnected: Date.now()
-        });
-        return newHistory.slice(0, 50);
-      });
+      addConnectionHistoryEntry(connection);
 
       showSuccessMessage(`连接成功: ${connection.name}`, 3000);
       connectingConnections.update(s => {
@@ -483,18 +497,7 @@ export async function connectAndOpen(connection: Connection, connectConfig?: any
       return;
     }
 
-    // Update history
-    connectionHistory.update(history => {
-      // Remove existing entry for this connection if any
-      const newHistory = history.filter(h => h.connection.id !== connection.id);
-      // Add to top
-      newHistory.unshift({
-        connection,
-        lastConnected: Date.now()
-      });
-      // Limit to 50 items
-      return newHistory.slice(0, 50);
-    });
+    addConnectionHistoryEntry(connection);
 
     showSuccessMessage(`连接成功: ${connection.name}`, 3000);
     connectingConnections.update(s => {
@@ -552,23 +555,6 @@ type ConfirmDialogDetail = {
   reject: (error: Error) => void;
 };
 
-function dispatchPasswordPromptRequest(connectionName: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const event = new CustomEvent('starshuttle:password-prompt-request', {
-      cancelable: true,
-      detail: {
-        connectionName,
-        resolve,
-        reject,
-      },
-    });
-    window.dispatchEvent(event);
-    if (!event.defaultPrevented) {
-      reject(new Error('密码输入不可用'));
-    }
-  });
-}
-
 function dispatchConfirmDialogRequest(detail: Omit<ConfirmDialogDetail, 'resolve' | 'reject'>): Promise<boolean> {
   return new Promise((resolve, reject) => {
     const event = new CustomEvent<ConfirmDialogDetail>('starshuttle:confirm-dialog-request', {
@@ -602,8 +588,12 @@ function shouldPromptForPasswordOnConnectError(error: unknown, config: any): boo
 }
 
 async function promptPassword(connectionName: string): Promise<string> {
-  const password = await dispatchPasswordPromptRequest(connectionName);
-  if (!password.trim()) {
+  const entered = await requestPasswordPrompt(`请输入连接「${connectionName}」的密码`);
+  if (entered === null) {
+    throw new Error('已取消输入密码');
+  }
+  const password = entered.trim();
+  if (!password) {
     throw new Error('密码不能为空');
   }
   return password;
@@ -721,8 +711,14 @@ function attachTerminalAddons(term: Terminal): { fitAddon: FitAddon; searchAddon
   term.loadAddon(
     new WebLinksAddon((event, uri) => {
       event.preventDefault();
-      if (uri && (uri.startsWith('http://') || uri.startsWith('https://'))) {
-        window.open(uri, '_blank', 'noopener,noreferrer');
+      if (!uri) return;
+      try {
+        const parsed = new URL(uri);
+        if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+          window.open(uri, '_blank', 'noopener,noreferrer');
+        }
+      } catch {
+        // Invalid URL — ignore
       }
     })
   );

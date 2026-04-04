@@ -4,6 +4,35 @@
   import { listen } from '@tauri-apps/api/event';
   import Sidebar from './Sidebar.svelte';
   import RightSidebar from './RightSidebar.svelte';
+  import AiChatPanel from './ai/AiChatPanel.svelte';
+  let isAiPanelOpen = false;
+  let aiPanelWidth = 400;
+  let aiPanelResizing = false;
+
+  $: aiSessionId = (() => {
+    const t = $activeTerminals[$selectedTerminalIndex];
+    return t?.sessionId ?? null;
+  })();
+
+  function startAiResize() {
+    aiPanelResizing = true;
+    window.addEventListener('mousemove', handleAiMouseMove);
+    window.addEventListener('mouseup', stopAiResize);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  }
+  function handleAiMouseMove(e: MouseEvent) {
+    if (!aiPanelResizing) return;
+    const newWidth = window.innerWidth - e.clientX;
+    aiPanelWidth = Math.max(280, Math.min(newWidth, 700));
+  }
+  function stopAiResize() {
+    aiPanelResizing = false;
+    window.removeEventListener('mousemove', handleAiMouseMove);
+    window.removeEventListener('mouseup', stopAiResize);
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+  }
   import TitleBar from './TitleBar.svelte';
   import TerminalManager from './TerminalManager.svelte';
   import ConnectionModal from './ConnectionModal.svelte';
@@ -11,8 +40,9 @@
   import CommandPalette from './CommandPalette.svelte';
   import AppLockOverlay from './AppLockOverlay.svelte';
   import AdvancedModal from './AdvancedModal.svelte';
-  import { showConnectionForm, editingConnection, showSettings, successMessage, errorMessage, settings, isSidebarCollapsed, isRightSidebarOpen, activeTerminals, selectedTerminalIndex, showCommandPalette, isLocked, showAdvancedModal } from '../lib/store';
-  import { closeAllTerminals, disconnectTerminal, restoreActiveSessions } from '../lib/terminalService';
+  import PasswordPromptModal from './PasswordPromptModal.svelte';
+  import { showConnectionForm, editingConnection, showSettings, successMessage, errorMessage, settings, isSidebarCollapsed, isRightSidebarOpen, activeTerminals, selectedTerminalIndex, showCommandPalette, isLocked, showAdvancedModal, passwordPromptRequest } from '../lib/store';
+  import { closeAllTerminals, disconnectTerminal, restoreActiveSessions, sendTerminalData } from '../lib/terminalService';
   import { loadConnections } from '../lib/connectionService';
   import { themeColors, type ThemeColorKey } from '../lib/themeColors';
   import { isEditableShortcutTarget, matchShortcut } from '../lib/shortcuts';
@@ -392,6 +422,11 @@
     resetIdleTimer();
     updateTheme(); // Initial theme application
 
+    // TitleBar AI button listener
+    const handleOpenAi = () => { isAiPanelOpen = !isAiPanelOpen; };
+    window.addEventListener('titlebar:open-ai', handleOpenAi);
+    window.addEventListener('ai:run-command', handleAiRunCommand as EventListener);
+
     return () => {
         mediaQuery.removeEventListener('change', handleSystemThemeChange);
         window.removeEventListener('blur', handleWindowBlur);
@@ -404,6 +439,8 @@
         rejectPendingDialogRequests('对话框宿主已卸载');
         if (idleTimer) clearTimeout(idleTimer);
         if (unlistenKeyboardInteractive) unlistenKeyboardInteractive();
+        window.removeEventListener('titlebar:open-ai', handleOpenAi);
+        window.removeEventListener('ai:run-command', handleAiRunCommand as EventListener);
     };
   });
 
@@ -433,6 +470,13 @@
 
   function handleBeforeUnload() {
     void closeAllTerminals();
+  }
+
+  async function handleAiRunCommand(event: Event) {
+    const customEvent = event as CustomEvent<string>;
+    const command = customEvent.detail?.trim();
+    if (!command || !aiSessionId) return;
+    await sendTerminalData(aiSessionId, `${command}\n`);
   }
 
   function handleKeydown(event: KeyboardEvent) {
@@ -477,6 +521,13 @@
     if (matchShortcut(event, shortcuts.toggleFileBrowser)) {
       event.preventDefault();
       isRightSidebarOpen.update(v => !v);
+      return;
+    }
+
+    // Toggle AI Panel (Ctrl+Shift+A)
+    if (event.ctrlKey && event.shiftKey && event.key === 'A') {
+      event.preventDefault();
+      isAiPanelOpen = !isAiPanelOpen;
       return;
     }
 
@@ -590,6 +641,35 @@
           </div>
         </div>
 
+        {#if isAiPanelOpen}
+          <div transition:fly={{ x: 420, duration: 200 }}
+               class="h-full flex-shrink-0 z-20 shadow-lg border-l border-app-border bg-app-bg flex flex-col relative"
+               style="width: {aiPanelWidth}px; min-width: 280px; max-width: 700px;">
+            <!-- Resize handle -->
+            <!-- svelte-ignore a11y-no-static-element-interactions -->
+            <div class="absolute left-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-primary-500 transition-colors z-50 -ml-0.5"
+                 on:mousedown={startAiResize}></div>
+            <!-- Header -->
+            <div class="flex items-center justify-between px-3 py-2 border-b border-app-border bg-app-surface flex-shrink-0">
+              <div class="flex items-center gap-1.5">
+                <svg class="w-4 h-4 text-primary-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                </svg>
+                <span class="text-sm font-semibold text-app-text">AI 助手</span>
+              </div>
+              <button class="p-1 rounded hover:bg-app-bg-hover text-app-text-secondary hover:text-app-text transition-colors"
+                      on:click={() => (isAiPanelOpen = false)} title="关闭">
+                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <!-- Content -->
+            <div class="flex-1 overflow-hidden">
+              <AiChatPanel sessionId={aiSessionId} />
+            </div>
+          </div>
+        {/if}
         {#if $isRightSidebarOpen}
           <div transition:fly={{ x: $settings.ui.rightSidebarWidth || 400, duration: 200 }} class="h-full flex-shrink-0 z-20 shadow-lg">
             <RightSidebar />
@@ -622,6 +702,10 @@
 
 {#if $showAdvancedModal}
   <AdvancedModal />
+{/if}
+
+{#if $passwordPromptRequest}
+  <PasswordPromptModal />
 {/if}
 
 {#if $showCommandPalette}

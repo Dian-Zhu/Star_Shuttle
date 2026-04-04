@@ -170,7 +170,11 @@ pub async fn sftp_read_chunk(
     validate_remote_target_path(&path)?;
     let offset = header_u64(&request, "offset")?;
     let length = header_u64(&request, "length")?;
-    ensure_max_bytes(length as usize, MAX_SFTP_CHUNK_BYTES, "SFTP chunk read")?;
+    if length > usize::MAX as u64 {
+        return Err("Requested chunk length exceeds system address space".to_string());
+    }
+    let length = length as usize;
+    ensure_max_bytes(length, MAX_SFTP_CHUNK_BYTES, "SFTP chunk read")?;
 
     let session_lease = state.get_session(session_id).await?;
     session_lease.ensure_valid()?;
@@ -191,7 +195,7 @@ pub async fn sftp_read_chunk(
         )?;
     }
 
-    let mut buf = vec![0u8; length as usize];
+    let mut buf = vec![0u8; length];
     let n = session_lease.finish_io(file.read(&mut buf).await.map_err(|e| e.to_string()))?;
     buf.truncate(n);
     Ok(Response::new(buf))

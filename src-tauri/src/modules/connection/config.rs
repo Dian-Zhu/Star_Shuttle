@@ -142,7 +142,31 @@ impl Default for ConnectionConfig {
 }
 
 impl ConnectionConfig {
+    const MAX_HOST_LENGTH: usize = 255;
+    const MAX_USERNAME_LENGTH: usize = 128;
+
     pub fn validate(&self) -> Result<(), ConnectionError> {
+        if self.host.len() > Self::MAX_HOST_LENGTH {
+            return Err(ConnectionError::InvalidConfig(
+                "Host exceeds maximum length".to_string(),
+            ));
+        }
+        if self.host.contains('\0') {
+            return Err(ConnectionError::InvalidConfig(
+                "Host contains invalid characters".to_string(),
+            ));
+        }
+        if self.username.len() > Self::MAX_USERNAME_LENGTH {
+            return Err(ConnectionError::InvalidConfig(
+                "Username exceeds maximum length".to_string(),
+            ));
+        }
+        if self.username.contains('\0') {
+            return Err(ConnectionError::InvalidConfig(
+                "Username contains invalid characters".to_string(),
+            ));
+        }
+
         if self.protocol == ConnectionProtocol::Rdp || self.protocol == ConnectionProtocol::Telnet {
             if self.host.is_empty() {
                 return Err(ConnectionError::InvalidConfig(

@@ -87,8 +87,20 @@ export interface ConnectionGroup {
   createdAt: number;
 }
 
+export interface HistoryConnectionSnapshot {
+  id: string;
+  name: string;
+  protocol?: 'Ssh' | 'Rdp' | 'Telnet';
+  host: string;
+  port: number;
+  username: string;
+  description: string | null;
+  tags: string[];
+  group_id: string | null;
+}
+
 export interface HistoryItem {
-  connection: Connection;
+  connection: HistoryConnectionSnapshot;
   lastConnected: number; // timestamp
 }
 
@@ -130,6 +142,19 @@ export const showSettings = writable<boolean>(false);
 export const showAdvancedModal = writable<boolean>(false);
 export const showCommandPalette = writable<boolean>(false);
 export const isLocked = writable<boolean>(false);
+
+// Secure password prompt modal (replaces window.prompt for password collection)
+export interface PasswordPromptRequest {
+  title: string;
+  resolve: (password: string | null) => void;
+}
+export const passwordPromptRequest = writable<PasswordPromptRequest | null>(null);
+
+export function requestPasswordPrompt(title: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    passwordPromptRequest.set({ title, resolve });
+  });
+}
 export const hasAppLock = writable<boolean>(false);
 export const loading = writable<boolean>(false);
 export const connectingConnections = writable<Set<string>>(new Set());
@@ -224,12 +249,62 @@ export function showSuccessMessage(message: string, timeoutMs = 3000): void {
   }
 }
 
+function toHistoryConnectionSnapshot(value: unknown): HistoryConnectionSnapshot | null {
+  if (!value || typeof value !== 'object') return null;
+  const source = value as Record<string, unknown>;
+  const id = typeof source.id === 'string' ? source.id : null;
+  const name = typeof source.name === 'string' ? source.name : null;
+  const host = typeof source.host === 'string' ? source.host : null;
+  const port = typeof source.port === 'number' && Number.isFinite(source.port) ? source.port : null;
+  const username = typeof source.username === 'string' ? source.username : null;
+  if (!id || !name || !host || port === null || !username) return null;
+
+  const protocol = source.protocol === 'Ssh' || source.protocol === 'Rdp' || source.protocol === 'Telnet'
+    ? source.protocol
+    : undefined;
+  const description = source.description === null || typeof source.description === 'string'
+    ? source.description ?? null
+    : null;
+  const tags = Array.isArray(source.tags) ? source.tags.filter((tag): tag is string => typeof tag === 'string') : [];
+  const group_id = source.group_id === null || typeof source.group_id === 'string'
+    ? source.group_id ?? null
+    : null;
+
+  return {
+    id,
+    name,
+    protocol,
+    host,
+    port,
+    username,
+    description,
+    tags,
+    group_id,
+  };
+}
+
+function normalizeHistoryItem(value: unknown): HistoryItem | null {
+  if (!value || typeof value !== 'object') return null;
+  const source = value as Record<string, unknown>;
+  const connection = toHistoryConnectionSnapshot(source.connection);
+  const lastConnected = typeof source.lastConnected === 'number' && Number.isFinite(source.lastConnected)
+    ? source.lastConnected
+    : null;
+  if (!connection || lastConnected === null) return null;
+  return { connection, lastConnected };
+}
+
 // History Store
 const loadHistory = (): HistoryItem[] => {
   if (typeof localStorage === 'undefined') return [];
   try {
     const stored = localStorage.getItem('connectionHistory');
-    return stored ? JSON.parse(stored) : [];
+    if (!stored) return [];
+    const parsed = JSON.parse(stored);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((item) => normalizeHistoryItem(item))
+      .filter((item): item is HistoryItem => item !== null);
   } catch (e) {
     console.error('Failed to parse history:', e);
     return [];

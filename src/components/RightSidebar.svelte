@@ -1,35 +1,31 @@
 <script lang="ts">
   import { activeTerminals, selectedTerminalIndex, settings } from '../lib/store';
   import FileExplorer from './file-transfer/FileExplorer.svelte';
-  
+
   let width = $settings.ui.rightSidebarWidth || 400;
   let isResizing = false;
 
-  // Sync width from settings only when not resizing
   $: if (!isResizing && $settings.ui.rightSidebarWidth) {
     width = $settings.ui.rightSidebarWidth;
   }
 
-  $: activeSession = $activeTerminals.length > 0 && $selectedTerminalIndex >= 0 
-      ? $activeTerminals[$selectedTerminalIndex] 
-      : null;
+  $: activeSession = $activeTerminals.length > 0 && $selectedTerminalIndex >= 0
+    ? $activeTerminals[$selectedTerminalIndex]
+    : null;
 
   function startResize() {
     isResizing = true;
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mouseup', stopResize);
-    // Add global cursor style to body to prevent cursor flickering
     document.body.style.cursor = 'col-resize';
     document.body.style.userSelect = 'none';
   }
 
   function handleMouseMove(e: MouseEvent) {
     if (!isResizing) return;
-    // Calculate width based on distance from right edge of window
     const newWidth = window.innerWidth - e.clientX;
-    // Clamp width between 250px and 800px (or 80% of window width)
     const maxWidth = Math.min(800, window.innerWidth * 0.8);
-    width = Math.max(250, Math.min(newWidth, maxWidth));
+    width = Math.max(280, Math.min(newWidth, maxWidth));
   }
 
   function stopResize() {
@@ -38,18 +34,16 @@
     window.removeEventListener('mouseup', stopResize);
     document.body.style.cursor = '';
     document.body.style.userSelect = '';
-    
-    // Save to settings
     settings.update(s => ({
-        ...s,
-        ui: { ...s.ui, rightSidebarWidth: width }
+      ...s,
+      ui: { ...s.ui, rightSidebarWidth: width },
     }));
   }
 </script>
 
-<div 
+<div
   class="h-full border-l border-app-border bg-app-bg flex flex-col relative"
-  style="width: {width}px; min-width: 250px;"
+  style="width: {width}px; min-width: 280px;"
 >
   <!-- Resize Handle -->
   <!-- svelte-ignore a11y-no-static-element-interactions -->
@@ -58,11 +52,23 @@
     on:mousedown={startResize}
   ></div>
 
-  {#if activeSession}
-    <FileExplorer sessionId={activeSession.sessionId} />
-  {:else}
-    <div class="h-full flex items-center justify-center p-4 text-app-text-secondary text-sm text-center select-none">
-      请选择或连接一个终端<br>以使用文件浏览器
-    </div>
-  {/if}
+  <!-- Header -->
+  <div class="flex items-center gap-1.5 px-3 py-2.5 border-b border-app-border bg-app-surface flex-shrink-0">
+    <svg class="w-4 h-4 text-app-text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+        d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
+    </svg>
+    <span class="text-sm font-medium text-app-text">文件浏览器</span>
+  </div>
+
+  <!-- File Explorer -->
+  <div class="flex-1 overflow-hidden">
+    {#if activeSession}
+      <FileExplorer sessionId={activeSession.sessionId} />
+    {:else}
+      <div class="h-full flex items-center justify-center p-4 text-app-text-secondary text-sm text-center select-none">
+        请选择或连接一个终端<br>以使用文件浏览器
+      </div>
+    {/if}
+  </div>
 </div>

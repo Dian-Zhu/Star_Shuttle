@@ -1,3 +1,4 @@
+import { get } from 'svelte/store';
 import { describe, expect, it, vi } from 'vitest';
 
 import { sanitizeTerminalDisplayText } from './terminalDisplaySanitizer';
@@ -33,20 +34,23 @@ describe('terminalService display hardening', () => {
     expect(sanitizeTerminalDisplayText('oops\x1b[31mred\x1b[0m\r\nnext')).toBe('oopsred\nnext');
   });
 
-  it('uses event-driven password prompt instead of window.prompt', async () => {
+  it('uses store-backed password prompt flow', async () => {
     const seenPasswords: string[] = [];
     const harness = await createTerminalServiceHarness(async (command, args) => {
       if (command === 'connect') {
         const password = (args?.config as { auth_method?: { Password?: { password?: string } } } | undefined)
           ?.auth_method?.Password?.password;
         seenPasswords.push(typeof password === 'string' ? password : '');
+        if (!password?.trim()) {
+          throw new Error('Password is required');
+        }
         return 'session-password';
       }
       if (command === 'start_terminal') return true;
       return undefined;
     });
 
-    const { terminalService, flush } = harness;
+    const { terminalService, store, flush } = harness;
     const connection = {
       ...createConnection('conn-password', 'secret-demo'),
       auth_method: {
@@ -57,35 +61,36 @@ describe('terminalService display hardening', () => {
       },
     } as Connection;
 
-    const passwordRequest = new Promise<CustomEvent>((resolve) => {
-      window.addEventListener(
-        'starshuttle:password-prompt-request',
-        ((event: Event) => {
-          event.preventDefault();
-          resolve(event as CustomEvent);
-        }) as EventListener,
-        { once: true }
-      );
-    });
-
     const connectPromise = terminalService.createTerminalSession(connection);
-    const event = await passwordRequest;
-    event.detail.resolve('  typed-secret  ');
+    await flush();
+
+    const prompt = get(store.passwordPromptRequest);
+    expect(prompt?.title).toBe('请输入连接「secret-demo」的密码');
+    prompt?.resolve('  typed-secret  ');
+
     await expect(connectPromise).resolves.toBe('session-password');
     await flush();
-    expect(seenPasswords).toEqual(['  typed-secret  ']);
+    expect(seenPasswords).toEqual(['typed-secret']);
+    expect(get(store.passwordPromptRequest)).not.toBeNull();
   });
 
-  it('fails fast when no password prompt handler is mounted', async () => {
-    const harness = await createTerminalServiceHarness(async (command) => {
-      if (command === 'connect') return 'session-password';
+  it('rejects when password prompt is cancelled', async () => {
+    const harness = await createTerminalServiceHarness(async (command, args) => {
+      if (command === 'connect') {
+        const password = (args?.config as { auth_method?: { Password?: { password?: string } } } | undefined)
+          ?.auth_method?.Password?.password;
+        if (!password?.trim()) {
+          throw new Error('Password is required');
+        }
+        return 'session-password';
+      }
       if (command === 'start_terminal') return true;
       return undefined;
     });
 
-    const { terminalService } = harness;
+    const { terminalService, store, flush } = harness;
     const connection = {
-      ...createConnection('conn-password-missing', 'secret-demo'),
+      ...createConnection('conn-password-cancel', 'secret-demo'),
       auth_method: {
         Password: {
           password: '',
@@ -94,7 +99,14 @@ describe('terminalService display hardening', () => {
       },
     } as Connection;
 
-    await expect(terminalService.createTerminalSession(connection)).rejects.toThrow('密码输入不可用');
+    const connectPromise = terminalService.createTerminalSession(connection);
+    await flush();
+
+    const prompt = get(store.passwordPromptRequest);
+    expect(prompt).not.toBeNull();
+    prompt?.resolve(null);
+
+    await expect(connectPromise).rejects.toThrow('已取消输入密码');
   });
 
   it('uses event-driven confirm dialog for host key prompts', async () => {
