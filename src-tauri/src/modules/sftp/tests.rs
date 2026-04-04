@@ -1,8 +1,8 @@
 #![cfg(test)]
 
 use super::common::{
-    ensure_max_bytes, ensure_scp_upload_size, ensure_sftp_write_size, validate_scp_file_name,
-    MAX_SCP_UPLOAD_BYTES, MAX_SFTP_CHUNK_BYTES,
+    ensure_max_bytes, ensure_scp_upload_size, ensure_sftp_write_size, validate_remote_leaf_name,
+    validate_scp_file_name, MAX_SCP_UPLOAD_BYTES, MAX_SFTP_CHUNK_BYTES,
 };
 use super::*;
 
@@ -137,4 +137,15 @@ fn test_validate_scp_file_name_rejects_control_chars() {
 #[test]
 fn test_validate_scp_file_name_rejects_path_separators() {
     assert!(validate_scp_file_name("dir/file.txt").is_err());
+}
+
+#[test]
+fn test_validate_remote_leaf_name_rejects_dot_segments() {
+    assert!(validate_remote_leaf_name(".").is_err());
+    assert!(validate_remote_leaf_name("..").is_err());
+}
+
+#[test]
+fn test_validate_remote_leaf_name_rejects_whitespace_only_names() {
+    assert!(validate_remote_leaf_name("   ").is_err());
 }

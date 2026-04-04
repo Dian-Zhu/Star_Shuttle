@@ -12,6 +12,19 @@ interface BackendFileEntry {
   group: string;
 }
 
+function normalizeRemotePath(path: string): string {
+  if (!path) return '/';
+  if ([...path].every((ch) => ch === '/')) return '/';
+  return path.replace(/\/+/g, '/').replace(/\/+$/g, '');
+}
+
+function buildRemoteChildPath(parentPath: string, name: string): string {
+  const normalizedParent = normalizeRemotePath(parentPath);
+  return normalizedParent === '/'
+    ? `/${name}`
+    : `${normalizedParent}/${name}`;
+}
+
 export class SftpService {
   private decodeBinaryPayload(data: ArrayBuffer | number[]): Uint8Array {
     return data instanceof ArrayBuffer ? new Uint8Array(data) : Uint8Array.from(data);
@@ -34,7 +47,7 @@ export class SftpService {
     const entries = await invoke<BackendFileEntry[]>('sftp_ls', { sessionId, path });
     return entries.map(e => ({
       name: e.name,
-      path: path === '/' || path === '' ? `/${e.name}` : `${path}/${e.name}`.replace('//', '/'),
+      path: buildRemoteChildPath(path, e.name),
       isDirectory: e.is_dir,
       size: e.size,
       modified: new Date(e.modified * 1000),
@@ -119,5 +132,10 @@ export class SftpService {
     return this.decodeBinaryPayload(data);
   }
 }
+
+export const __sftpServiceTestHooks = {
+  normalizeRemotePath,
+  buildRemoteChildPath,
+};
 
 export const sftpService = new SftpService();

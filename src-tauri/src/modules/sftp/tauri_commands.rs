@@ -9,8 +9,10 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use uuid::Uuid;
 
 use super::common::{
-    ensure_max_bytes, ensure_scp_upload_size, ensure_sftp_write_size, MAX_SFTP_CHUNK_BYTES,
+    ensure_max_bytes, ensure_scp_upload_size, ensure_sftp_write_size, validate_remote_leaf_name,
+    MAX_SFTP_CHUNK_BYTES,
 };
+use super::scp::split_remote_path;
 use super::{FileEntry, SftpManager};
 
 fn classify_sftp_error(message: &str) -> &'static str {
@@ -91,6 +93,55 @@ fn header_u64(request: &Request, key: &str) -> Result<u64, String> {
     s.parse::<u64>().map_err(|e| e.to_string())
 }
 
+fn validate_remote_target_path(path: &str) -> Result<(), String> {
+    if path.trim().is_empty() {
+        return Err("Invalid remote path".to_string());
+    }
+
+    if path.chars().all(|ch| ch == '/') {
+        return Err("Invalid remote path".to_string());
+    }
+
+    let normalized = path.trim_end_matches('/');
+    let (_, file_name) = split_remote_path(normalized);
+    if file_name.is_empty() {
+        return Err("Invalid remote path".to_string());
+    }
+
+    validate_remote_leaf_name(&file_name)
+}
+
+#[cfg(test)]
+mod tauri_command_tests {
+    use super::validate_remote_target_path;
+
+    #[test]
+    fn accepts_paths_with_trailing_slashes() {
+        assert!(validate_remote_target_path("/tmp/demo/").is_ok());
+        assert!(validate_remote_target_path("demo/").is_ok());
+        assert!(validate_remote_target_path("/").is_err());
+    }
+
+    #[test]
+    fn preserves_significant_spaces_in_leaf_names() {
+        assert!(validate_remote_target_path("/tmp/ spaced name ").is_ok());
+        assert!(validate_remote_target_path(" relative name ").is_ok());
+    }
+
+    #[test]
+    fn rejects_empty_or_invalid_leaf_paths() {
+        assert!(validate_remote_target_path("   ").is_err());
+        assert!(validate_remote_target_path("/tmp/../").is_err());
+        assert!(validate_remote_target_path("/tmp/bad\nname").is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_write_target_paths() {
+        assert!(validate_remote_target_path("/tmp/..").is_err());
+        assert!(validate_remote_target_path("/tmp/bad\u{0000}name").is_err());
+    }
+}
+
 #[tauri::command]
 pub async fn sftp_read(
     db: State<'_, Arc<StdMutex<DatabaseManager>>>,
@@ -101,6 +152,7 @@ pub async fn sftp_read(
     ensure_app_unlocked_runtime(db.inner(), app_lock_state.inner())?;
     let session_id = header_uuid(&request)?;
     let path = header_string(&request, "path")?;
+    validate_remote_target_path(&path)?;
     let data = state.read_file(session_id, path).await?;
     Ok(Response::new(data))
 }
@@ -115,6 +167,7 @@ pub async fn sftp_read_chunk(
     ensure_app_unlocked_runtime(db.inner(), app_lock_state.inner())?;
     let session_id = header_uuid(&request)?;
     let path = header_string(&request, "path")?;
+    validate_remote_target_path(&path)?;
     let offset = header_u64(&request, "offset")?;
     let length = header_u64(&request, "length")?;
     ensure_max_bytes(length as usize, MAX_SFTP_CHUNK_BYTES, "SFTP chunk read")?;
@@ -154,6 +207,7 @@ pub async fn sftp_write(
     ensure_app_unlocked_runtime(db.inner(), app_lock_state.inner())?;
     let session_id = header_uuid(&request)?;
     let path = header_string(&request, "path")?;
+    validate_remote_target_path(&path)?;
     let offset = request
         .headers()
         .get("offset")
@@ -187,6 +241,7 @@ pub async fn sftp_mkdir(
     path: String,
 ) -> Result<(), String> {
     ensure_app_unlocked_runtime(db.inner(), app_lock_state.inner())?;
+    validate_remote_target_path(&path)?;
     state.create_directory(session_id, path).await
 }
 
@@ -199,6 +254,7 @@ pub async fn sftp_rm(
     path: String,
 ) -> Result<(), String> {
     ensure_app_unlocked_runtime(db.inner(), app_lock_state.inner())?;
+    validate_remote_target_path(&path)?;
     state.remove_file(session_id, path).await
 }
 
@@ -211,6 +267,7 @@ pub async fn sftp_rmdir(
     path: String,
 ) -> Result<(), String> {
     ensure_app_unlocked_runtime(db.inner(), app_lock_state.inner())?;
+    validate_remote_target_path(&path)?;
     state.remove_directory(session_id, path).await
 }
 
@@ -224,6 +281,8 @@ pub async fn sftp_rename(
     new_path: String,
 ) -> Result<(), String> {
     ensure_app_unlocked_runtime(db.inner(), app_lock_state.inner())?;
+    validate_remote_target_path(&old_path)?;
+    validate_remote_target_path(&new_path)?;
     state.rename(session_id, old_path, new_path).await
 }
 
@@ -237,6 +296,7 @@ pub async fn scp_upload(
     ensure_app_unlocked_runtime(db.inner(), app_lock_state.inner())?;
     let session_id = header_uuid(&request)?;
     let remote_path = header_string(&request, "remote-path")?;
+    validate_remote_target_path(&remote_path)?;
     let content = body_bytes(&request)?;
     ensure_scp_upload_size(content.len(), "SCP upload body")?;
     state.scp_upload(session_id, remote_path, content).await
@@ -252,6 +312,7 @@ pub async fn scp_download(
     ensure_app_unlocked_runtime(db.inner(), app_lock_state.inner())?;
     let session_id = header_uuid(&request)?;
     let remote_path = header_string(&request, "remote-path")?;
+    validate_remote_target_path(&remote_path)?;
     let data = state.scp_download(session_id, remote_path).await?;
     Ok(Response::new(data))
 }

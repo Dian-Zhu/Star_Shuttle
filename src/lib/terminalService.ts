@@ -82,6 +82,7 @@ import {
   parseHostKeyPrompt,
   saveHostKeyPrompt,
 } from './hostKeyPrompt';
+import { sanitizeTerminalDisplayText } from './terminalDisplaySanitizer';
 
 const IS_DEV = import.meta.env.DEV;
 
@@ -112,19 +113,20 @@ const log = {
 const ioLogger: IoLogger = log;
 
 function reportTerminalError(error: unknown, context: string, userMessage?: string) {
-  const errorMsg = error instanceof Error ? error.message : String(error);
+  const errorMsg = normalizeErrorMessage(error);
 
   if (IS_DEV) {
     log.error('TermError', `${context}: ${errorMsg}`, error);
   }
 
   if (userMessage) {
-    showErrorMessage(userMessage, 5000);
+    showErrorMessage(sanitizeTerminalDisplayText(userMessage), 5000);
   }
 }
 
 // Sessions that currently have a live backend terminal.
 const startedTerminalSessions = new Set<string>();
+const lastTerminalSizes = new Map<string, { width: number; height: number }>();
 
 export function markTerminalStarted(sessionId: string) {
   startedTerminalSessions.add(sessionId);
@@ -221,6 +223,7 @@ function cleanupBufferedTerminalState(sessionId: string) {
   markTerminalStopped(sessionId);
   cleanupBufferedIoState(sessionId);
   clearReconnectConfig(sessionId);
+  lastTerminalSizes.delete(sessionId);
 }
 
 function updateSessionLifecycleState(
@@ -505,7 +508,7 @@ export async function connectAndOpen(connection: Connection, connectConfig?: any
       return s;
     });
     log.error('Connection', `Failed to connect to ${connection.name}`, error);
-    const msg = normalizeErrorMessage(error);
+    const msg = toSafeUserMessage(error);
     showErrorMessage(`连接失败：${msg}`, 5000);
   }
 }
@@ -526,6 +529,63 @@ function normalizeErrorMessage(error: unknown): string {
   return String(error);
 }
 
+function toSafeUserMessage(error: unknown): string {
+  return sanitizeTerminalDisplayText(normalizeErrorMessage(error));
+}
+
+function writeTerminalStatus(term: Terminal, colorCode: '31' | '32' | '33' | '36', label: string, value?: unknown) {
+  const suffix = value == null ? '' : `: ${sanitizeTerminalDisplayText(value)}`;
+  void term.write(`\r\n\x1b[${colorCode}m${label}${suffix}\x1b[0m\r\n`);
+}
+
+function showSafeErrorMessage(prefix: string, value: unknown, timeoutMs = 5000) {
+  showErrorMessage(`${prefix}: ${sanitizeTerminalDisplayText(value)}`, timeoutMs);
+}
+
+type ConfirmDialogDetail = {
+  title: string;
+  message: string;
+  confirmText?: string;
+  cancelText?: string;
+  kind?: 'info' | 'warning' | 'danger';
+  resolve: (confirmed: boolean) => void;
+  reject: (error: Error) => void;
+};
+
+function dispatchPasswordPromptRequest(connectionName: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const event = new CustomEvent('starshuttle:password-prompt-request', {
+      cancelable: true,
+      detail: {
+        connectionName,
+        resolve,
+        reject,
+      },
+    });
+    window.dispatchEvent(event);
+    if (!event.defaultPrevented) {
+      reject(new Error('密码输入不可用'));
+    }
+  });
+}
+
+function dispatchConfirmDialogRequest(detail: Omit<ConfirmDialogDetail, 'resolve' | 'reject'>): Promise<boolean> {
+  return new Promise((resolve, reject) => {
+    const event = new CustomEvent<ConfirmDialogDetail>('starshuttle:confirm-dialog-request', {
+      cancelable: true,
+      detail: {
+        ...detail,
+        resolve,
+        reject,
+      },
+    });
+    window.dispatchEvent(event);
+    if (!event.defaultPrevented) {
+      reject(new Error('确认对话框不可用'));
+    }
+  });
+}
+
 function shouldPromptForPasswordOnConnectError(error: unknown, config: any): boolean {
   const msg = normalizeErrorMessage(error);
   const needsPassword =
@@ -542,12 +602,8 @@ function shouldPromptForPasswordOnConnectError(error: unknown, config: any): boo
 }
 
 async function promptPassword(connectionName: string): Promise<string> {
-  const entered = window.prompt(`请输入连接「${connectionName}」的密码`, '');
-  if (entered === null) {
-    throw new Error('已取消输入密码');
-  }
-  const password = entered.trim();
-  if (!password) {
+  const password = await dispatchPasswordPromptRequest(connectionName);
+  if (!password.trim()) {
     throw new Error('密码不能为空');
   }
   return password;
@@ -585,7 +641,13 @@ async function connectWithKnownHostsPrompt(connection: Connection | Record<strin
       const parsed = parseHostKeyPrompt(error);
       if (!parsed) throw error;
 
-      const confirmed = window.confirm(buildHostKeyConfirmMessage(parsed));
+      const confirmed = await dispatchConfirmDialogRequest({
+        title: '主机密钥确认',
+        message: buildHostKeyConfirmMessage(parsed),
+        confirmText: '信任并继续',
+        cancelText: '取消',
+        kind: parsed.type === 'mismatch' ? 'danger' : 'warning',
+      });
       if (!confirmed) {
         throw error;
       }
@@ -952,7 +1014,7 @@ function sendTerminalDataBuffered(sessionId: string, data: string, immediate: bo
   });
 }
 
-function handleTerminalInputSingle(sessionId: string, data: string) {
+export function handleTerminalInputSingle(sessionId: string, data: string) {
   const hasControl =
     data.includes('\r') ||
     data.includes('\n') ||
@@ -1014,9 +1076,17 @@ export function handleTerminalInput(sessionId: string, data: string, connection?
 }
 
 export async function sendTerminalResize(sessionId: string, width: number, height: number) {
+  if (width <= 0 || height <= 0) return;
+
+  const lastSize = lastTerminalSizes.get(sessionId);
+  if (lastSize && lastSize.width === width && lastSize.height === height) {
+    return;
+  }
+
   try {
     await invoke('resize_terminal', { sessionId, width, height });
     startedTerminalSessions.add(sessionId);
+    lastTerminalSizes.set(sessionId, { width, height });
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     if (msg.includes('Session not found')) {
@@ -1295,8 +1365,8 @@ export async function setupTerminalListeners(sessionId: string, term: Terminal) 
         log.error('TermError', 'Terminal error reported from backend', event.payload.error, {
           sessionId,
         });
-        void term.write(`\r\n\x1b[31mError: ${event.payload.error}\x1b[0m\r\n`);
-        showErrorMessage(`终端错误: ${event.payload.error}`, 5000);
+        writeTerminalStatus(term, '31', 'Error', event.payload.error);
+        showSafeErrorMessage('终端错误', event.payload.error, 5000);
       }
     });
     if (disposed) {
@@ -1308,12 +1378,12 @@ export async function setupTerminalListeners(sessionId: string, term: Terminal) 
     // Session Closed listener
     const closedUnlisten = await listen(`session-closed-${sessionId}`, (event: any) => {
       const reason = event.payload?.reason || 'unknown';
-      log.info('SessionClosed', 'Session closed', { sessionId, reason });
+      log.info('SessionClosed', 'Session closed', { sessionId, reason: sanitizeTerminalDisplayText(reason) });
       markTerminalStopped(sessionId);
 
       // Only show message if not manually closed
       if (reason !== 'user_closed') {
-        void term.write(`\r\n\x1b[33mSession closed (Reason: ${reason})\x1b[0m\r\n`);
+        writeTerminalStatus(term, '33', 'Session closed (Reason)', reason);
       }
 
       if (
@@ -1516,6 +1586,12 @@ async function reconnectTerminalInternal(oldSessionId: string): Promise<boolean>
         log.warn('Reconnect', 'Terminal pool migration skipped', { oldSessionId, newSessionId: nextSessionId });
       }
 
+      const previousSize = lastTerminalSizes.get(oldSessionId);
+      lastTerminalSizes.delete(oldSessionId);
+      if (previousSize) {
+        lastTerminalSizes.set(nextSessionId, previousSize);
+      }
+
       let replaced = false;
       activeTerminals.update(items => {
         let foundRoot = false;
@@ -1576,8 +1652,13 @@ async function reconnectTerminalInternal(oldSessionId: string): Promise<boolean>
       clearReconnectAttempts(oldSessionId);
       clearReconnectTimer(oldSessionId);
       clearReconnectKeyListener(oldSessionId);
+      clearReconnectInFlight(oldSessionId);
       cleanupBufferedTerminalState(oldSessionId);
       cleanupTerminalListeners(oldSessionId);
+      clearReconnectAttempts(nextSessionId);
+      clearReconnectTimer(nextSessionId);
+      clearReconnectKeyListener(nextSessionId);
+      clearReconnectInFlight(nextSessionId);
       releaseReconnectSuppressionState(oldSessionId);
       releaseReconnectSuppressionState(nextSessionId);
       attachTerminalInputListener(nextSessionId, term);
@@ -1636,7 +1717,7 @@ async function reconnectTerminalInternal(oldSessionId: string): Promise<boolean>
           armManualReconnectKey(oldSessionId, term);
         }
       }
-      void term.write(`\r\n\x1b[31mReconnection failed: ${e}\x1b[0m\r\n`);
+      writeTerminalStatus(term, '31', 'Reconnection failed', e);
       showErrorMessage(`重连失败: ${terminalEntry.connection.name}`, 5000);
       return false;
   }

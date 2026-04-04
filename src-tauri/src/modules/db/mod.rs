@@ -1,10 +1,8 @@
-mod audit;
 mod command_snippets;
 
 use rusqlite::{params, Connection, Result};
 use uuid::Uuid;
 
-pub use audit::AuditEvent;
 pub use command_snippets::CommandSnippet;
 
 pub struct DatabaseManager {
@@ -27,7 +25,6 @@ impl DatabaseManager {
             [],
         )?;
         command_snippets::create_table(conn)?;
-        audit::create_table(conn)?;
         Ok(())
     }
 
@@ -77,17 +74,5 @@ impl DatabaseManager {
 
     pub fn increment_usage_count(&self, id: &Uuid) -> Result<()> {
         command_snippets::increment_usage_count(&self.conn, id)
-    }
-
-    pub fn save_audit_event(&self, event: &AuditEvent) -> Result<()> {
-        audit::save_event(&self.conn, event)
-    }
-
-    pub fn get_audit_events(&self, limit: Option<u32>) -> Result<Vec<AuditEvent>> {
-        audit::get_events(&self.conn, limit)
-    }
-
-    pub fn clear_audit_events(&self) -> Result<()> {
-        audit::clear_events(&self.conn)
     }
 }

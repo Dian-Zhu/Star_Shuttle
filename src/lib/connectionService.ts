@@ -760,6 +760,14 @@ export async function updateConnectionConfig(connection: Connection) {
   await invoke('save_connection_config', { config: toBackendConnectionConfig(connection) });
 }
 
+export async function execRemoteCommand(sessionId: string, command: string): Promise<string> {
+  const result = await invoke<unknown>('exec_remote_command', {
+    sessionId,
+    command,
+  });
+  return typeof result === 'string' ? result : String(result ?? '');
+}
+
 export async function createBackendConfig(connectionData: ConnectionFormData): Promise<BackendConnectionConfig> {
   const isEditing = Boolean(connectionData.id);
   const protocol: ConnectionProtocol =

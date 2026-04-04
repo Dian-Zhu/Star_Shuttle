@@ -131,4 +131,71 @@ describe('terminalService reconnect/manual listener behavior', () => {
       term.writes.filter((line) => line.includes('Press R to reconnect')).length
     ).toBeGreaterThanOrEqual(2);
   });
+
+  it('migrates resize dedupe state after a successful reconnect migration', async () => {
+    const harness = await createTerminalServiceHarness(async (command) => {
+      if (command === 'connect') return 'session-new-1';
+      if (command === 'start_terminal') return true;
+      if (command === 'resize_terminal') return undefined;
+      return undefined;
+    });
+
+    const { terminalService, store, invokeCalls, resetStores } = harness;
+    resetStores();
+
+    const term = new MockTerminal();
+    const connection = createConnection('conn-old', 'old');
+    store.activeTerminals.set([
+      {
+        sessionId: 'session-old',
+        connection,
+        terminal: term as any,
+        fitAddon: null as any,
+        searchAddon: null as any,
+      },
+    ]);
+
+    await terminalService.sendTerminalResize('session-old', 120, 40);
+    await expect(terminalService.reconnectTerminal('session-old')).resolves.toBe(true);
+    await terminalService.sendTerminalResize('session-new-1', 120, 40);
+    await terminalService.sendTerminalResize('session-new-1', 121, 40);
+
+    const resizeCalls = invokeCalls.filter((call) => call.command === 'resize_terminal');
+    expect(resizeCalls).toHaveLength(2);
+    expect(resizeCalls[0]?.args).toEqual({ sessionId: 'session-old', width: 120, height: 40 });
+    expect(resizeCalls[1]?.args).toEqual({ sessionId: 'session-new-1', width: 121, height: 40 });
+  });
+
+  it('clears old reconnect state after a successful reconnect migration', async () => {
+    const harness = await createTerminalServiceHarness(async (command) => {
+      if (command === 'connect') return 'session-new-1';
+      if (command === 'start_terminal') return true;
+      return undefined;
+    });
+
+    const reconnectState = await import('./terminalReconnectState');
+    const { terminalService, store, resetStores } = harness;
+    resetStores();
+
+    const term = new MockTerminal();
+    const connection = createConnection('conn-old', 'old');
+    store.activeTerminals.set([
+      {
+        sessionId: 'session-old',
+        connection,
+        terminal: term as any,
+        fitAddon: null as any,
+        searchAddon: null as any,
+      },
+    ]);
+
+    reconnectState.rememberReconnectConfig('session-old', { host: 'old-host' });
+    reconnectState.setReconnectInFlight('session-new-1', Promise.resolve(false));
+
+    await expect(terminalService.reconnectTerminal('session-old')).resolves.toBe(true);
+
+    expect(reconnectState.getReconnectConfig('session-old')).toBeUndefined();
+    expect(reconnectState.getReconnectInFlight('session-old')).toBeUndefined();
+    expect(reconnectState.getReconnectInFlight('session-new-1')).toBeUndefined();
+  });
 });

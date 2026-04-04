@@ -26,6 +26,7 @@
   export let onFocus: (() => void) | undefined = undefined;
   
   export let isVisible: boolean = true;
+  export let shouldRestoreFocus: boolean = false;
 
   const dispatch = createEventDispatcher<{
     split: { direction: 'horizontal' | 'vertical' };
@@ -42,6 +43,13 @@
   let isDestroyed = false;
   let mountVersion = 0;
   let focusListener: (() => void) | null = null;
+  let layoutFrame: number | null = null;
+  let layoutFrameMode: 'raf-outer' | 'raf-inner' | 'timeout' | null = null;
+  let layoutRefreshPending = false;
+  let layoutFocusPending = false;
+  let lastLayoutSize = { width: 0, height: 0 };
+  let lastTerminalGrid = { cols: 0, rows: 0 };
+  let lastVisibilityState = isVisible;
   let mouseDownListener: (() => void) | null = null;
   let textareaEl: HTMLTextAreaElement | null = null;
   let titleChangeDisposable: { dispose: () => void } | null = null;
@@ -144,16 +152,76 @@
     return instance;
   }
 
+  function cancelScheduledLayoutWork() {
+    if (layoutFrame !== null) {
+      if ((layoutFrameMode === 'raf-outer' || layoutFrameMode === 'raf-inner') && typeof cancelAnimationFrame === 'function') {
+        cancelAnimationFrame(layoutFrame);
+      } else {
+        clearTimeout(layoutFrame);
+      }
+    }
+    layoutFrame = null;
+    layoutFrameMode = null;
+    layoutRefreshPending = false;
+    layoutFocusPending = false;
+  }
+
+  function scheduleLayoutWork(options: { refresh?: boolean; focus?: boolean } = {}) {
+    if (!terminal || !fitAddon || !isInitialized || !isVisible) return;
+    layoutRefreshPending = layoutRefreshPending || Boolean(options.refresh);
+    layoutFocusPending = layoutFocusPending || Boolean(options.focus);
+    if (layoutFrame !== null) return;
+
+    const run = () => {
+      layoutFrame = null;
+      layoutFrameMode = null;
+      if (!terminal || !fitAddon || !isInitialized || !isVisible) {
+        layoutRefreshPending = false;
+        layoutFocusPending = false;
+        return;
+      }
+
+      fitAddon.fit();
+      if (lastTerminalGrid.cols !== terminal.cols || lastTerminalGrid.rows !== terminal.rows) {
+        lastTerminalGrid = { cols: terminal.cols, rows: terminal.rows };
+        sendTerminalResize(sessionId, terminal.cols, terminal.rows);
+      }
+      if (layoutRefreshPending) {
+        terminal.refresh(0, terminal.rows - 1);
+      }
+      if (layoutFocusPending) {
+        terminal.focus();
+      }
+      layoutRefreshPending = false;
+      layoutFocusPending = false;
+    };
+
+    if (typeof requestAnimationFrame === 'function') {
+      layoutFrameMode = 'raf-outer';
+      layoutFrame = requestAnimationFrame(() => {
+        layoutFrameMode = 'raf-inner';
+        layoutFrame = requestAnimationFrame(run);
+      });
+      return;
+    }
+
+    layoutFrameMode = 'timeout';
+    layoutFrame = window.setTimeout(run, 0) as unknown as number;
+  }
+
   // Initialization
   onMount(async () => {
     isDestroyed = false;
     const currentMountVersion = ++mountVersion;
 
-    resizeObserver = new ResizeObserver(() => {
-      if (isVisible && fitAddon && terminal) {
-        fitAddon.fit();
-        sendTerminalResize(sessionId, terminal.cols, terminal.rows);
-      }
+    resizeObserver = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      const width = Math.round(entry?.contentRect.width ?? container?.clientWidth ?? 0);
+      const height = Math.round(entry?.contentRect.height ?? container?.clientHeight ?? 0);
+      if (width <= 0 || height <= 0) return;
+      if (lastLayoutSize.width === width && lastLayoutSize.height === height) return;
+      lastLayoutSize = { width, height };
+      scheduleLayoutWork();
     });
 
     const pooled = resolvePooledTerminal();
@@ -224,6 +292,7 @@
     if (resizeObserver) {
       resizeObserver.disconnect();
     }
+    cancelScheduledLayoutWork();
     if (titleChangeDisposable) {
       try {
         titleChangeDisposable.dispose();
@@ -262,31 +331,24 @@
       (terminal.options as any).cursorWidth = 1;
       terminal.options.scrollback = $settings.terminal.scrollback;
       terminal.options.theme = getXtermTheme($settings);
-      
-      // Update font weight based on theme brightness
+
       const baseTheme = getBaseXtermTheme($settings);
       const bgBrightness = calculateBrightness(baseTheme.background || '#000000');
       const isLightTheme = bgBrightness > 128;
       terminal.options.fontWeight = isLightTheme ? '600' : 'normal';
       terminal.options.fontWeightBold = isLightTheme ? 'bold' : 'bold';
 
-      // Force redraw to ensure transparency takes effect
-      setTimeout(() => terminal?.refresh(0, terminal.rows - 1), 10);
-      
-      if (isVisible && fitAddon) {
-        setTimeout(() => fitAddon?.fit(), 10);
-      }
+      scheduleLayoutWork({ refresh: true });
   }
 
-  $: if (isVisible && isInitialized && fitAddon && terminal) {
-      // Re-fit when becoming visible
-      setTimeout(() => {
-          fitAddon?.fit();
-          if (terminal) {
-            sendTerminalResize(sessionId, terminal.cols, terminal.rows);
-            terminal.focus();
-          }
-      }, 50);
+  $: if (terminal && isInitialized) {
+      if (isVisible && !lastVisibilityState) {
+        scheduleLayoutWork({ refresh: true, focus: shouldRestoreFocus });
+      }
+      if (!isVisible && lastVisibilityState) {
+        cancelScheduledLayoutWork();
+      }
+      lastVisibilityState = isVisible;
   }
 
   // Context Menu Handlers

@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { loadConnections } from './connectionService';
 import { localFsService } from './localFsService';
-import { successMessage, errorMessage } from './store';
+import { showSuccessMessage, showErrorMessage } from './store';
 import type { Connection } from './store';
 
 const IS_DEV = import.meta.env.DEV;
@@ -202,8 +202,7 @@ export async function exportConnections(options?: { includeSensitive?: boolean }
     const connections = await invoke('get_all_connection_configs') as Connection[];
     
     if (connections.length === 0) {
-      errorMessage.set('没有可导出的连接');
-      setTimeout(() => errorMessage.set(null), 3000);
+      showErrorMessage('没有可导出的连接', 3000);
       return;
     }
 
@@ -227,12 +226,10 @@ export async function exportConnections(options?: { includeSensitive?: boolean }
       grant.accessToken,
     );
     
-    successMessage.set('导出成功（不含密码/口令）');
-    setTimeout(() => successMessage.set(null), 3000);
+    showSuccessMessage('导出成功（不含密码/口令）', 3000);
   } catch (error) {
     console.error('Export failed:', error);
-    errorMessage.set(`导出失败: ${error}`);
-    setTimeout(() => errorMessage.set(null), 5000);
+    showErrorMessage(`导出失败: ${error}`, 5000);
   }
 }
 
@@ -249,8 +246,7 @@ export async function importConnections() {
     // Avoid reading huge files into memory. Backend also enforces this limit, but we can fail fast
     // with a clearer message using the dialog-provided size.
     if (typeof grant.size === 'number' && grant.size > MAX_IMPORT_JSON_BYTES) {
-      errorMessage.set(`文件过大，无法导入（上限 ${formatMiB(MAX_IMPORT_JSON_BYTES)}）`);
-      setTimeout(() => errorMessage.set(null), 5000);
+      showErrorMessage(`文件过大，无法导入（上限 ${formatMiB(MAX_IMPORT_JSON_BYTES)}）`, 5000);
       return;
     }
 
@@ -260,10 +256,10 @@ export async function importConnections() {
     } catch (error) {
       const parsed = parseLocalFsTextTooLarge(error);
       if (parsed) {
-        errorMessage.set(
+        showErrorMessage(
           `文件过大，无法导入（大小 ${formatMiB(parsed.sizeBytes)}，上限 ${formatMiB(parsed.maxBytes)}）`,
+          5000,
         );
-        setTimeout(() => errorMessage.set(null), 5000);
         return;
       }
       throw error;
@@ -309,15 +305,13 @@ export async function importConnections() {
     await loadConnections();
     
     if (failCount > 0) {
-      successMessage.set(`导入完成: ${successCount} 个成功, ${failCount} 个失败`);
+      showSuccessMessage(`导入完成: ${successCount} 个成功, ${failCount} 个失败`, 3000);
     } else {
-      successMessage.set(`成功导入 ${successCount} 个连接`);
+      showSuccessMessage(`成功导入 ${successCount} 个连接`, 3000);
     }
-    setTimeout(() => successMessage.set(null), 3000);
 
   } catch (error) {
     console.error('Import failed:', error);
-    errorMessage.set(`导入失败: ${error}`);
-    setTimeout(() => errorMessage.set(null), 5000);
+    showErrorMessage(`导入失败: ${error}`, 5000);
   }
 }

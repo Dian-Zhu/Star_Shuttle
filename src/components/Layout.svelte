@@ -42,6 +42,32 @@
   let keyboardInteractiveSubmitting = false;
   let unlistenKeyboardInteractive: null | (() => void) = null;
 
+  type PasswordPromptDetail = {
+    connectionName: string;
+    resolve: (password: string) => void;
+    reject: (error: Error) => void;
+  };
+
+  type ConfirmDialogDetail = {
+    title: string;
+    message: string;
+    confirmText?: string;
+    cancelText?: string;
+    kind?: 'info' | 'warning' | 'danger';
+    resolve: (confirmed: boolean) => void;
+    reject: (error: Error) => void;
+  };
+
+  let passwordPromptActive: PasswordPromptDetail | null = null;
+  let passwordPromptQueue: PasswordPromptDetail[] = [];
+  let passwordPromptValue = '';
+  let passwordPromptError = '';
+  let passwordPromptSubmitting = false;
+
+  let confirmDialogActive: ConfirmDialogDetail | null = null;
+  let confirmDialogQueue: ConfirmDialogDetail[] = [];
+  let confirmDialogSubmitting = false;
+
   async function applyAppLock() {
     try {
       const enabled = await invoke<boolean>('is_app_lock_enabled');
@@ -89,6 +115,130 @@
       keyboardInteractiveResponses = [];
       showNextKeyboardInteractive();
     }
+  }
+
+  function showNextPasswordPrompt() {
+    if (passwordPromptActive) return;
+    const next = passwordPromptQueue.shift() ?? null;
+    if (!next) return;
+    passwordPromptActive = next;
+    passwordPromptValue = '';
+    passwordPromptError = '';
+    passwordPromptSubmitting = false;
+  }
+
+  function handlePasswordPromptRequest(event: Event) {
+    const customEvent = event as CustomEvent<PasswordPromptDetail>;
+    const detail = customEvent.detail;
+    if (!detail?.resolve || !detail?.reject) return;
+
+    event.preventDefault();
+    if (passwordPromptActive) {
+      passwordPromptQueue = [...passwordPromptQueue, detail];
+      return;
+    }
+
+    passwordPromptActive = detail;
+    passwordPromptValue = '';
+    passwordPromptError = '';
+    passwordPromptSubmitting = false;
+  }
+
+  function closePasswordPrompt() {
+    passwordPromptActive = null;
+    passwordPromptValue = '';
+    passwordPromptError = '';
+    passwordPromptSubmitting = false;
+    showNextPasswordPrompt();
+  }
+
+  function showNextConfirmDialog() {
+    if (confirmDialogActive) return;
+    const next = confirmDialogQueue.shift() ?? null;
+    if (!next) return;
+    confirmDialogActive = next;
+    confirmDialogSubmitting = false;
+  }
+
+  function handleConfirmDialogRequest(event: Event) {
+    const customEvent = event as CustomEvent<ConfirmDialogDetail>;
+    const detail = customEvent.detail;
+    if (!detail?.resolve || !detail?.reject) return;
+
+    event.preventDefault();
+    if (confirmDialogActive) {
+      confirmDialogQueue = [...confirmDialogQueue, detail];
+      return;
+    }
+
+    confirmDialogActive = detail;
+    confirmDialogSubmitting = false;
+  }
+
+  function closeConfirmDialog() {
+    confirmDialogActive = null;
+    confirmDialogSubmitting = false;
+    showNextConfirmDialog();
+  }
+
+  function submitConfirmDialog(confirmed: boolean) {
+    if (!confirmDialogActive || confirmDialogSubmitting) return;
+    confirmDialogSubmitting = true;
+    confirmDialogActive.resolve(confirmed);
+    closeConfirmDialog();
+  }
+
+  function cancelConfirmDialog() {
+    if (!confirmDialogActive || confirmDialogSubmitting) return;
+    confirmDialogSubmitting = true;
+    confirmDialogActive.resolve(false);
+    closeConfirmDialog();
+  }
+
+  function submitPasswordPrompt() {
+    if (!passwordPromptActive || passwordPromptSubmitting) return;
+    const password = passwordPromptValue;
+    if (!password.trim()) {
+      passwordPromptError = '密码不能为空';
+      return;
+    }
+
+    passwordPromptSubmitting = true;
+    passwordPromptActive.resolve(password);
+    closePasswordPrompt();
+  }
+
+  function cancelPasswordPrompt() {
+    if (!passwordPromptActive || passwordPromptSubmitting) return;
+    passwordPromptSubmitting = true;
+    passwordPromptActive.reject(new Error('已取消输入密码'));
+    closePasswordPrompt();
+  }
+
+  function rejectPendingDialogRequests(reason: string) {
+    const error = new Error(reason);
+
+    if (passwordPromptActive) {
+      passwordPromptActive.reject(error);
+    }
+    for (const detail of passwordPromptQueue) {
+      detail.reject(error);
+    }
+    passwordPromptActive = null;
+    passwordPromptQueue = [];
+    passwordPromptValue = '';
+    passwordPromptError = '';
+    passwordPromptSubmitting = false;
+
+    if (confirmDialogActive) {
+      confirmDialogActive.reject(error);
+    }
+    for (const detail of confirmDialogQueue) {
+      detail.reject(error);
+    }
+    confirmDialogActive = null;
+    confirmDialogQueue = [];
+    confirmDialogSubmitting = false;
   }
 
   // Helper to convert hex to rgba
@@ -168,7 +318,11 @@
   }
 
   // React to theme setting changes
-  $: $settings.theme, $settings.appearance.customUITheme, updateTheme();
+  $: $settings.theme,
+    $settings.appearance.customUITheme,
+    $settings.appearance.backgroundImage,
+    $settings.appearance.backgroundOpacity,
+    updateTheme();
   $: $settings.appearance.accentColor, updateAccentColor();
 
   onMount(() => {
@@ -232,7 +386,9 @@
     window.addEventListener('keydown', resetIdleTimer);
     window.addEventListener('click', resetIdleTimer);
     window.addEventListener('beforeunload', handleBeforeUnload);
-    
+    window.addEventListener('starshuttle:password-prompt-request', handlePasswordPromptRequest as EventListener);
+    window.addEventListener('starshuttle:confirm-dialog-request', handleConfirmDialogRequest as EventListener);
+
     resetIdleTimer();
     updateTheme(); // Initial theme application
 
@@ -243,6 +399,9 @@
         window.removeEventListener('keydown', resetIdleTimer);
         window.removeEventListener('click', resetIdleTimer);
         window.removeEventListener('beforeunload', handleBeforeUnload);
+        window.removeEventListener('starshuttle:password-prompt-request', handlePasswordPromptRequest as EventListener);
+        window.removeEventListener('starshuttle:confirm-dialog-request', handleConfirmDialogRequest as EventListener);
+        rejectPendingDialogRequests('对话框宿主已卸载');
         if (idleTimer) clearTimeout(idleTimer);
         if (unlistenKeyboardInteractive) unlistenKeyboardInteractive();
     };
@@ -540,6 +699,102 @@
           disabled={keyboardInteractiveSubmitting}
         >
           确认
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if passwordPromptActive}
+  <div class="fixed inset-0 z-[60] flex items-center justify-center bg-app-backdrop backdrop-blur-sm">
+    <div class="w-full max-w-md rounded-xl border border-app-border bg-app-surface shadow-2xl p-6">
+      <div class="flex items-start justify-between gap-4">
+        <div class="min-w-0">
+          <div class="text-sm font-medium text-app-text">输入密码</div>
+          <div class="text-xs text-app-text-secondary mt-1">连接：{passwordPromptActive.connectionName}</div>
+        </div>
+        <button
+          class="text-app-text-secondary hover:text-app-text transition-colors p-1 rounded-md hover:bg-app-bg-hover"
+          aria-label="取消"
+          on:click={cancelPasswordPrompt}
+          disabled={passwordPromptSubmitting}
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+        </button>
+      </div>
+
+      <div class="mt-4">
+        <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="password-prompt-input">
+          密码
+        </label>
+        <input
+          id="password-prompt-input"
+          type="password"
+          bind:value={passwordPromptValue}
+          class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all"
+          autocomplete="current-password"
+          on:keydown={(event) => event.key === 'Enter' && submitPasswordPrompt()}
+        />
+        {#if passwordPromptError}
+          <div class="mt-2 text-xs text-red-500">{passwordPromptError}</div>
+        {/if}
+      </div>
+
+      <div class="mt-6 flex items-center justify-end gap-3">
+        <button
+          class="px-4 py-2 rounded-lg border border-app-border text-app-text-secondary hover:text-app-text bg-app-bg hover:bg-app-bg-hover transition-colors disabled:opacity-50"
+          on:click={cancelPasswordPrompt}
+          disabled={passwordPromptSubmitting}
+        >
+          取消
+        </button>
+        <button
+          class="px-4 py-2 rounded-lg bg-primary-600 text-white hover:bg-primary-500 transition-colors disabled:opacity-50"
+          on:click={submitPasswordPrompt}
+          disabled={passwordPromptSubmitting}
+        >
+          确认
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if confirmDialogActive}
+  <div class="fixed inset-0 z-[60] flex items-center justify-center bg-app-backdrop backdrop-blur-sm">
+    <div class="w-full max-w-lg rounded-xl border border-app-border bg-app-surface shadow-2xl p-6">
+      <div class="flex items-start justify-between gap-4">
+        <div class="min-w-0">
+          <div class="text-sm font-medium text-app-text">{confirmDialogActive.title}</div>
+        </div>
+        <button
+          class="text-app-text-secondary hover:text-app-text transition-colors p-1 rounded-md hover:bg-app-bg-hover"
+          aria-label="取消"
+          on:click={cancelConfirmDialog}
+          disabled={confirmDialogSubmitting}
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+        </button>
+      </div>
+
+      <div class="mt-4 whitespace-pre-wrap text-sm leading-6 text-app-text-secondary">
+        {confirmDialogActive.message}
+      </div>
+
+      <div class="mt-6 flex items-center justify-end gap-3">
+        <button
+          class="px-4 py-2 rounded-lg border border-app-border text-app-text-secondary hover:text-app-text bg-app-bg hover:bg-app-bg-hover transition-colors disabled:opacity-50"
+          on:click={cancelConfirmDialog}
+          disabled={confirmDialogSubmitting}
+        >
+          {confirmDialogActive.cancelText ?? '取消'}
+        </button>
+        <button
+          class="px-4 py-2 rounded-lg text-white transition-colors disabled:opacity-50 {confirmDialogActive.kind === 'danger' ? 'bg-red-600 hover:bg-red-500' : 'bg-primary-600 hover:bg-primary-500'}"
+          on:click={() => submitConfirmDialog(true)}
+          disabled={confirmDialogSubmitting}
+        >
+          {confirmDialogActive.confirmText ?? '确认'}
         </button>
       </div>
     </div>

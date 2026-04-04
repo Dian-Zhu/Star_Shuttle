@@ -816,35 +816,14 @@ pub(crate) mod commands {
     }
 
     #[command]
-    pub fn exec_audited_command(
+    pub fn exec_remote_command(
         db: State<Arc<Mutex<DatabaseManager>>>,
         app_lock_state: State<Arc<Mutex<AppLockRuntimeState>>>,
         manager: State<Arc<RwLock<DefaultConnectionManager>>>,
         session_id: Uuid,
         command: String,
-        audit_event: crate::modules::db::AuditEvent,
-        execute: bool,
     ) -> Result<String, String> {
         ensure_app_unlocked(&db, &app_lock_state)?;
-        let mut audit_event = audit_event;
-        let action = audit_event.action.clone();
-        if !matches!(action.as_str(), "ALLOWED" | "WARNED" | "BLOCKED") {
-            return Err(format!("Unsupported audit action: {}", action));
-        }
-        if execute && action == "BLOCKED" {
-            return Err("Blocked audit action cannot execute a command".to_string());
-        }
-
-        audit_event.session_id = Some(session_id);
-        {
-            let db = db.lock().map_err(|e| e.to_string())?;
-            db.save_audit_event(&audit_event).map_err(|e| e.to_string())?;
-        }
-
-        if !execute {
-            return Ok(String::new());
-        }
-
         let manager = manager
             .read()
             .map_err(|e| format!("Failed to acquire read lock: {}", e))?;
@@ -908,16 +887,6 @@ pub(crate) mod commands {
         db.increment_usage_count(&id).map_err(|e| e.to_string())
     }
 
-    #[command]
-    pub fn log_audit_event(
-        db: State<Arc<Mutex<DatabaseManager>>>,
-        app_lock_state: State<Arc<Mutex<AppLockRuntimeState>>>,
-        event: crate::modules::db::AuditEvent,
-    ) -> Result<(), String> {
-        ensure_app_unlocked(&db, &app_lock_state)?;
-        let db = db.lock().map_err(|e| e.to_string())?;
-        db.save_audit_event(&event).map_err(|e| e.to_string())
-    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -945,17 +914,17 @@ pub fn run() {
             let app_dir = app_handle
                 .path()
                 .app_data_dir()
-                .expect("failed to get app data dir");
-            std::fs::create_dir_all(&app_dir).expect("failed to create app data dir");
+                .map_err(|e| e.to_string())?;
+            std::fs::create_dir_all(&app_dir).map_err(|e| e.to_string())?;
             let db_path = app_dir.join("app.db");
-            let db_manager = crate::modules::db::DatabaseManager::new(db_path.to_str().unwrap())
-                .expect("failed to init db");
+            let db_manager = crate::modules::db::DatabaseManager::new(&db_path.to_string_lossy())
+                .map_err(|e| e.to_string())?;
             let db = Arc::new(Mutex::new(db_manager));
             let lock_enabled = {
-                let db_guard = db.lock().expect("failed to lock db for app lock init");
+                let db_guard = db.lock().map_err(|e| e.to_string())?;
                 db_guard
                     .get_setting("app_lock_hash")
-                    .expect("failed to read app lock state")
+                    .map_err(|e| e.to_string())?
                     .is_some()
             };
             let app_lock_state = Arc::new(Mutex::new(AppLockRuntimeState {
@@ -966,10 +935,8 @@ pub fn run() {
 
             let mut manager = connection_manager_for_setup
                 .write()
-                .expect("failed to lock connection manager");
-            manager
-                .set_db(db)
-                .expect("failed to init connection persistence");
+                .map_err(|e| e.to_string())?;
+            manager.set_db(db).map_err(|e| e.to_string())?;
             app.manage(manager.keyboard_interactive_coordinator());
 
             // System Tray
@@ -977,8 +944,13 @@ pub fn run() {
             let show_i = tauri::menu::MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
             let menu = tauri::menu::Menu::with_items(app, &[&show_i, &quit_i])?;
 
+            let tray_icon = app
+                .default_window_icon()
+                .ok_or_else(|| "missing default window icon".to_string())?
+                .clone();
+
             let _tray = tauri::tray::TrayIconBuilder::new()
-                .icon(app.default_window_icon().unwrap().clone())
+                .icon(tray_icon)
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
@@ -1033,7 +1005,7 @@ pub fn run() {
             commands::send_terminal_data,
             commands::resize_terminal,
             commands::close_terminal,
-            commands::exec_audited_command,
+            commands::exec_remote_command,
             // App Lock commands
             commands::set_app_lock,
             commands::change_app_lock,
@@ -1070,8 +1042,6 @@ pub fn run() {
             commands::get_command_snippet_by_id,
             commands::delete_command_snippet,
             commands::increment_command_snippet_usage,
-            // Audit logging commands
-            commands::log_audit_event,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

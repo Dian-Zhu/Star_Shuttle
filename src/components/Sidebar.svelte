@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { connections, showConnectionForm, editingConnection, isSidebarCollapsed, isRightSidebarOpen, activeTerminals, connectionGroups, getGroupIdByPath, connectingConnections, connectionHistory } from '../lib/store';
+  import { connections, showConnectionForm, editingConnection, isSidebarCollapsed, isRightSidebarOpen, activeTerminals, connectionGroups, getGroupIdByPath, connectingConnections, connectionHistory, showSuccessMessage, showErrorMessage } from '../lib/store';
   import { deleteConnection, updateConnectionConfig } from '../lib/connectionService';
   import { connectAndOpen, disconnectTerminal } from '../lib/terminalService';
   import SystemMonitorModal from './SystemMonitorModal.svelte';
@@ -19,10 +19,11 @@
   import SidebarToggleIcon from './icons/SidebarToggleIcon.svelte';
   import { importConnections, exportConnections } from '../lib/importExportService';
   import { confirm } from '@tauri-apps/plugin-dialog';
-  import { successMessage } from '../lib/store';
   import { v4 as uuidv4 } from 'uuid';
 
   let searchTerm = '';
+  let debouncedSearchTerm = '';
+  let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   let activeTab: 'servers' | 'history' = 'servers';
   let showMonitor: string | null = null; // Session ID for monitor
   let monitorConnection: any = null;
@@ -36,18 +37,35 @@
     row: null as TagRow | null
   };
 
+  let groupPromptOpen = false;
+  let groupPromptValue = '';
+  let groupPromptError = '';
+
+  function scheduleSearchUpdate(value: string) {
+    if (searchDebounceTimer) {
+      clearTimeout(searchDebounceTimer);
+    }
+    searchDebounceTimer = setTimeout(() => {
+      debouncedSearchTerm = value;
+      searchDebounceTimer = null;
+    }, 120);
+  }
+
+  $: scheduleSearchUpdate(searchTerm);
+
   // Filter connections based on search term
-  $: filteredConnections = $connections.filter(c => {
-    const term = searchTerm.toLowerCase();
-    if (!term) return true;
-    const tags = (c.tags || []).join(',').toLowerCase();
-    return (
-      c.name.toLowerCase().includes(term) ||
-      c.host.toLowerCase().includes(term) ||
-      c.username.toLowerCase().includes(term) ||
-      tags.includes(term)
-    );
-  });
+  $: normalizedSearchTerm = debouncedSearchTerm.trim().toLowerCase();
+  $: filteredConnections = normalizedSearchTerm
+    ? $connections.filter(c => {
+        const tags = (c.tags || []).join(',').toLowerCase();
+        return (
+          c.name.toLowerCase().includes(normalizedSearchTerm) ||
+          c.host.toLowerCase().includes(normalizedSearchTerm) ||
+          c.username.toLowerCase().includes(normalizedSearchTerm) ||
+          tags.includes(normalizedSearchTerm)
+        );
+      })
+    : $connections;
 
   type TagNode = {
     name: string;
@@ -88,6 +106,13 @@
       .split('/')
       .map(s => s.trim())
       .filter(Boolean);
+  }
+
+  function isGroupPathWithin(folderPath: string, groupTag: string): boolean {
+    if (folderPath === '未分组') {
+      return groupTag === '未分组';
+    }
+    return groupTag === folderPath || groupTag.startsWith(`${folderPath}/`);
   }
 
   function buildTagTree(items: any[], groups: any[]): TagNode {
@@ -195,7 +220,7 @@
     expandedPaths = next;
   }
 
-  $: tagTree = buildTagTree(filteredConnections, $connectionGroups);
+  $: tagTree = activeTab === 'servers' ? buildTagTree(filteredConnections, $connectionGroups) : { name: '', path: '', children: new Map(), connections: [] };
   $: {
     if (!didInitExpanded) {
       didInitExpanded = true;
@@ -208,12 +233,14 @@
       expandedPaths = newPaths;
     }
   }
-  $: tagRows = flattenTagTree(tagTree, expandedPaths);
+  $: tagRows = activeTab === 'servers' ? flattenTagTree(tagTree, expandedPaths) : [];
 
-  $: filteredHistory = $connectionHistory.filter(h => 
-    h.connection.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-    h.connection.host.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  $: filteredHistory = normalizedSearchTerm
+    ? $connectionHistory.filter(h =>
+        h.connection.name.toLowerCase().includes(normalizedSearchTerm) ||
+        h.connection.host.toLowerCase().includes(normalizedSearchTerm)
+      )
+    : $connectionHistory;
 
   $: activeConnectionIds = new Set($activeTerminals.map(t => t.connection.id));
 
@@ -242,6 +269,55 @@
     connectAndOpen(connection);
   }
 
+  function showSidebarError(message: string, timeoutMs = 3000) {
+    showErrorMessage(message, timeoutMs);
+  }
+
+  function openGroupPrompt() {
+    groupPromptValue = '';
+    groupPromptError = '';
+    groupPromptOpen = true;
+  }
+
+  function closeGroupPrompt() {
+    groupPromptOpen = false;
+    groupPromptValue = '';
+    groupPromptError = '';
+  }
+
+  function submitGroupPrompt() {
+    const trimmedName = groupPromptValue
+      .split('/')
+      .map(part => part.trim())
+      .filter(Boolean)
+      .join('/');
+    if (!trimmedName) {
+      groupPromptError = '分组名称不能为空';
+      return;
+    }
+
+    const existingGroups = $connectionGroups;
+    if (existingGroups.some(g => g.name.split('/').map(part => part.trim()).filter(Boolean).join('/') === trimmedName)) {
+      groupPromptError = '分组已存在';
+      return;
+    }
+
+    const newGroup = {
+      id: uuidv4(),
+      name: trimmedName,
+      createdAt: Date.now()
+    };
+
+    connectionGroups.update(groups => [...groups, newGroup]);
+
+    const next = new Set(expandedPaths);
+    next.add(trimmedName);
+    expandedPaths = next;
+
+    showSuccessMessage(`分组「${trimmedName}」已创建`, 3000);
+    closeGroupPrompt();
+  }
+
   async function handleDelete(id: string, event: MouseEvent) {
     event.stopPropagation();
     const confirmed = await confirm('确定要删除此连接吗？', { title: '删除连接', kind: 'warning' });
@@ -257,59 +333,32 @@
 
   function openMonitor(connection: any, event: MouseEvent) {
       event.stopPropagation();
-      // Find active session
       const terminal = $activeTerminals.find(t => t.connection.id === connection.id);
-      
+
       if (terminal) {
           showMonitor = terminal.sessionId;
           monitorConnection = connection;
       } else {
-          alert('请先连接到服务器才能打开监控面板');
+          showSidebarError('请先连接到服务器才能打开监控面板');
       }
   }
 
   async function createNewGroup() {
-    const groupName = prompt('请输入分组名称:');
-    if (!groupName || !groupName.trim()) return;
-
-    const trimmedName = groupName.trim();
-
-    // Check if group already exists
-    const existingGroups = $connectionGroups;
-    if (existingGroups.some(g => g.name === trimmedName)) {
-      alert('分组已存在');
-      return;
-    }
-
-    // Create new group with a default tag that matches the group name
-    // This ensures the group appears in the sidebar tree structure
-    const newGroup = {
-      id: uuidv4(),
-      name: trimmedName,
-      createdAt: Date.now()
-    };
-
-    connectionGroups.update(groups => [...groups, newGroup]);
-
-    // Auto-expand to show the new group
-    const next = new Set(expandedPaths);
-    next.add(trimmedName);
-    expandedPaths = next;
+    openGroupPrompt();
   }
 
   async function deleteGroup(folderPath: string) {
-    // Check if group exists in connectionGroups
     const group = $connectionGroups.find(g => g.name === folderPath);
     if (!group) {
-      alert('无法删除系统默认分组（如"未分组"）');
+      showSidebarError('无法删除系统默认分组（如“未分组”）');
       return;
     }
 
     // Find all connections in this group
     const connectionsInGroup = $connections.filter(c => {
       const tags = c.tags || [];
-      const groupTag = tags[0] ? String(tags[0]).trim() : '';
-      return groupTag === folderPath;
+      const groupTag = tags[0] ? String(tags[0]).trim() : '未分组';
+      return isGroupPathWithin(folderPath, groupTag);
     });
 
     if (connectionsInGroup.length > 0) {
@@ -319,39 +368,36 @@
       );
       if (!confirmed) return;
 
-      // Update all connections in this group to move to "未分组"
-      for (const conn of connectionsInGroup) {
-        const updatedConnection = { ...conn };
-        const newTags = ['未分组', ...conn.tags.slice(1)];
-        updatedConnection.tags = newTags;
-        updatedConnection.group_id = null;
+      const updatedConnections = connectionsInGroup.map((conn) => {
+        const nextTags = ['未分组', ...(conn.tags || []).slice(1)];
+        return {
+          ...conn,
+          tags: nextTags,
+          group_id: null,
+        };
+      });
+
+      for (const updatedConnection of updatedConnections) {
         await updateConnectionConfig(updatedConnection);
       }
 
       // Update local store
+      const updatedById = new Map(updatedConnections.map((conn) => [conn.id, conn]));
       connections.update(conns =>
-        conns.map(c => {
-          const tags = c.tags || [];
-          const groupTag = tags[0] ? String(tags[0]).trim() : '';
-          if (groupTag === folderPath) {
-            return { ...c, tags: ['未分组', ...tags.slice(1)], group_id: null };
-          }
-          return c;
-        })
+        conns.map(c => updatedById.get(c.id) ?? c)
       );
     } else {
       const confirmed = await confirm(`确定要删除分组「${folderPath}」吗？`, { title: '删除分组', kind: 'warning' });
       if (!confirmed) return;
     }
 
-    // Remove group from connectionGroups
-    connectionGroups.update(groups => groups.filter(g => g.name !== folderPath));
+    // Remove the deleted group and all nested subgroups from connectionGroups
+    connectionGroups.update(groups => groups.filter(g => !isGroupPathWithin(folderPath, g.name)));
 
-    // Remove from expandedPaths to trigger UI refresh
-    expandedPaths = new Set([...expandedPaths].filter(path => path !== folderPath));
+    // Remove the deleted group and all nested subgroups from expandedPaths to trigger UI refresh
+    expandedPaths = new Set([...expandedPaths].filter(path => !isGroupPathWithin(folderPath, path)));
 
-    successMessage.set(`分组「${folderPath}」已删除`);
-    setTimeout(() => successMessage.set(null), 3000);
+    showSuccessMessage(`分组「${folderPath}」已删除`, 3000);
   }
 
   let draggedConnection: any = null;
@@ -374,7 +420,8 @@
 
     // Update connection's tags to set first tag as folder path
     const updatedConnection = { ...draggedConnection };
-    const newTags = [folderPath, ...updatedConnection.tags.slice(1)];
+    const existingTags = Array.isArray(updatedConnection.tags) ? updatedConnection.tags : [];
+    const newTags = [folderPath, ...existingTags.slice(1)];
     updatedConnection.tags = newTags;
 
     // Find corresponding group_id based on folder path
@@ -420,17 +467,64 @@
   }
 
   onMount(() => {
-    // window.addEventListener('click', closeContextMenu);
-    // return () => window.removeEventListener('click', closeContextMenu);
+    return () => {
+      if (searchDebounceTimer) {
+        clearTimeout(searchDebounceTimer);
+      }
+    };
   });
 </script>
 
 {#if showMonitor && monitorConnection}
-    <SystemMonitorModal 
-        sessionId={showMonitor} 
-        connection={monitorConnection} 
-        onClose={() => { showMonitor = null; monitorConnection = null; }} 
+    <SystemMonitorModal
+        sessionId={showMonitor}
+        connection={monitorConnection}
+        onClose={() => { showMonitor = null; monitorConnection = null; }}
     />
+{/if}
+
+{#if groupPromptOpen}
+  <div class="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm">
+    <div class="w-full max-w-md rounded-lg border border-app-border bg-app-surface shadow-xl">
+      <div class="p-6">
+        <h3 class="text-lg font-bold text-app-text">新建分组</h3>
+        <p class="mt-1 text-sm text-app-text-secondary">输入新的分组名称。</p>
+
+        <div class="mt-4 space-y-2">
+          <label for="sidebar-group-name" class="block text-sm font-medium text-app-text">分组名称</label>
+          <input
+            id="sidebar-group-name"
+            type="text"
+            bind:value={groupPromptValue}
+            class="w-full rounded border border-app-border bg-app-bg px-3 py-2 text-app-text outline-none transition-all focus:border-transparent focus:ring-2 focus:ring-primary-500"
+            placeholder="例如：生产环境"
+            on:keydown={(event) => {
+              if (event.key === 'Enter') submitGroupPrompt();
+              if (event.key === 'Escape') closeGroupPrompt();
+            }}
+          />
+          {#if groupPromptError}
+            <p class="text-sm text-red-500">{groupPromptError}</p>
+          {/if}
+        </div>
+
+        <div class="mt-6 flex justify-end gap-3">
+          <button
+            class="rounded bg-app-bg px-4 py-2 text-app-text transition-colors hover:bg-app-bg-hover"
+            on:click={closeGroupPrompt}
+          >
+            取消
+          </button>
+          <button
+            class="rounded bg-primary-600 px-4 py-2 text-white transition-colors hover:bg-primary-700"
+            on:click={submitGroupPrompt}
+          >
+            创建
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
 {/if}
 
 <aside class="group relative flex flex-col overflow-visible bg-app-bg text-app-text-secondary transition-all duration-300 ease-in-out {$isSidebarCollapsed ? 'w-[47px]' : 'w-64'}">

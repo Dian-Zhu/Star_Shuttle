@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { fade } from 'svelte/transition';
-  import { execAuditedRemoteCommand } from '../lib/remoteExecAudit';
+  import { execRemoteCommand } from '../lib/connectionService';
   import XIcon from './icons/XIcon.svelte';
   import type { Connection } from '../lib/store';
 
@@ -46,7 +46,7 @@
 
   async function execMonitorCommand(command: string): Promise<string> {
     try {
-      return await execAuditedRemoteCommand(sessionId, command, 'system-monitor');
+      return await execRemoteCommand(sessionId, command);
     } catch {
       return '';
     }

@@ -219,6 +219,11 @@ import SplitPane from './terminal/SplitPane.svelte';
   function handlePaneActive(e: CustomEvent) {
       activePaneId = e.detail.targetId;
   }
+
+  function shouldRestorePaneFocus(paneId: string, isRoot: boolean): boolean {
+      if (activePaneId) return activePaneId === paneId;
+      return isRoot;
+  }
   
   function handleKeydown(e: KeyboardEvent) {
       if (!isVisible) return;
@@ -250,6 +255,7 @@ import SplitPane from './terminal/SplitPane.svelte';
            node={layoutRoot}
            rootNode={layoutRoot}
            isVisible={isVisible}
+           shouldRestoreFocusForPane={shouldRestorePaneFocus}
            on:split={handleSplit}
            on:closePane={handleClosePane}
            on:activePane={handlePaneActive}

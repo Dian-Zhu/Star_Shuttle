@@ -6,6 +6,7 @@
 
   export let node: LayoutNode;
   export let isVisible: boolean = true;
+  export let shouldRestoreFocusForPane: ((paneId: string, isRoot: boolean) => boolean) | undefined = undefined;
 
   const dispatch = createEventDispatcher();
 
@@ -92,6 +93,7 @@
       paneIndex={paneIndex}
       onInit={node.onInit}
       isVisible={isVisible}
+      shouldRestoreFocus={shouldRestoreFocusForPane ? shouldRestoreFocusForPane(node.id, node.isRoot ?? false) : (node.isRoot ?? false)}
       on:split={(e) => handlePaneSplit(e, node.id)}
       on:close={(e) => handlePaneClose(e, node.id)}
       on:active={(e) => handlePaneActive(e, node.id)}
@@ -110,6 +112,7 @@
         node={node.children[0]}
         isVisible={isVisible}
         rootNode={rootNode}
+        shouldRestoreFocusForPane={shouldRestoreFocusForPane}
         on:split
         on:closePane
         on:activePane
@@ -135,6 +138,7 @@
         node={node.children[1]}
         isVisible={isVisible}
         rootNode={rootNode}
+        shouldRestoreFocusForPane={shouldRestoreFocusForPane}
         on:split
         on:closePane
         on:activePane

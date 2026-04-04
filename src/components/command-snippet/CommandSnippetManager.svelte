@@ -1,8 +1,11 @@
 <script lang="ts">
+  import { get } from 'svelte/store';
   import { onMount } from 'svelte';
+  import { confirm } from '@tauri-apps/plugin-dialog';
   import type { CommandSnippet } from '../../types';
   import { commandSnippetService } from '../../lib/commandSnippetService';
-  import { successMessage, errorMessage } from '../../lib/store';
+  import { activeTerminals, selectedTerminalIndex, showSuccessMessage, showErrorMessage } from '../../lib/store';
+  import { handleTerminalInputSingle } from '../../lib/terminalService';
 
   let snippets: CommandSnippet[] = [];
   let loading = false;
@@ -21,8 +24,7 @@
     try {
       snippets = await commandSnippetService.getAll();
     } catch (err: any) {
-      errorMessage.set('加载命令片段失败: ' + err.message);
-      setTimeout(() => errorMessage.set(null), 5000);
+      showErrorMessage('加载命令片段失败: ' + err.message, 5000);
     } finally {
       loading = false;
     }
@@ -54,8 +56,7 @@
 
   async function saveSnippet() {
     if (!name.trim() || !command.trim()) {
-      errorMessage.set('名称和命令不能为空');
-      setTimeout(() => errorMessage.set(null), 3000);
+      showErrorMessage('名称和命令不能为空', 3000);
       return;
     }
 
@@ -73,38 +74,43 @@
 
     try {
       await commandSnippetService.save(snippetData as CommandSnippet);
-      successMessage.set(editingSnippet ? '命令片段已更新' : '命令片段已添加');
-      setTimeout(() => successMessage.set(null), 3000);
+      showSuccessMessage(editingSnippet ? '命令片段已更新' : '命令片段已添加', 3000);
       await loadSnippets();
       showForm = false;
     } catch (err: any) {
-      errorMessage.set('保存失败: ' + err.message);
-      setTimeout(() => errorMessage.set(null), 5000);
+      showErrorMessage('保存失败: ' + err.message, 5000);
     }
   }
 
   async function deleteSnippet(id: string) {
-    if (!confirm('确定删除此命令片段吗？')) return;
+    const confirmed = await confirm('确定删除此命令片段吗？', { title: '删除命令片段', kind: 'warning' });
+    if (!confirmed) return;
     try {
       await commandSnippetService.delete(id);
-      successMessage.set('命令片段已删除');
-      setTimeout(() => successMessage.set(null), 3000);
+      showSuccessMessage('命令片段已删除', 3000);
       await loadSnippets();
     } catch (err: any) {
-      errorMessage.set('删除失败: ' + err.message);
-      setTimeout(() => errorMessage.set(null), 5000);
+      showErrorMessage('删除失败: ' + err.message, 5000);
     }
   }
 
   async function useSnippet(snippet: CommandSnippet) {
-    // Emit event to parent component (terminal) to insert command
-    const event = new CustomEvent('useSnippet', { detail: snippet });
-    window.dispatchEvent(event);
-    // Increment usage count
+    const terminal = get(activeTerminals)[get(selectedTerminalIndex)];
+    if (!terminal?.sessionId) {
+      showErrorMessage('请先选择一个活动终端', 3000);
+      return;
+    }
+
+    handleTerminalInputSingle(terminal.sessionId, snippet.command);
+
     try {
       await commandSnippetService.incrementUsage(snippet.id);
-      snippet.usage_count++;
-    } catch (err) {
+      snippets = snippets.map((item) =>
+        item.id === snippet.id
+          ? { ...item, usage_count: item.usage_count + 1 }
+          : item
+      );
+    } catch {
       // silent fail
     }
   }

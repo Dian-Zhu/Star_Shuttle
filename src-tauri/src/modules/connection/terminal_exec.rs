@@ -60,13 +60,14 @@ fn drain_output_buffer(output_buffer: &mut Vec<u8>) -> Option<(String, usize)> {
     Some((data, byte_len))
 }
 
-fn flush_ssh_output_buffer(
+fn flush_output_buffer(
     output_buffer: &mut Vec<u8>,
     tracker: &Arc<Mutex<ChannelTracker>>,
     app: &tauri::AppHandle,
     session_id: Uuid,
     output_stats_bytes: &mut usize,
     output_stats_messages: &mut u64,
+    protocol: &str,
 ) {
     if output_buffer.is_empty() {
         return;
@@ -88,8 +89,8 @@ fn flush_ssh_output_buffer(
     let emit_ms = emit_start.elapsed().as_millis();
     if emit_ms > 10 {
         warn!(
-            "Terminal output emit slow (ssh) session {}: {}ms",
-            session_id, emit_ms
+            "Terminal output emit slow ({}) session {}: {}ms",
+            protocol, session_id, emit_ms
         );
     }
 }
@@ -125,9 +126,29 @@ fn start_telnet_terminal(
         let mut output_stats_last = tokio::time::Instant::now();
         let mut output_stats_bytes: usize = 0;
         let mut output_stats_messages: u64 = 0;
+        let mut output_buffer = Vec::new();
+        let mut flush_deadline: Option<tokio::time::Instant> = None;
 
         loop {
             tokio::select! {
+                _ = async {
+                    if let Some(deadline) = flush_deadline {
+                        tokio::time::sleep_until(deadline).await
+                    } else {
+                        std::future::pending().await
+                    }
+                }, if flush_deadline.is_some() => {
+                    flush_output_buffer(
+                        &mut output_buffer,
+                        &tracker_clone,
+                        &app_clone,
+                        session_id_clone,
+                        &mut output_stats_bytes,
+                        &mut output_stats_messages,
+                        "telnet",
+                    );
+                    flush_deadline = None;
+                }
                 read_res = read.read(&mut buf) => {
                     match read_res {
                         Ok(0) => {
@@ -147,22 +168,23 @@ fn start_telnet_terminal(
                             }
 
                             if !display.is_empty() {
-                                if let Ok(mut tracker) = tracker_clone.lock() {
-                                    tracker.log_data(session_id_clone, &display, "received");
-                                }
-                                let data_str = String::from_utf8_lossy(&display).to_string();
-                                let event_name = format!("terminal-output-{}", session_id_clone);
-                                output_stats_bytes += display.len();
-                                output_stats_messages += 1;
-                                let emit_start = tokio::time::Instant::now();
-                                let _ = app_clone.emit(&event_name, serde_json::json!({ "data": data_str }));
-                                let emit_ms = emit_start.elapsed().as_millis();
-                                if emit_ms > 10 {
-                                    warn!(
-                                        "Terminal output emit slow (telnet) session {}: {}ms",
-                                        session_id_clone, emit_ms
+                                output_buffer.extend_from_slice(&display);
+
+                                if output_buffer.len() >= 65536 {
+                                    flush_output_buffer(
+                                        &mut output_buffer,
+                                        &tracker_clone,
+                                        &app_clone,
+                                        session_id_clone,
+                                        &mut output_stats_bytes,
+                                        &mut output_stats_messages,
+                                        "telnet",
                                     );
+                                    flush_deadline = None;
+                                } else if flush_deadline.is_none() {
+                                    flush_deadline = Some(tokio::time::Instant::now() + tokio::time::Duration::from_millis(15));
                                 }
+
                                 let elapsed = output_stats_last.elapsed();
                                 if elapsed.as_millis() >= 1000 {
                                     info!(
@@ -179,6 +201,15 @@ fn start_telnet_terminal(
                             }
                         }
                         Err(e) => {
+                            flush_output_buffer(
+                                &mut output_buffer,
+                                &tracker_clone,
+                                &app_clone,
+                                session_id_clone,
+                                &mut output_stats_bytes,
+                                &mut output_stats_messages,
+                                "telnet",
+                            );
                             let error_msg = format!("Telnet read error: {}", e);
                             let event_name = format!("terminal-error-{}", session_id_clone);
                             let _ = app_clone.emit(&event_name, serde_json::json!({ "error": error_msg }));
@@ -194,6 +225,15 @@ fn start_telnet_terminal(
                                 tracker.log_data(session_id_clone, &data, "sent");
                             }
                             if let Err(e) = write.write_all(&data).await {
+                                flush_output_buffer(
+                                    &mut output_buffer,
+                                    &tracker_clone,
+                                    &app_clone,
+                                    session_id_clone,
+                                    &mut output_stats_bytes,
+                                    &mut output_stats_messages,
+                                    "telnet",
+                                );
                                 let error_msg = format!("Telnet write error: {}", e);
                                 let event_name = format!("terminal-error-{}", session_id_clone);
                                 let _ = app_clone.emit(&event_name, serde_json::json!({ "error": error_msg }));
@@ -203,11 +243,29 @@ fn start_telnet_terminal(
                         }
                         Some(TerminalCommand::Resize(_, _)) => {}
                         Some(TerminalCommand::Close) => {
+                            flush_output_buffer(
+                                &mut output_buffer,
+                                &tracker_clone,
+                                &app_clone,
+                                session_id_clone,
+                                &mut output_stats_bytes,
+                                &mut output_stats_messages,
+                                "telnet",
+                            );
                             let _ = write.shutdown().await;
                             exit_reason = "user_closed";
                             break;
                         }
                         None => {
+                            flush_output_buffer(
+                                &mut output_buffer,
+                                &tracker_clone,
+                                &app_clone,
+                                session_id_clone,
+                                &mut output_stats_bytes,
+                                &mut output_stats_messages,
+                                "telnet",
+                            );
                             exit_reason = "command_channel_closed";
                             break;
                         }
@@ -216,6 +274,15 @@ fn start_telnet_terminal(
             }
         }
 
+        flush_output_buffer(
+            &mut output_buffer,
+            &tracker_clone,
+            &app_clone,
+            session_id_clone,
+            &mut output_stats_bytes,
+            &mut output_stats_messages,
+            "telnet",
+        );
         sync_backend_state_on_terminal_exit(&app_clone, session_id_clone, exit_reason);
         let event_name = format!("session-closed-{}", session_id_clone);
         let _ = app_clone.emit(&event_name, serde_json::json!({ "reason": exit_reason }));
@@ -309,13 +376,14 @@ fn start_ssh_terminal(
                         std::future::pending().await
                     }
                 }, if flush_deadline.is_some() => {
-                    flush_ssh_output_buffer(
+                    flush_output_buffer(
                         &mut output_buffer,
                         &tracker_clone,
                         &app_clone,
                         session_id_clone,
                         &mut output_stats_bytes,
                         &mut output_stats_messages,
+                        "ssh",
                     );
                     flush_deadline = None;
                 }
@@ -328,13 +396,14 @@ fn start_ssh_terminal(
                             output_buffer.extend_from_slice(data);
 
                             if output_buffer.len() >= 65536 {
-                                flush_ssh_output_buffer(
+                                flush_output_buffer(
                                     &mut output_buffer,
                                     &tracker_clone,
                                     &app_clone,
                                     session_id_clone,
                                     &mut output_stats_bytes,
                                     &mut output_stats_messages,
+                                    "ssh",
                                 );
                                 flush_deadline = None;
                             } else if flush_deadline.is_none() {
@@ -356,39 +425,42 @@ fn start_ssh_terminal(
                             }
                         },
                         Some(russh::ChannelMsg::ExitStatus { exit_status }) => {
-                            flush_ssh_output_buffer(
+                            flush_output_buffer(
                                 &mut output_buffer,
                                 &tracker_clone,
                                 &app_clone,
                                 session_id_clone,
                                 &mut output_stats_bytes,
                                 &mut output_stats_messages,
+                                "ssh",
                             );
                             info!("Terminal exited with status: {}", exit_status);
                             exit_reason = "normal";
                             break;
                         },
                         Some(russh::ChannelMsg::Close) => {
-                            flush_ssh_output_buffer(
+                            flush_output_buffer(
                                 &mut output_buffer,
                                 &tracker_clone,
                                 &app_clone,
                                 session_id_clone,
                                 &mut output_stats_bytes,
                                 &mut output_stats_messages,
+                                "ssh",
                             );
                             info!("Channel closed by server");
                             exit_reason = "server_closed";
                             break;
                         },
                         None => {
-                            flush_ssh_output_buffer(
+                            flush_output_buffer(
                                 &mut output_buffer,
                                 &tracker_clone,
                                 &app_clone,
                                 session_id_clone,
                                 &mut output_stats_bytes,
                                 &mut output_stats_messages,
+                                "ssh",
                             );
                             debug!("Channel closed (connection lost)");
                             exit_reason = "connection_lost";
@@ -407,26 +479,28 @@ fn start_ssh_terminal(
                             let _ = channel.window_change(w, h, 0, 0).await;
                         },
                         Some(TerminalCommand::Close) => {
-                            flush_ssh_output_buffer(
+                            flush_output_buffer(
                                 &mut output_buffer,
                                 &tracker_clone,
                                 &app_clone,
                                 session_id_clone,
                                 &mut output_stats_bytes,
                                 &mut output_stats_messages,
+                                "ssh",
                             );
                             let _ = channel.close().await;
                             exit_reason = "user_closed";
                             break;
                         },
                         None => {
-                            flush_ssh_output_buffer(
+                            flush_output_buffer(
                                 &mut output_buffer,
                                 &tracker_clone,
                                 &app_clone,
                                 session_id_clone,
                                 &mut output_stats_bytes,
                                 &mut output_stats_messages,
+                                "ssh",
                             );
                             debug!("Command channel closed");
                             exit_reason = "command_channel_closed";
@@ -438,13 +512,14 @@ fn start_ssh_terminal(
                     if last_activity.elapsed() > tokio::time::Duration::from_secs(60) {
                         let null_byte = b"\0";
                         if let Err(e) = channel.data(&null_byte[..]).await {
-                            flush_ssh_output_buffer(
+                            flush_output_buffer(
                                 &mut output_buffer,
                                 &tracker_clone,
                                 &app_clone,
                                 session_id_clone,
                                 &mut output_stats_bytes,
                                 &mut output_stats_messages,
+                                "ssh",
                             );
                             debug!("Keepalive failed, connection may be dead: {:?}", e);
                             exit_reason = "keepalive_failed";
@@ -456,13 +531,14 @@ fn start_ssh_terminal(
             }
         }
 
-        flush_ssh_output_buffer(
+        flush_output_buffer(
             &mut output_buffer,
             &tracker_clone,
             &app_clone,
             session_id_clone,
             &mut output_stats_bytes,
             &mut output_stats_messages,
+            "ssh",
         );
 
         sync_backend_state_on_terminal_exit(&app_clone, session_id_clone, exit_reason);
@@ -499,6 +575,15 @@ mod tests {
         let drained = drain_output_buffer(&mut buffer).expect("buffer should drain");
         assert_eq!(drained.0, "hello");
         assert_eq!(drained.1, 5);
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn drain_output_buffer_preserves_utf8_lossy_behavior() {
+        let mut buffer = vec![0x66, 0x6f, 0x80, 0x6f];
+        let drained = drain_output_buffer(&mut buffer).expect("buffer should drain");
+        assert_eq!(drained.0, "fo�o");
+        assert_eq!(drained.1, 4);
         assert!(buffer.is_empty());
     }
 }

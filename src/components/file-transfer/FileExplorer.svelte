@@ -1,10 +1,12 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { get } from 'svelte/store';
+  import { confirm } from '@tauri-apps/plugin-dialog';
   import { sftpService } from '../../lib/sftpService';
   import { localFsService } from '../../lib/localFsService';
   import { fileClipboard, settings } from '../../lib/store';
   import { isEditableShortcutTarget, matchShortcut } from '../../lib/shortcuts';
+  import { validateRemoteLeafName } from '../../lib/remotePathName';
   import ContextMenu from '../ui/ContextMenu.svelte';
   import ContextMenuItem from '../ui/ContextMenuItem.svelte';
   import ContextMenuDivider from '../ui/ContextMenuDivider.svelte';
@@ -34,6 +36,21 @@
   let editorSaving = false;
   let editorError: string | null = null;
   let editorSessionId: string | null = null;
+
+  type NamePromptMode = 'create-folder' | 'create-file' | 'rename';
+  type NamePromptState = {
+    mode: NamePromptMode;
+    title: string;
+    label: string;
+    confirmText: string;
+    value: string;
+    currentFile?: FileEntry;
+    targetDirectory?: string;
+  };
+
+  let namePrompt: NamePromptState | null = null;
+  let namePromptError = '';
+  let namePromptSubmitting = false;
   const FILE_TRANSFER_CHUNK_SIZE = 1024 * 1024; // 1MB
   const MAX_IN_MEMORY_FALLBACK_BYTES = 8 * 1024 * 1024; // 8MB
   const pathWriteLocks = new Map<string, Promise<void>>();
@@ -44,13 +61,13 @@
   }
 
   function normalizePath(path: string): string {
-    const trimmed = path.trim();
-    if (!trimmed || trimmed === '.') return '.';
-    if (trimmed === '/') return '/';
-    if (trimmed.startsWith('~')) return trimmed;
+    if (!path.trim()) return '.';
+    if (path === '.') return '.';
+    if ([...path].every((ch) => ch === '/')) return '/';
+    if (path.startsWith('~')) return path;
 
-    const isAbsolute = trimmed.startsWith('/');
-    const parts = trimmed.split('/').filter(Boolean);
+    const isAbsolute = path.startsWith('/');
+    const parts = path.split('/').filter(Boolean);
     const stack: string[] = [];
 
     for (const part of parts) {
@@ -316,6 +333,7 @@
     lastRequestedPath = null;
     activeLoadAbortController?.abort();
     activeLoadAbortController = null;
+    closeNamePrompt(true);
     if (editorOpen) {
       editorOpen = false;
       editorFile = null;
@@ -621,68 +639,70 @@
   }
 
   function closeContextMenu() {
-    contextMenu.show = false;
+    contextMenu = { ...contextMenu, show: false, file: null };
+  }
+
+  function openNamePrompt(prompt: NamePromptState) {
+    namePrompt = prompt;
+    namePromptError = '';
+    namePromptSubmitting = false;
+  }
+
+  function closeNamePrompt(force = false) {
+    if (namePromptSubmitting && !force) return;
+    namePrompt = null;
+    namePromptError = '';
+    namePromptSubmitting = false;
+  }
+
+  function getValidatedRemoteLeafName(rawName: string): string | null {
+    const validationError = validateRemoteLeafName(rawName);
+    if (validationError) {
+      namePromptError = validationError;
+      return null;
+    }
+    namePromptError = '';
+    return rawName;
   }
 
   async function handleCreateFolder() {
     closeContextMenu();
-    const name = prompt('请输入文件夹名称:');
-    if (!name) return;
-
-    const targetSessionId = sessionId;
-    const targetPath = currentPath;
-    const path = joinPath(getMenuTargetDirectory(), name);
-    try {
-      ensureSessionUnchanged(targetSessionId);
-      await sftpService.createDirectory(targetSessionId, path);
-      if (targetSessionId === sessionId) {
-        invalidateCache(targetPath);
-        void loadFiles(targetPath, { force: true });
-      }
-    } catch (e: any) {
-      error = e.toString();
-    }
+    openNamePrompt({
+      mode: 'create-folder',
+      title: '新建文件夹',
+      label: '文件夹名称',
+      confirmText: '创建',
+      value: '',
+      targetDirectory: getMenuTargetDirectory(),
+    });
   }
 
   async function handleCreateFile() {
     closeContextMenu();
-    const name = prompt('请输入文件名:');
-    if (!name) return;
-
-    const targetSessionId = sessionId;
-    const targetPath = currentPath;
-    const path = joinPath(getMenuTargetDirectory(), name);
-    try {
-      ensureSessionUnchanged(targetSessionId);
-      await withPathWriteLock('remote', path, async () => {
-        try {
-          await sftpService.writeFile(targetSessionId, path, new Uint8Array(0), false);
-        } catch (e) {
-          await sftpService.scpUpload(targetSessionId, path, new Uint8Array(0));
-        }
-      });
-      if (targetSessionId === sessionId) {
-        invalidateCache(targetPath);
-        void loadFiles(targetPath, { force: true });
-      }
-    } catch (e: any) {
-      error = e.toString();
-    }
+    openNamePrompt({
+      mode: 'create-file',
+      title: '新建文件',
+      label: '文件名',
+      confirmText: '创建',
+      value: '',
+      targetDirectory: getMenuTargetDirectory(),
+    });
   }
 
   async function handleDelete() {
     closeContextMenu();
     if (selectedPaths.size === 0) return;
-    
+
     // Get file names for confirmation
     const selectedFiles = files.filter(f => selectedPaths.has(f.path));
     if (selectedFiles.length === 0) return;
 
-    const confirmMsg = selectedFiles.length === 1 
-      ? `确定要删除 ${selectedFiles[0].name} 吗？` 
+    const confirmMsg = selectedFiles.length === 1
+      ? `确定要删除 ${selectedFiles[0].name} 吗？`
       : `确定要删除选中的 ${selectedFiles.length} 个项目吗？`;
 
-    if (!confirm(confirmMsg)) return;
+    const confirmed = await confirm(confirmMsg, { title: '删除文件', kind: 'warning' });
+    if (!confirmed) return;
 
     const targetSessionId = sessionId;
     const targetPath = currentPath;
@@ -704,36 +724,70 @@
     }
   }
 
-  async function handleRename() {
-    closeContextMenu();
-    // Rename only supports single file
-    if (selectedPaths.size !== 1) return;
-    
-    const path = Array.from(selectedPaths)[0];
-    const file = files.find(f => f.path === path);
-    if (!file) return;
+  async function submitNamePrompt() {
+    if (!namePrompt || namePromptSubmitting) return;
 
-    const newName = prompt('请输入新名称:', file.name);
-    if (!newName || newName === file.name) return;
+    const name = getValidatedRemoteLeafName(namePrompt.value);
+    if (!name) return;
 
-    // Construct new path.
-    const parts = file.path.split('/');
-    parts.pop(); // Remove old filename
-    const parentPath = parts.join('/');
-    const newPath = parentPath === '' ? `/${newName}` : `${parentPath}/${newName}`;
-
+    namePromptSubmitting = true;
+    const prompt = namePrompt;
     const targetSessionId = sessionId;
     const targetPath = currentPath;
+
     try {
       ensureSessionUnchanged(targetSessionId);
-      await sftpService.rename(targetSessionId, file.path, newPath);
+
+      if (prompt.mode === 'create-folder') {
+        const path = joinPath(prompt.targetDirectory ?? currentPath, name);
+        await sftpService.createDirectory(targetSessionId, path);
+      } else if (prompt.mode === 'create-file') {
+        const path = joinPath(prompt.targetDirectory ?? currentPath, name);
+        await withPathWriteLock('remote', path, async () => {
+          try {
+            await sftpService.writeFile(targetSessionId, path, new Uint8Array(0), false);
+          } catch (e) {
+            await sftpService.scpUpload(targetSessionId, path, new Uint8Array(0));
+          }
+        });
+      } else if (prompt.mode === 'rename' && prompt.currentFile) {
+        if (name === prompt.currentFile.name) {
+          closeNamePrompt(true);
+          return;
+        }
+        const nextPath = joinPath(parentPath(prompt.currentFile.path), name);
+        await sftpService.rename(targetSessionId, prompt.currentFile.path, nextPath);
+      }
+
       if (targetSessionId === sessionId) {
         invalidateCache(targetPath);
         void loadFiles(targetPath, { force: true });
       }
+      closeNamePrompt();
     } catch (e: any) {
-      error = e.toString();
+      namePromptError = e?.message ?? String(e);
+    } finally {
+      namePromptSubmitting = false;
     }
+  }
+
+  async function handleRename() {
+    closeContextMenu();
+    // Rename only supports single file
+    if (selectedPaths.size !== 1) return;
+
+    const path = Array.from(selectedPaths)[0];
+    const file = files.find(f => f.path === path);
+    if (!file) return;
+
+    openNamePrompt({
+      mode: 'rename',
+      title: '重命名',
+      label: '新名称',
+      confirmText: '保存',
+      value: file.name,
+      currentFile: file,
+    });
   }
 
   function handleDragOver(e: DragEvent) {
@@ -1218,6 +1272,34 @@
       </div>
     </div>
   {/if}
+  {#if namePrompt}
+    <div class="fixed inset-0 z-50 flex items-center justify-center" role="presentation">
+      <button type="button" class="absolute inset-0 bg-slate-900/60 dark:bg-black/60" on:click={() => closeNamePrompt()} aria-label="关闭命名对话框"></button>
+      <div class="relative w-[min(480px,92vw)] bg-app-bg border border-app-border rounded-lg shadow-xl p-5" role="dialog" aria-modal="true">
+        <div class="flex items-center justify-between gap-3">
+          <div class="text-sm font-medium text-app-text">{namePrompt.title}</div>
+          <button class="px-2 py-1 rounded bg-app-surface hover:bg-app-bg-hover text-app-text" on:click={() => closeNamePrompt()} disabled={namePromptSubmitting}>关闭</button>
+        </div>
+        <div class="mt-4">
+          <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="name-prompt-input">{namePrompt.label}</label>
+          <input
+            id="name-prompt-input"
+            class="w-full bg-app-surface border border-app-border rounded px-3 py-2 text-sm text-app-text outline-none"
+            bind:value={namePrompt.value}
+            on:keydown={(e) => e.key === 'Enter' && void submitNamePrompt()}
+          />
+          {#if namePromptError}
+            <div class="mt-2 text-xs text-red-600 dark:text-red-400">{namePromptError}</div>
+          {/if}
+        </div>
+        <div class="mt-5 flex justify-end gap-2">
+          <button class="px-3 py-1 rounded bg-app-surface hover:bg-app-bg-hover text-app-text disabled:opacity-60" on:click={() => closeNamePrompt()} disabled={namePromptSubmitting}>取消</button>
+          <button class="px-3 py-1 rounded bg-primary-600 hover:bg-primary-500 text-white disabled:opacity-60" on:click={() => void submitNamePrompt()} disabled={namePromptSubmitting}>{namePrompt.confirmText}</button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
   {#if isDragging}
     <div class="absolute inset-0 bg-primary-500/20 flex items-center justify-center z-50 pointer-events-none">
       <div class="text-2xl font-bold text-primary-600 dark:text-primary-200">Drop files to upload</div>

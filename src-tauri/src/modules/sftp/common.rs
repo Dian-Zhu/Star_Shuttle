@@ -18,15 +18,22 @@ pub fn ensure_scp_upload_size(size: usize, label: &str) -> Result<(), String> {
     ensure_max_bytes(size, MAX_SCP_UPLOAD_BYTES, label)
 }
 
-pub fn validate_scp_file_name(file_name: &str) -> Result<(), String> {
-    if file_name.is_empty() {
+pub fn validate_remote_leaf_name(file_name: &str) -> Result<(), String> {
+    if file_name.trim().is_empty() {
         return Err("Invalid remote path".to_string());
     }
+    if file_name == "." || file_name == ".." {
+        return Err("Remote file name must not be . or ..".to_string());
+    }
     if file_name.contains('/') {
-        return Err("SCP file name must not contain path separators".to_string());
+        return Err("Remote file name must not contain path separators".to_string());
     }
     if file_name.chars().any(|ch| ch.is_control()) {
-        return Err("SCP file name contains unsupported control characters".to_string());
+        return Err("Remote file name contains unsupported control characters".to_string());
     }
     Ok(())
+}
+
+pub fn validate_scp_file_name(file_name: &str) -> Result<(), String> {
+    validate_remote_leaf_name(file_name)
 }

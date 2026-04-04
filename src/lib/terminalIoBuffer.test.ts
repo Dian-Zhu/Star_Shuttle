@@ -76,4 +76,25 @@ describe('terminalIoBuffer', () => {
     expect(writes.join('')).toBe('hello world');
     resetState();
   });
+
+  it('removes null bytes only when present in queued output', async () => {
+    vi.useFakeTimers();
+    const writes: string[] = [];
+    const term = {
+      write: (data: string, done?: () => void) => {
+        writes.push(data);
+        done?.();
+      },
+    } as unknown as Terminal;
+
+    initializeOutputBuffer('s4');
+    enqueueTerminalOutput('s4', term, 'a\u0000b', { logger, isDev: false });
+    enqueueTerminalOutput('s4', term, 'c', { logger, isDev: false });
+
+    vi.runAllTimers();
+    await flushAsync();
+
+    expect(writes.join('')).toBe('abc');
+    resetState();
+  });
 });

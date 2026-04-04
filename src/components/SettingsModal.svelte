@@ -2,6 +2,7 @@
   // Force rebuild.
   import { showSettings, settings, isLocked, type AppSettings } from '../lib/store';
   import { themeColors } from '../lib/themeColors';
+  import { confirm } from '@tauri-apps/plugin-dialog';
   import XIcon from './icons/XIcon.svelte';
   import EyeDropperIcon from './icons/EyeDropperIcon.svelte';
   import UploadIcon from './icons/UploadIcon.svelte';
@@ -146,10 +147,8 @@
           ...s.appearance,
           terminalTheme: theme,
           ansiColorPreset: nextAnsiPreset,
-          customTheme: theme === 'custom' ? s.appearance.customTheme || defaultCustomTheme : undefined,
-          customAnsiColors: nextAnsiPreset === 'custom'
-            ? s.appearance.customAnsiColors || { ...defaultCustomAnsiColors }
-            : undefined
+          customTheme: s.appearance.customTheme || defaultCustomTheme,
+          customAnsiColors: s.appearance.customAnsiColors || { ...defaultCustomAnsiColors }
         }
       };
 
@@ -229,10 +228,13 @@
     }));
   }
 
+  const MIN_TERMINAL_SCROLLBACK = 1000;
+  const MAX_TERMINAL_SCROLLBACK = 20000;
+
   function updateTerminalScrollback(raw: string) {
     const v = Number(raw);
     if (!Number.isFinite(v)) return;
-    const clamped = Math.max(1000, Math.min(50000, Math.trunc(v)));
+    const clamped = Math.max(MIN_TERMINAL_SCROLLBACK, Math.min(MAX_TERMINAL_SCROLLBACK, Math.trunc(v)));
     updateTerminalSetting('scrollback', clamped);
   }
 
@@ -397,7 +399,8 @@
        return;
     }
 
-    if (!confirm('确定要清除应用锁吗？清除后应用启动将不再需要密码。')) return;
+    const confirmed = await confirm('确定要清除应用锁吗？清除后应用启动将不再需要密码。', { title: '清除应用锁', kind: 'warning' });
+    if (!confirmed) return;
     
     try {
       await invoke('remove_app_lock', { currentPassword: oldPassword });
@@ -583,22 +586,12 @@
    }
 
   function updateCustomColor(key: CustomThemeKey, value: string) {
-    if (!$settings.appearance.customTheme) {
-      settings.update(s => ({
-        ...s,
-        appearance: {
-          ...s.appearance,
-          customTheme: { ...defaultCustomTheme }
-        }
-      }));
-      return;
-    }
     settings.update(s => ({
       ...s,
       appearance: {
         ...s.appearance,
         customTheme: {
-          ...s.appearance.customTheme!,
+          ...(s.appearance.customTheme || defaultCustomTheme),
           [key]: value
         }
       }
@@ -640,26 +633,16 @@
   };
 
   function updateCustomUITheme(key: CustomUIThemeKey, value: string) {
-    if (!$settings.appearance.customUITheme) {
-      settings.update(s => ({
-        ...s,
-        appearance: {
-          ...s.appearance,
-          customUITheme: { ...defaultCustomUITheme, [key]: value }
+    settings.update(s => ({
+      ...s,
+      appearance: {
+        ...s.appearance,
+        customUITheme: {
+          ...(s.appearance.customUITheme || defaultCustomUITheme),
+          [key]: value
         }
-      }));
-    } else {
-      settings.update(s => ({
-        ...s,
-        appearance: {
-          ...s.appearance,
-          customUITheme: {
-            ...s.appearance.customUITheme!,
-            [key]: value
-          }
-        }
-      }));
-    }
+      }
+    }));
   }
 
   // ANSI Color Presets
@@ -873,7 +856,7 @@
       appearance: {
         ...s.appearance,
         ansiColorPreset: preset,
-        customAnsiColors: preset === 'custom' ? s.appearance.customAnsiColors || { ...defaultCustomAnsiColors } : undefined
+        customAnsiColors: s.appearance.customAnsiColors || { ...defaultCustomAnsiColors }
       }
     }));
   }
@@ -900,22 +883,12 @@
   $: selectedTerminalTheme = terminalThemes.find((theme) => theme.id === $settings.appearance.terminalTheme);
 
   function updateCustomAnsiColor(key: AnsiColorKey, value: string) {
-    if (!$settings.appearance.customAnsiColors) {
-      settings.update(s => ({
-        ...s,
-        appearance: {
-          ...s.appearance,
-          customAnsiColors: { ...defaultCustomAnsiColors }
-        }
-      }));
-      return;
-    }
     settings.update(s => ({
       ...s,
       appearance: {
         ...s.appearance,
         customAnsiColors: {
-          ...s.appearance.customAnsiColors!,
+          ...(s.appearance.customAnsiColors || defaultCustomAnsiColors),
           [key]: value
         }
       }
@@ -1482,8 +1455,8 @@
               <input
                 type="number"
                 id="scrollback"
-                min="1000"
-                max="50000"
+                min={MIN_TERMINAL_SCROLLBACK}
+                max={MAX_TERMINAL_SCROLLBACK}
                 step="500"
                 value={$settings.terminal.scrollback}
                 on:input={(e) => updateTerminalScrollback((e.target as HTMLInputElement).value)}

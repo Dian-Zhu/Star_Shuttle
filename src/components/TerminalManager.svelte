@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { activeTerminals, selectedTerminalIndex } from '../lib/store';
-  import { execAuditedRemoteCommand } from '../lib/remoteExecAudit';
+  import { execRemoteCommand } from '../lib/connectionService';
   import TerminalView from './TerminalView.svelte';
   import TerminalIcon from './icons/TerminalIcon.svelte';
   import { formatTransferRate } from '../lib/transferRateFormatter';
@@ -17,12 +17,16 @@
   let pollingEnabled = false;
   let pollVersion = 0;
   let lastSelectedSessionId: string | null = null;
+  let lastClockMinute = '';
   const lastNetSampleBySession = new Map<string, { rx: number; tx: number; time: number }>();
   const lastCpuSampleBySession = new Map<string, { idle: number; total: number }>();
-  const POLL_INTERVAL_MS = 10000;
+  const POLL_INTERVAL_MS = 15000;
 
   function updateClock() {
-    currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const next = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    if (next === lastClockMinute) return;
+    lastClockMinute = next;
+    currentTime = next;
   }
 
   function stopPolling() {
@@ -37,7 +41,7 @@
     if (pollingEnabled) return false;
     pollingEnabled = true;
     if (!pollTimer) {
-      pollTimer = setInterval(() => void pollSelectedSession(), POLL_INTERVAL_MS);
+      pollTimer = setInterval(() => void pollSelectedSession(false), POLL_INTERVAL_MS);
     }
     return true;
   }
@@ -199,8 +203,8 @@
     return getSelectedSessionId() === sessionId;
   }
 
-  async function pollSelectedSession() {
-    if (!pollingEnabled) return;
+  async function pollSelectedSession(force = false) {
+    if (!force && !pollingEnabled) return;
     if (pollInFlight) {
       pollPending = true;
       return;
@@ -210,6 +214,7 @@
       netSpeedBps = 0;
       cpuUsage = 0;
       memPercent = 0;
+      lastNetSampleBySession.delete(lastSelectedSessionId ?? '');
       lastCpuSampleBySession.delete(lastSelectedSessionId ?? '');
       return;
     }
@@ -225,11 +230,7 @@
         'echo "---STAR_SHUTTLE_SPLIT---"',
         '(head -n 1 /proc/stat 2>/dev/null || (top -bn1 | grep "Cpu(s)") 2>/dev/null || (top -l 1 | grep "CPU usage") 2>/dev/null || true)'
       ].join('; ');
-      const output = await execAuditedRemoteCommand(
-        sessionId,
-        combinedCommand,
-        'terminal-manager-poll',
-      );
+      const output = await execRemoteCommand(sessionId, combinedCommand);
       if (version !== pollVersion || !isSessionStillSelected(sessionId)) return;
 
       const parts = output.split('---STAR_SHUTTLE_SPLIT---');
@@ -294,7 +295,7 @@
       }
       updatePollingState();
       if (pollingEnabled && selectedNow) {
-        void pollSelectedSession();
+        void pollSelectedSession(true);
       }
     } else {
       updatePollingState();
@@ -307,10 +308,10 @@
     updatePollingState();
 
     const onVisibilityChange = () => {
-      if (updatePollingState()) void pollSelectedSession();
+      if (updatePollingState()) void pollSelectedSession(true);
     };
     const onFocus = () => {
-      if (updatePollingState()) void pollSelectedSession();
+      if (updatePollingState()) void pollSelectedSession(true);
     };
     const onBlur = () => {
       updatePollingState();

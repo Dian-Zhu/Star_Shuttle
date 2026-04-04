@@ -50,7 +50,15 @@ export class MockTerminal {
   }
 }
 
-export async function createTerminalServiceHarness(invokeHandler?: InvokeHandler) {
+type TerminalServiceHarnessOptions = {
+  parseHostKeyPromptResult?: unknown;
+  buildHostKeyConfirmMessageResult?: string;
+};
+
+export async function createTerminalServiceHarness(
+  invokeHandler?: InvokeHandler,
+  options: TerminalServiceHarnessOptions = {}
+) {
   vi.resetModules();
 
   const localStorageData = new Map<string, string>();
@@ -73,12 +81,32 @@ export async function createTerminalServiceHarness(invokeHandler?: InvokeHandler
     writable: true,
   });
 
+  const windowListeners = new Map<string, Set<(event: Event) => void>>();
   const windowMock = {
     setTimeout,
     clearTimeout,
     open: vi.fn(),
     prompt: vi.fn(() => null),
     confirm: vi.fn(() => false),
+    addEventListener: vi.fn((type: string, listener: (event: Event) => void) => {
+      const listeners = windowListeners.get(type) ?? new Set<(event: Event) => void>();
+      listeners.add(listener);
+      windowListeners.set(type, listeners);
+    }),
+    removeEventListener: vi.fn((type: string, listener: (event: Event) => void) => {
+      const listeners = windowListeners.get(type);
+      listeners?.delete(listener);
+      if (listeners && listeners.size === 0) {
+        windowListeners.delete(type);
+      }
+    }),
+    dispatchEvent: vi.fn((event: Event) => {
+      const listeners = [...(windowListeners.get(event.type) ?? [])];
+      for (const listener of listeners) {
+        listener(event);
+      }
+      return true;
+    }),
   };
   Object.defineProperty(globalThis, 'window', {
     value: windowMock,
@@ -132,8 +160,8 @@ export async function createTerminalServiceHarness(invokeHandler?: InvokeHandler
   }));
 
   vi.doMock('../hostKeyPrompt', () => ({
-    buildHostKeyConfirmMessage: vi.fn(() => 'confirm host key'),
-    parseHostKeyPrompt: vi.fn(() => null),
+    buildHostKeyConfirmMessage: vi.fn(() => options.buildHostKeyConfirmMessageResult ?? 'confirm host key'),
+    parseHostKeyPrompt: vi.fn(() => options.parseHostKeyPromptResult ?? null),
     saveHostKeyPrompt: vi.fn(async () => undefined),
   }));
 

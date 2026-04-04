@@ -364,7 +364,7 @@ const defaultSettings: AppSettings = {
     fontSize: 14,
     fontFamily: 'Menlo, Monaco, "Courier New", monospace',
     cursorBlink: true,
-    scrollback: 5000,
+    scrollback: 3000,
     cursorStyle: 'block',
   },
   connection: {
@@ -1237,20 +1237,20 @@ selectedTerminal.subscribe(value => {
   }
 });
 
+function normalizeGroupPath(value: string): string {
+  const normalized = value
+    .split('/')
+    .map(part => part.trim())
+    .filter(Boolean)
+    .join('/');
+  return normalized || '未分组';
+}
+
 // Helper function to find group_id by folder path (from tags[0])
 export function getGroupIdByPath(groups: ConnectionGroup[], folderPath: string): string | null {
-  if (!folderPath || folderPath === '未分组') return null;
-  
-  // Exact match
-  const exactMatch = groups.find(g => g.name === folderPath);
-  if (exactMatch) return exactMatch.id;
-  
-  // If folderPath contains '/', try to match the last segment
-  const lastSegment = folderPath.split('/').pop();
-  if (lastSegment) {
-    const partialMatch = groups.find(g => g.name === lastSegment);
-    if (partialMatch) return partialMatch.id;
-  }
-  
-  return null;
+  const normalizedFolderPath = normalizeGroupPath(folderPath);
+  if (normalizedFolderPath === '未分组') return null;
+
+  const exactMatch = groups.find(g => normalizeGroupPath(g.name) === normalizedFolderPath);
+  return exactMatch?.id ?? null;
 }

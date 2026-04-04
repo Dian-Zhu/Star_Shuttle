@@ -259,6 +259,7 @@ async function flushOutput(
 
   const chunkLimit = state.chunkBudget;
   let count = 0;
+  let hasNullByte = false;
   const parts: string[] = [];
 
   while (state.chunkIndex < state.chunks.length) {
@@ -267,6 +268,9 @@ async function flushOutput(
     if (wouldExceed && count >= MIN_CHUNK_SIZE) break;
 
     parts.push(nextChunk);
+    if (!hasNullByte && nextChunk.includes('\u0000')) {
+      hasNullByte = true;
+    }
     count += nextChunk.length;
     state.chunkIndex += 1;
 
@@ -274,11 +278,12 @@ async function flushOutput(
   }
 
   if (state.chunks.length > 4096 || state.chunkIndex > Math.floor(state.chunks.length * 0.7)) {
-    state.chunks.splice(0, state.chunkIndex);
+    state.chunks = state.chunks.slice(state.chunkIndex);
     state.chunkIndex = 0;
   }
 
-  const payload = parts.join('').split('\u0000').join('');
+  const joined = parts.join('');
+  const payload = hasNullByte ? joined.split('\u0000').join('') : joined;
   if (payload.length === 0) return;
 
   if (deps.isDev && state.chunkIndex <= 2) {
