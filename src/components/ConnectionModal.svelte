@@ -1,8 +1,7 @@
 <script lang="ts">
-  import { showConnectionForm, editingConnection, connections, type Connection, showErrorMessage, showSuccessMessage } from '../lib/store';
+  import { showConnectionForm, editingConnection, connections, type Connection, showSuccessMessage } from '../lib/store';
   import { saveConnection, createBackendConfig } from '../lib/connectionService';
-  import { connectAndOpen } from '../lib/terminalService';
-  import { invoke } from '@tauri-apps/api/core';
+  import { connectAndOpen, invokeWithTimeout } from '../lib/terminalService';
   import {
     getHostKeyPromptHint,
     getHostKeyPromptTitle,
@@ -362,7 +361,8 @@
 
   let isSaving = false;
   let isTesting = false;
-  
+  let testConnectionFeedback: { type: 'success' | 'error'; message: string } | null = null;
+
   let hostKeyVerification: HostKeyPrompt | null = null;
 
   $: hostKeyTitle =
@@ -388,31 +388,36 @@
     previousEditingConnectionId = editingId;
   }
 
+  function setTestConnectionFeedback(type: 'success' | 'error', message: string) {
+    testConnectionFeedback = { type, message };
+  }
+
   async function acceptHostKey() {
     if (!hostKeyVerification) return;
-    
+
     try {
       await saveHostKeyPrompt(hostKeyVerification);
-      
+
       hostKeyVerification = null;
       showSuccessMessage('主机密钥已保存到应用信任库', 3000);
-      
+
       // Retry connection test
       handleTestConnection();
     } catch (error) {
       console.error('Failed to save host key:', error);
-      showErrorMessage(`保存主机密钥失败: ${error}`, 5000);
+      setTestConnectionFeedback('error', `保存主机密钥失败: ${error}`);
     }
   }
 
   async function handleTestConnection() {
     commitPendingTag();
     trimHost();
+    testConnectionFeedback = null;
     if (!formData.host || !formData.port) {
-      showErrorMessage('请填写主机地址和端口', 3000);
+      setTestConnectionFeedback('error', '请填写主机地址和端口');
       return;
     }
-    
+
     isTesting = true;
     try {
       const config = await createBackendConfig({
@@ -420,9 +425,9 @@
         local_forwards: formData.localForwards,
         remote_forwards: formData.remoteForwards,
       });
-      
-      await invoke('test_connection', { config });
-      showSuccessMessage('连接测试成功！', 3000);
+
+      await invokeWithTimeout('test_connection', { config }, 45000);
+      setTestConnectionFeedback('success', '连接测试成功！');
     } catch (error: unknown) {
       const parsedHostKey = parseHostKeyPrompt(error);
       if (parsedHostKey) {
@@ -431,7 +436,7 @@
       }
 
       console.error('Connection test failed:', error);
-      showErrorMessage(`连接测试失败: ${error}`, 5000);
+      setTestConnectionFeedback('error', `连接测试失败: ${error}`);
     } finally {
       isTesting = false;
     }
@@ -482,6 +487,7 @@
   }
 
   function handleClose() {
+    testConnectionFeedback = null;
     editingConnection.set(null);
     showConnectionForm.set(false);
   }
@@ -1248,43 +1254,60 @@
     </div>
 
     <!-- Footer -->
-    <div class="px-6 py-4 border-t border-app-border bg-app-surface flex items-center justify-end gap-3">
-      <button
-        type="button"
-        class="mr-auto px-4 py-2 text-sm font-medium text-app-text-secondary hover:text-primary-500 bg-app-bg hover:bg-app-bg-hover rounded-lg transition-colors flex items-center gap-2"
-        disabled={isTesting}
-        on:click={handleTestConnection}
-      >
-        {#if isTesting}
-          <div class="w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
-          <span>测试中...</span>
-        {:else}
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
-          <span>测试连接</span>
-        {/if}
-      </button>
+    <div class="px-6 py-4 border-t border-app-border bg-app-surface space-y-3">
+      {#if testConnectionFeedback}
+        <div
+          class="flex items-start gap-2 rounded-lg border px-3 py-2 text-sm {testConnectionFeedback.type === 'success'
+            ? 'border-green-500/20 bg-green-500/10 text-green-400'
+            : 'border-red-500/20 bg-red-500/10 text-red-400'}"
+        >
+          {#if testConnectionFeedback.type === 'success'}
+            <svg class="mt-0.5 w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+          {:else}
+            <svg class="mt-0.5 w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+          {/if}
+          <span class="leading-5 break-words">{testConnectionFeedback.message}</span>
+        </div>
+      {/if}
 
-      <button
-        type="button"
-        class="px-4 py-2 text-sm font-medium text-app-text-secondary hover:text-app-text bg-app-bg hover:bg-app-bg-hover rounded-lg transition-colors"
-        on:click={handleClose}
-      >
-        取消
-      </button>
-      <button
-        type="submit"
-        form="connection-form"
-        disabled={isSaving}
-        class="px-4 py-2 text-sm font-medium text-white bg-primary-600 hover:bg-primary-500 active:bg-primary-700 rounded-lg transition-colors shadow-lg shadow-primary-900/20 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-      >
-        {#if isSaving}
-          <div class="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-          <span>处理中...</span>
-        {:else}
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
-          <span>{$editingConnection ? '保存' : '保存并连接'}</span>
-        {/if}
-      </button>
+      <div class="flex items-center justify-end gap-3">
+        <button
+          type="button"
+          class="mr-auto px-4 py-2 text-sm font-medium text-app-text-secondary hover:text-primary-500 bg-app-bg hover:bg-app-bg-hover rounded-lg transition-colors flex items-center gap-2"
+          disabled={isTesting}
+          on:click={handleTestConnection}
+        >
+          {#if isTesting}
+            <div class="w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
+            <span>测试中...</span>
+          {:else}
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+            <span>测试连接</span>
+          {/if}
+        </button>
+
+        <button
+          type="button"
+          class="px-4 py-2 text-sm font-medium text-app-text-secondary hover:text-app-text bg-app-bg hover:bg-app-bg-hover rounded-lg transition-colors"
+          on:click={handleClose}
+        >
+          取消
+        </button>
+        <button
+          type="submit"
+          form="connection-form"
+          disabled={isSaving}
+          class="px-4 py-2 text-sm font-medium text-white bg-primary-600 hover:bg-primary-500 active:bg-primary-700 rounded-lg transition-colors shadow-lg shadow-primary-900/20 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+        >
+          {#if isSaving}
+            <div class="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+            <span>处理中...</span>
+          {:else}
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+            <span>{$editingConnection ? '保存' : '保存并连接'}</span>
+          {/if}
+        </button>
+      </div>
     </div>
   </div>
 </div>

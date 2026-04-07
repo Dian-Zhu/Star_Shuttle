@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
   import Sidebar from './Sidebar.svelte';
@@ -8,6 +8,9 @@
   let isAiPanelOpen = false;
   let aiPanelWidth = 400;
   let aiPanelResizing = false;
+  let aiPanelRef: AiChatPanel | null = null;
+  let aiPanelActiveTab: 'chat' | 'agent' = 'chat';
+  let aiPanelShowThinking = true;
 
   $: aiSessionId = (() => {
     const t = $activeTerminals[$selectedTerminalIndex];
@@ -426,6 +429,7 @@
     const handleOpenAi = () => { isAiPanelOpen = !isAiPanelOpen; };
     window.addEventListener('titlebar:open-ai', handleOpenAi);
     window.addEventListener('ai:run-command', handleAiRunCommand as EventListener);
+    window.addEventListener('ai:open-with-context', handleAiOpenWithContext as EventListener);
 
     return () => {
         mediaQuery.removeEventListener('change', handleSystemThemeChange);
@@ -441,6 +445,7 @@
         if (unlistenKeyboardInteractive) unlistenKeyboardInteractive();
         window.removeEventListener('titlebar:open-ai', handleOpenAi);
         window.removeEventListener('ai:run-command', handleAiRunCommand as EventListener);
+        window.removeEventListener('ai:open-with-context', handleAiOpenWithContext as EventListener);
     };
   });
 
@@ -477,6 +482,25 @@
     const command = customEvent.detail?.trim();
     if (!command || !aiSessionId) return;
     await sendTerminalData(aiSessionId, `${command}\n`);
+  }
+
+  async function handleAiOpenWithContext(event: Event) {
+    const customEvent = event as CustomEvent<string>;
+    const content = customEvent.detail ?? '';
+    if (!content.trim()) return;
+
+    isAiPanelOpen = true;
+    await tick();
+    window.dispatchEvent(new CustomEvent('ai:insert-chat-draft', { detail: content }));
+  }
+
+  async function handleAiNewChat() {
+    if (!isAiPanelOpen) {
+      isAiPanelOpen = true;
+      await tick();
+    }
+
+    await aiPanelRef?.startFreshChat();
   }
 
   function handleKeydown(event: KeyboardEvent) {
@@ -657,16 +681,43 @@
                 </svg>
                 <span class="text-sm font-semibold text-app-text">AI 助手</span>
               </div>
-              <button class="p-1 rounded hover:bg-app-bg-hover text-app-text-secondary hover:text-app-text transition-colors"
-                      on:click={() => (isAiPanelOpen = false)} title="关闭">
-                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
+              <div class="flex items-center gap-1">
+                <button
+                  class="p-1 rounded hover:bg-app-bg-hover text-app-text-secondary hover:text-app-text transition-colors"
+                  on:click={handleAiNewChat}
+                  title="新建对话"
+                  >
+                  <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+                  </svg>
+                </button>
+                {#if aiPanelActiveTab === 'agent'}
+                  <button
+                    class="p-1 rounded transition-colors {aiPanelShowThinking ? 'bg-primary-600/10 text-primary-400 hover:bg-primary-600/15' : 'text-app-text-secondary hover:bg-app-bg-hover hover:text-app-text'}"
+                    on:click={() => (aiPanelShowThinking = !aiPanelShowThinking)}
+                    title={aiPanelShowThinking ? '隐藏思考过程' : '显示思考过程'}
+                  >
+                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3a6 6 0 016 6c0 2.18-.75 3.34-2.12 4.61-.69.65-1.13 1.16-1.38 1.89H9.84c-.25-.73-.69-1.24-1.38-1.89C7.09 12.34 6.34 11.18 6.34 9A5.66 5.66 0 0112 3zm-2 15h4m-3 3h2" />
+                    </svg>
+                  </button>
+                {/if}
+                <button class="p-1 rounded hover:bg-app-bg-hover text-app-text-secondary hover:text-app-text transition-colors"
+                        on:click={() => (isAiPanelOpen = false)} title="关闭">
+                  <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
             </div>
             <!-- Content -->
             <div class="flex-1 overflow-hidden">
-              <AiChatPanel sessionId={aiSessionId} />
+              <AiChatPanel
+                bind:this={aiPanelRef}
+                bind:activeTab={aiPanelActiveTab}
+                bind:showThinking={aiPanelShowThinking}
+                sessionId={aiSessionId}
+              />
             </div>
           </div>
         {/if}

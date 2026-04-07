@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { createEventDispatcher } from 'svelte';
   import { tick } from 'svelte';
   import { slide, fade } from 'svelte/transition';
   import { marked } from 'marked';
@@ -12,12 +13,17 @@
     cleanup,
   } from '../../lib/aiAgentService';
   import AgentToolCallStep from './AgentToolCallStep.svelte';
+  import AiModeSwitcher from './AiModeSwitcher.svelte';
+  import AiSandboxSwitcher from './AiSandboxSwitcher.svelte';
   import CommandConfirmModal from './CommandConfirmModal.svelte';
 
   export let sessionId: string | null = null;
+  export let activeMode: 'chat' | 'agent' = 'agent';
+  export let showThinking = true;
 
-  // Show AI thinking steps toggle
-  let showThinking = true;
+  const dispatch = createEventDispatcher<{
+    changeMode: 'chat' | 'agent';
+  }>();
 
   let instruction = '';
   let isStarting = false;
@@ -131,79 +137,6 @@
 {/if}
 
 <div class="flex flex-col h-full bg-app-bg overflow-hidden">
-
-  <!-- Header -->
-  <div class="flex items-center justify-between px-3 py-2.5 border-b border-app-border flex-shrink-0 bg-app-surface">
-    <div class="flex items-center gap-2">
-      <svg class="w-4 h-4 text-primary-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-          d="M9 3H5a2 2 0 00-2 2v4m6-6h10a2 2 0 012 2v4M9 3v18m0 0h10a2 2 0 002-2v-4M9 21H5a2 2 0 01-2-2v-4m0 0h18" />
-      </svg>
-      <span class="text-sm font-medium text-app-text">Agent 模式</span>
-
-      {#if $currentTask}
-        <span class="text-xs {STATUS_COLORS[$currentTask.status]}">
-          · {STATUS_LABELS[$currentTask.status]}
-        </span>
-      {/if}
-    </div>
-
-    <div class="flex items-center gap-2">
-      <!-- Thinking toggle -->
-      <button
-        class="text-xs px-2 py-1 rounded-md border transition-colors
-          {showThinking
-            ? 'bg-primary-600/10 border-primary-500/30 text-primary-400'
-            : 'bg-app-bg border-app-border text-app-text-secondary hover:text-app-text'}"
-        on:click={() => (showThinking = !showThinking)}
-        title={showThinking ? '隐藏思考过程' : '显示思考过程'}
-      >
-        {showThinking ? '🧠 思考' : '🧠'}
-      </button>
-
-      <!-- Sandbox mode toggle -->
-      <div class="flex items-center gap-1 bg-app-bg border border-app-border rounded-lg p-0.5">
-        <button
-          class="text-xs px-2 py-1 rounded-md transition-colors
-            {$sandboxMode === 'standard'
-              ? 'bg-app-surface text-app-text shadow-sm'
-              : 'text-app-text-secondary hover:text-app-text'}"
-          on:click={() => sandboxMode.set('standard')}
-          title="标准沙箱：白名单放行"
-        >
-          标准
-        </button>
-        <button
-          class="text-xs px-2 py-1 rounded-md transition-colors
-            {$sandboxMode === 'strict'
-              ? 'bg-app-surface text-app-text shadow-sm'
-              : 'text-app-text-secondary hover:text-app-text'}"
-          on:click={() => sandboxMode.set('strict')}
-          title="严格沙箱：黑名单拦截"
-        >
-          严格
-        </button>
-      </div>
-
-      <!-- Cancel/New task button -->
-      {#if isRunning}
-        <button
-          class="text-xs px-2 py-1 rounded-md bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors border border-red-500/20"
-          on:click={handleCancel}
-        >
-          停止
-        </button>
-      {:else if isDone}
-        <button
-          class="text-xs px-2 py-1 rounded-md bg-app-surface text-app-text-secondary hover:text-app-text transition-colors border border-app-border"
-          on:click={handleNewTask}
-        >
-          新任务
-        </button>
-      {/if}
-    </div>
-  </div>
-
   <!-- Steps List -->
   <div class="flex-1 overflow-y-auto py-2" bind:this={stepsEl}>
     {#if !$currentTask}
@@ -305,55 +238,51 @@
 
   <!-- Input Area -->
   {#if !isRunning}
-    <div class="border-t border-app-border bg-app-bg p-3 flex flex-col gap-2" transition:slide={{ duration: 150 }}>
+    <div class="border-t border-app-border bg-app-bg p-3" transition:slide={{ duration: 150 }}>
       {#if startError}
-        <p class="text-xs text-red-400">{startError}</p>
+        <p class="mb-2 text-xs text-red-400">{startError}</p>
       {/if}
 
-      <!-- Sandbox mode indicator -->
-      <div class="flex items-center gap-1.5 text-xs text-app-text-secondary">
-        <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-            d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-        </svg>
-        <span>
-          {$sandboxMode === 'standard' ? '标准沙箱（白名单）' : '严格沙箱（黑名单）'}
-          · 高危命令需确认
-        </span>
-      </div>
-
-      <div class="flex gap-2">
+      <div class="rounded-[18px] bg-app-surface px-3 py-2.5 shadow-[0_10px_30px_rgba(0,0,0,0.12)]">
         <textarea
           bind:value={instruction}
           on:keydown={handleKeydown}
-          placeholder="描述你想让 Agent 做什么... (Enter 发送)"
+          placeholder="描述你想让 Agent 做什么..."
           rows="2"
           disabled={isStarting || !sessionId}
-          class="flex-1 resize-none bg-app-surface border border-app-border rounded-lg px-3 py-2
-                 text-sm text-app-text placeholder-app-text-secondary
-                 focus:border-primary-500 outline-none transition-colors
-                 disabled:opacity-50 disabled:cursor-not-allowed"
+          class="w-full resize-none bg-transparent px-0 py-0 text-sm text-app-text placeholder-app-text-secondary/80
+                 outline-none transition-colors disabled:opacity-50 disabled:cursor-not-allowed
+                 min-h-[48px] leading-relaxed"
         ></textarea>
-        <button
-          on:click={handleStart}
-          disabled={isStarting || !sessionId || !instruction.trim()}
-          class="flex-shrink-0 w-9 h-auto rounded-lg bg-primary-600 hover:bg-primary-500
-                 text-white flex items-center justify-center transition-colors
-                 disabled:opacity-40 disabled:cursor-not-allowed self-end mb-0"
-          style="height: 38px;"
-        >
-          {#if isStarting}
-            <svg class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-            </svg>
-          {:else}
-            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-          {/if}
-        </button>
+
+        <div class="mt-2 flex items-center gap-2">
+          <AiModeSwitcher mode={activeMode} on:change={(e) => dispatch('changeMode', e.detail)} />
+          <AiSandboxSwitcher mode={$sandboxMode} on:change={(e) => sandboxMode.set(e.detail)} />
+          <div class="ml-auto">
+            <button
+              on:click={handleStart}
+              disabled={isStarting || !sessionId || !instruction.trim()}
+              class="inline-flex h-8 w-8 items-center justify-center rounded-full border transition-colors
+                disabled:opacity-40 disabled:cursor-not-allowed
+                {isStarting
+                  ? 'border-primary-500/30 bg-primary-600/12 text-primary-400'
+                  : 'border-app-border bg-app-bg text-app-text-secondary hover:text-app-text hover:border-app-border/80'}"
+              title="开始执行"
+              type="button"
+            >
+              {#if isStarting}
+                <svg class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                </svg>
+              {:else}
+                <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h12M13 4l8 8-8 8" />
+                </svg>
+              {/if}
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   {/if}

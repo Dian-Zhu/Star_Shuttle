@@ -1,5 +1,7 @@
 use crate::modules::connection::{
-    auth_method_to_auth_type, credential_sync::fill_saved_credentials,
+    auth_method_to_auth_type,
+    connect_helpers::{immediate_hop, preflight_connectivity_check},
+    credential_sync::fill_saved_credentials,
     keyboard_interactive::TauriKeyboardInteractivePrompter, ssh_connect::connect_ssh_via_proxy,
     ssh_impl, ConnectionConfig, ConnectionError, ConnectionProtocol,
     KeyboardInteractiveCoordinator,
@@ -78,6 +80,9 @@ fn test_ssh_connection(
     let proxy_type = effective_config.proxy_type.clone();
 
     info!("Testing connection to {}:{} as {}", host, port, username);
+
+    let (check_host, check_port) = immediate_hop(&proxy_type, &host, port);
+    preflight_connectivity_check(runtime, &check_host, check_port)?;
 
     let auth_type = auth_method_to_auth_type(auth_method);
     let keyboard_interactive_prompter: Option<Arc<dyn ssh_impl::KeyboardInteractivePrompter>> =

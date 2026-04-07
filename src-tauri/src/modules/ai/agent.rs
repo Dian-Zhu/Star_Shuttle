@@ -272,8 +272,8 @@ Current session: {session_id}
 Sandbox mode: {mode}"#,
             session_id = session_id,
             mode = match sandbox_mode {
-                SandboxMode::Standard => "Standard (whitelist-based)",
-                SandboxMode::Strict => "Strict (blacklist-based)",
+                SandboxMode::Standard => "Standard (sandbox enabled)",
+                SandboxMode::Full => "Full (sandbox disabled)",
             }
         );
 

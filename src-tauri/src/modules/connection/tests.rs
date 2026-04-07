@@ -1,6 +1,7 @@
 #![cfg(test)]
 
 use super::*;
+use crate::modules::connection::connect_helpers::{immediate_hop, preflight_connectivity_check};
 use russh::client::Prompt;
 use std::time::{Duration, Instant};
 use tokio::net::{TcpListener, TcpStream};
@@ -42,6 +43,85 @@ fn test_connection_config_validation() {
 
     config.port = 0;
     assert!(config.validate().is_err());
+}
+
+#[test]
+fn test_preflight_connectivity_check_succeeds_for_reachable_listener() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_io()
+        .enable_time()
+        .build()
+        .expect("failed to create runtime");
+    let listener = runtime
+        .block_on(async { TcpListener::bind("127.0.0.1:0").await })
+        .expect("failed to bind listener");
+    let addr = listener.local_addr().expect("failed to read listener addr");
+
+    let result = preflight_connectivity_check(&runtime, "127.0.0.1", addr.port());
+
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_preflight_connectivity_check_reports_unreachable_host() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_io()
+        .enable_time()
+        .build()
+        .expect("failed to create runtime");
+
+    let result = preflight_connectivity_check(&runtime, "127.0.0.1", 1);
+
+    assert!(matches!(
+        result,
+        Err(ConnectionError::ConnectionFailed(message)) if message.contains("网络不可达")
+    ));
+}
+
+#[test]
+fn test_immediate_hop_uses_proxy_or_jump_host_endpoint() {
+    assert_eq!(immediate_hop(&ProxyType::None, "target.example", 22), ("target.example".to_string(), 22));
+    assert_eq!(
+        immediate_hop(
+            &ProxyType::Socks5 {
+                host: "proxy.example".to_string(),
+                port: 1080,
+                username: None,
+                password: None,
+                has_password: false,
+            },
+            "target.example",
+            22,
+        ),
+        ("proxy.example".to_string(), 1080)
+    );
+    assert_eq!(
+        immediate_hop(
+            &ProxyType::Http {
+                host: "http-proxy.example".to_string(),
+                port: 8080,
+                username: None,
+                password: None,
+                has_password: false,
+            },
+            "target.example",
+            22,
+        ),
+        ("http-proxy.example".to_string(), 8080)
+    );
+    assert_eq!(
+        immediate_hop(
+            &ProxyType::JumpHost {
+                host: "jump.example".to_string(),
+                port: 2222,
+                username: "user".to_string(),
+                auth_method: AuthMethod::KeyboardInteractive {},
+            },
+            "target.example",
+            22,
+        ),
+        ("jump.example".to_string(), 2222)
+    );
 }
 
 #[test]

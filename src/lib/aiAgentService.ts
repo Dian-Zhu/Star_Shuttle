@@ -51,7 +51,7 @@ export interface AgentTask {
   id: string;
   session_id: string;
   instruction: string;
-  sandbox_mode: 'standard' | 'strict';
+  sandbox_mode: 'standard' | 'full';
   status: AgentStatus;
   steps: AgentStep[];
   pending_confirm: PendingConfirm | null;
@@ -61,7 +61,7 @@ export interface AgentTask {
 // ── Stores ────────────────────────────────────────────────────────────────────
 
 export const currentTask = writable<AgentTask | null>(null);
-export const sandboxMode = writable<'standard' | 'strict'>('standard');
+export const sandboxMode = writable<'standard' | 'full'>('standard');
 export const pendingConfirm = writable<PendingConfirm | null>(null);
 
 // ── Task Lifecycle ────────────────────────────────────────────────────────────
@@ -72,7 +72,7 @@ let confirmUnsub: UnlistenFn | null = null;
 export async function startAgent(
   sessionId: string,
   instruction: string,
-  mode: 'standard' | 'strict',
+  mode: 'standard' | 'full',
 ): Promise<string> {
   // Clean up previous listeners
   statusUnsub?.();

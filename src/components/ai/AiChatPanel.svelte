@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, afterUpdate, tick } from 'svelte';
+  import { onMount, onDestroy, afterUpdate, tick } from 'svelte';
   import { slide, fade } from 'svelte/transition';
   import {
     conversations,
@@ -24,13 +24,15 @@
   export let sessionId: string | null = null;
 
   // Chat/Agent mode tab
-  let activeTab: 'chat' | 'agent' = 'chat';
+  export let activeTab: 'chat' | 'agent' = 'chat';
+  export let showThinking = true;
 
   let showHistory = false;
   let messagesEndEl: HTMLDivElement;
   let inputEl: ChatInput;
   let sendError = '';
   let includeContext = false;
+  let removeInsertDraftListener: (() => void) | null = null;
 
   // Track last streaming message for cursor animation
   $: streamingMsgId = $isSending && $messages.length > 0
@@ -43,6 +45,27 @@
     if ($conversations.length > 0 && !$activeConversationId) {
       await loadMessages($conversations[0].id);
     }
+
+    const handleInsertDraft = (event: Event) => {
+      const customEvent = event as CustomEvent<string>;
+      const content = customEvent.detail ?? '';
+      if (!content.trim()) return;
+
+      activeTab = 'chat';
+      tick().then(() => {
+        inputEl?.insertText(content, { asCodeBlock: true });
+      });
+    };
+
+    window.addEventListener('ai:insert-chat-draft', handleInsertDraft as EventListener);
+    removeInsertDraftListener = () => {
+      window.removeEventListener('ai:insert-chat-draft', handleInsertDraft as EventListener);
+    };
+  });
+
+  onDestroy(() => {
+    removeInsertDraftListener?.();
+    removeInsertDraftListener = null;
   });
 
   // Auto-scroll to bottom when messages change
@@ -123,90 +146,27 @@
     window.dispatchEvent(new CustomEvent('ai:run-command', { detail: e.detail }));
   }
 
+  function handleModeChange(nextMode: 'chat' | 'agent') {
+    activeTab = nextMode;
+  }
+
+  export async function startFreshChat() {
+    activeTab = 'chat';
+    await handleNewChat();
+  }
+
   $: activeConv = $conversations.find(c => c.id === $activeConversationId);
 </script>
 
 <div class="flex flex-col h-full bg-app-bg overflow-hidden">
-
-  <!-- Mode Tab Bar -->
-  <div class="flex items-center gap-1 px-3 pt-2 pb-0 border-b border-app-border bg-app-surface flex-shrink-0">
-    <button
-      class="px-3 py-1.5 text-xs font-medium rounded-t-md border-b-2 transition-colors
-        {activeTab === 'chat'
-          ? 'border-primary-500 text-primary-400'
-          : 'border-transparent text-app-text-secondary hover:text-app-text'}"
-      on:click={() => (activeTab = 'chat')}
-    >
-      💬 Chat
-    </button>
-    <button
-      class="px-3 py-1.5 text-xs font-medium rounded-t-md border-b-2 transition-colors
-        {activeTab === 'agent'
-          ? 'border-primary-500 text-primary-400'
-          : 'border-transparent text-app-text-secondary hover:text-app-text'}"
-      on:click={() => (activeTab = 'agent')}
-    >
-      🤖 Agent
-    </button>
-  </div>
-
   <!-- Agent Panel -->
   {#if activeTab === 'agent'}
     <div class="flex-1 overflow-hidden">
-      <AiAgentPanel {sessionId} />
+      <AiAgentPanel {sessionId} activeMode={activeTab} bind:showThinking on:changeMode={(e) => handleModeChange(e.detail)} />
     </div>
 
   <!-- Chat Panel -->
   {:else}
-    <!-- Chat Header -->
-    <div class="flex items-center justify-between px-3 py-2.5 border-b border-app-border flex-shrink-0 bg-app-surface">
-      <div class="flex items-center gap-2 min-w-0">
-        <!-- History toggle -->
-        <button
-          class="p-1.5 rounded-md hover:bg-app-bg-hover text-app-text-secondary hover:text-app-text transition-colors"
-          on:click={() => (showHistory = !showHistory)}
-          title="对话历史"
-        >
-          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-              d="M4 6h16M4 12h16M4 18h7" />
-          </svg>
-        </button>
-
-        <span class="text-sm font-medium text-app-text truncate">
-          {activeConv?.title ?? 'AI 助手'}
-        </span>
-      </div>
-
-      <div class="flex items-center gap-1">
-        <!-- Clear messages -->
-        {#if $activeConversationId && $messages.length > 0}
-          <button
-            class="p-1.5 rounded-md hover:bg-app-bg-hover text-app-text-secondary hover:text-app-text transition-colors"
-            on:click={handleClearMessages}
-            title="清除消息"
-          >
-            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-            </svg>
-          </button>
-        {/if}
-
-        <!-- New Chat -->
-        <button
-          class="p-1.5 rounded-md hover:bg-app-bg-hover text-app-text-secondary hover:text-app-text transition-colors"
-          on:click={handleNewChat}
-          title="新建对话"
-        >
-          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-              d="M12 4v16m8-8H4" />
-          </svg>
-        </button>
-      </div>
-    </div>
-
     <!-- History Drawer (slide in) -->
     {#if showHistory}
       <div
@@ -262,14 +222,6 @@
           {/if}
         </div>
 
-        <div class="p-2 border-t border-app-border">
-          <button
-            class="w-full py-2 rounded-lg bg-primary-600 hover:bg-primary-500 text-white text-sm font-medium transition-colors"
-            on:click={handleNewChat}
-          >
-            + 新建对话
-          </button>
-        </div>
       </div>
     {/if}
 
@@ -325,9 +277,11 @@
       isSending={$isSending}
       {includeContext}
       hasActiveSession={!!sessionId}
+      activeMode={activeTab}
       on:send={handleSend}
       on:cancel={handleCancelSend}
       on:toggleContext={(e) => (includeContext = e.detail)}
+      on:changeMode={(e) => handleModeChange(e.detail)}
     />
   {/if}
 </div>

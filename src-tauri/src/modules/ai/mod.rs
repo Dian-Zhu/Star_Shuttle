@@ -158,7 +158,7 @@ pub async fn ai_agent_start(
     sandbox_mode: Option<String>,
 ) -> Result<Uuid, String> {
     let mode = match sandbox_mode.as_deref() {
-        Some("strict") => SandboxMode::Strict,
+        Some("full") => SandboxMode::Full,
         _ => SandboxMode::Standard,
     };
 

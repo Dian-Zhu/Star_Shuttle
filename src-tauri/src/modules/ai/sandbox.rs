@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 pub enum SandboxMode {
     /// 标准沙箱：白名单放行，其余拦截请求确认
     Standard,
-    /// 严格沙箱：黑名单标记高危，其余放行但危险命令需确认
-    Strict,
+    /// Full 模式：关闭沙箱，不做命令限制
+    Full,
 }
 
 impl Default for SandboxMode {
@@ -152,7 +152,11 @@ impl Sandbox {
 
     /// 对整条命令字符串进行权限判定
     pub fn check(&self, command: &str) -> SandboxVerdict {
-        // 1. 注入检测（两种模式都拦截）
+        if self.mode == SandboxMode::Full {
+            return SandboxVerdict::Allow;
+        }
+
+        // 1. 标准模式下执行注入检测
         if detect_injection(command) {
             return SandboxVerdict::Deny {
                 reason: "检测到潜在命令注入（$()、反引号等），已拒绝执行".to_string(),
@@ -163,7 +167,7 @@ impl Sandbox {
 
         match self.mode {
             SandboxMode::Standard => self.check_standard(&stmt, command),
-            SandboxMode::Strict => self.check_strict(&stmt, command),
+            SandboxMode::Full => SandboxVerdict::Allow,
         }
     }
 
@@ -298,15 +302,21 @@ mod tests {
     }
 
     #[test]
-    fn test_strict_critical() {
-        let sb = Sandbox::new(SandboxMode::Strict);
-        assert!(matches!(sb.check("rm -rf /"), SandboxVerdict::NeedConfirm { risk_level: RiskLevel::Critical, .. }));
-        assert!(matches!(sb.check("mkfs.ext4 /dev/sda"), SandboxVerdict::NeedConfirm { risk_level: RiskLevel::Critical, .. }));
+    fn test_full_allow() {
+        let sb = Sandbox::new(SandboxMode::Full);
+        assert!(matches!(sb.check("rm -rf /"), SandboxVerdict::Allow));
+        assert!(matches!(sb.check("mkfs.ext4 /dev/sda"), SandboxVerdict::Allow));
     }
 
     #[test]
-    fn test_strict_allow_safe() {
-        let sb = Sandbox::new(SandboxMode::Strict);
+    fn test_full_allows_injection_patterns() {
+        let sb = Sandbox::new(SandboxMode::Full);
+        assert!(matches!(sb.check("ls $(cat /etc/shadow)"), SandboxVerdict::Allow));
+    }
+
+    #[test]
+    fn test_standard_allow_safe() {
+        let sb = Sandbox::new(SandboxMode::Standard);
         assert!(matches!(sb.check("ls -la"), SandboxVerdict::Allow));
         assert!(matches!(sb.check("cat /etc/passwd"), SandboxVerdict::Allow));
     }

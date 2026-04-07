@@ -89,6 +89,10 @@
     return true;
   }
 
+  function getTerminalSelection(): string {
+    return terminal?.getSelection() ?? '';
+  }
+
   function armCtrlCInterrupt() {
     ctrlCArmedUntil = Date.now() + CTRL_C_INTERRUPT_WINDOW_MS;
   }
@@ -370,6 +374,14 @@
     closeContextMenu();
   }
 
+  function handleSendSelectionToAi() {
+    const selection = getTerminalSelection();
+    if (!selection.trim()) return;
+
+    window.dispatchEvent(new CustomEvent('ai:open-with-context', { detail: selection }));
+    closeContextMenu();
+  }
+
   async function handleMenuPaste() {
     try {
       const text = await navigator.clipboard.readText();
@@ -525,6 +537,11 @@
       <ContextMenuItem on:click={handleMenuCopy} label="复制">
          <span slot="right">Ctrl+C / Ctrl+Shift+C</span>
       </ContextMenuItem>
+      <ContextMenuItem
+        on:click={handleSendSelectionToAi}
+        label="发送选中内容到 AI"
+        disabled={!getTerminalSelection().trim()}
+      />
       <ContextMenuItem on:click={handleMenuPaste} label="粘贴">
          <span slot="right">Ctrl+Shift+V</span>
       </ContextMenuItem>

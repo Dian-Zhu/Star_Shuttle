@@ -323,7 +323,7 @@ function cacheReconnectConfig(sessionId: string, connectConfig: any) {
   rememberReconnectConfigState(sessionId, connectConfig);
 }
 
-async function invokeWithTimeout<T>(cmd: string, args: any, timeoutMs: number = 30000): Promise<T> {
+export async function invokeWithTimeout<T>(cmd: string, args: any, timeoutMs: number = 30000): Promise<T> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       reject(new Error(`连接超时 (${timeoutMs / 1000}秒)`));
