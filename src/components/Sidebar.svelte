@@ -538,10 +538,10 @@
   </button>
 
   <!-- Sidebar Header -->
-  <div class="{$isSidebarCollapsed ? 'p-2' : 'p-4'} border-b border-app-border flex flex-col gap-4">
+  <div class="{$isSidebarCollapsed ? 'p-2' : 'p-4'} flex flex-col gap-4 border-b border-app-border">
     <div class="flex gap-2">
       <button
-        class="{$isSidebarCollapsed ? 'w-8 h-8 p-0' : 'flex-1 py-2 px-3'} flex items-center justify-center {$isSidebarCollapsed ? '' : 'gap-2'} bg-primary-600 hover:bg-primary-500 text-white rounded-lg font-medium transition-all shadow-md hover:shadow-primary-900/30 active:scale-95"
+        class="{$isSidebarCollapsed ? 'h-8 w-8 p-0' : 'flex-1 px-3 py-2'} flex items-center justify-center {$isSidebarCollapsed ? '' : 'gap-2'} rounded-lg bg-primary-600 font-medium text-white shadow-md transition-all hover:bg-primary-500 hover:shadow-primary-900/30 active:scale-95"
         on:click={() => { editingConnection.set(null); showConnectionForm.set(true); }}
         title="新建连接"
       >
@@ -555,7 +555,7 @@
 
   <!-- Tabs -->
   {#if !$isSidebarCollapsed}
-    <div class="px-4 pt-4 flex gap-1">
+    <div class="flex gap-1 px-4 pt-4">
        <button 
          class="flex-1 py-1.5 text-xs font-medium rounded-md transition-all {activeTab === 'servers' ? 'bg-app-surface text-app-text' : 'text-app-text-secondary hover:text-app-text'}"
          on:click={() => activeTab = 'servers'}
@@ -595,180 +595,180 @@
     role="presentation"
   >
     {#if activeTab === 'servers'}
-        {#if !$isSidebarCollapsed}
-            <div class="px-2 py-1.5 flex justify-between items-center text-xs font-semibold text-app-text-secondary uppercase tracking-wider whitespace-nowrap">
-              <span>服务器列表</span>
-              <div class="flex gap-1">
-                 <button class="p-1 hover:text-app-text transition-colors" title="导入配置" on:click={importConnections}>
-                    <UploadIcon class="w-3 h-3" />
-                 </button>
-                 <button class="p-1 hover:text-app-text transition-colors" title="导出配置" on:click={() => exportConnections()}>
-                    <DownloadIcon class="w-3 h-3" />
-                 </button>
-              </div>
-            </div>
-        {/if}
-        {#if tagRows.length > 0}
-          {#each tagRows as row (row.id)}
-            {#if row.kind === 'folder'}
-              <div class="group relative">
-                <button
-                  class="w-full text-left flex items-center {$isSidebarCollapsed ? 'justify-center p-2' : 'gap-2 p-2'} rounded-lg hover:bg-app-surface transition-colors drop-target"
-                  class:drag-over={dragOverFolderPath === row.path}
-                  on:click={() => toggleFolder(row.path)}
-                  on:contextmenu|preventDefault|stopPropagation={(e) => openContextMenu(e, 'folder', row)}
-                  title={$isSidebarCollapsed ? row.name : ''}
-                  style={!$isSidebarCollapsed ? `padding-left: ${0.5 + row.depth * 0.75}rem;` : ''}
-                  on:dragover={handleDragOver}
-                  on:dragenter={() => (dragOverFolderPath = row.path)}
-                  on:dragleave={() => {
-                    if (dragOverFolderPath === row.path) dragOverFolderPath = null;
-                  }}
-                  on:drop={(e) => handleDrop(e, row.path)}
-                >
-                  {#if !$isSidebarCollapsed}
-                    <span class="text-app-text-secondary w-4 inline-flex justify-center">
-                      {#if expandedPaths.has(row.path)}
-                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
-                        </svg>
-                      {:else}
-                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
-                        </svg>
-                      {/if}
-                    </span>
-                    <span class="flex-1 min-w-0">
-                      <span class="font-medium text-app-text truncate">{row.name}</span>
-                    </span>
-                    <span class="text-[10px] text-app-text-secondary bg-app-surface px-1.5 py-0.5 rounded-full">
-                      {row.count}
-                    </span>
-                  {/if}
-                </button>
-              </div>
-            {:else}
-              <div class="group relative">
-                <button
-                  class="w-full text-left flex items-center {$isSidebarCollapsed ? 'justify-center p-2' : 'gap-3 p-2'} rounded-lg hover:bg-app-surface transition-colors group-hover:shadow-sm cursor-move"
-                  on:click={() => handleConnect(row.connection)}
-                  on:contextmenu|preventDefault|stopPropagation={(e) => openContextMenu(e, 'connection', row)}
-                  title={$isSidebarCollapsed ? `${row.connection.name} (${row.connection.username}@${row.connection.host})` : ''}
-                  style={!$isSidebarCollapsed ? `padding-left: ${0.5 + row.depth * 0.75}rem;` : ''}
-                  draggable="true"
-                  on:dragstart={(e) => handleDragStart(e, row.connection)}
-                  on:dragend={handleDragEnd}
-                >
-                  {#if $connectingConnections.has(row.connection.id)}
-                    <div class="text-primary-500 animate-spin shrink-0">
-                      <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                    </div>
-                  {:else}
-                    <div class="text-app-text-secondary group-hover:text-primary-500 dark:group-hover:text-primary-400 transition-colors shrink-0">
-                      <ServerIcon class="w-4 h-4" />
-                    </div>
-                  {/if}
-                  {#if !$isSidebarCollapsed}
-                    <div class="flex-1 min-w-0">
-                      <div class="font-medium text-app-text truncate group-hover:text-app-text transition-colors flex items-center gap-2">
-                        <span class="truncate">{row.connection.name}</span>
-                        <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-app-surface text-app-text-secondary shrink-0">
-                          {(row.connection as any).protocol === 'Rdp' ? 'RDP' : 'SSH'}
-                        </span>
-                      </div>
-                      <div class="text-xs text-app-text-secondary truncate mt-0.5 font-mono opacity-80">
-                        {#if row.connection.username}{row.connection.username}@{/if}{row.connection.host}
-                      </div>
-                    </div>
-                  {/if}
-                </button>
-
-                {#if !$isSidebarCollapsed}
-                  {#if activeConnectionIds.has(row.connection.id)}
-                    <button
-                      class="absolute right-[4.25rem] top-2.5 p-1.5 rounded-md text-green-500 hover:text-green-600 hover:bg-green-100 dark:hover:bg-green-900/30 transition-all"
-                      on:click={(e) => openMonitor(row.connection, e)}
-                      title="系统监控"
-                    >
-                      <ActivityIcon class="w-3.5 h-3.5" />
-                    </button>
-                  {/if}
-                  <button
-                    class="absolute right-9 top-2.5 p-1.5 rounded-md text-app-text-secondary hover:text-primary-500 dark:hover:text-primary-400 hover:bg-app-border opacity-0 group-hover:opacity-100 transition-all"
-                    on:click={(e) => handleEdit(row.connection, e)}
-                    title="编辑连接"
-                  >
-                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 4H6a2 2 0 00-2 2v12a2 2 0 002 2h12a2 2 0 002-2v-5M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
-                  </button>
-                  <button
-                    class="absolute right-2 top-2.5 p-1.5 rounded-md text-app-text-secondary hover:text-red-500 dark:hover:text-red-400 hover:bg-app-border opacity-0 group-hover:opacity-100 transition-all"
-                    on:click={(e) => handleDelete(row.connection.id, e)}
-                    title="删除连接"
-                  >
-                    <TrashIcon class="w-3.5 h-3.5" />
-                  </button>
-                {/if}
-              </div>
-            {/if}
-          {/each}
-        {:else}
-          {#if !$isSidebarCollapsed}
-            <div class="flex flex-col items-center justify-center py-10 text-app-text-secondary">
-              <p class="text-sm">未找到连接</p>
-            </div>
-          {/if}
-        {/if}
-    {:else if activeTab === 'history'}
-        {#if !$isSidebarCollapsed}
-            <div class="px-2 py-1.5 flex justify-between items-center text-xs font-semibold text-app-text-secondary uppercase tracking-wider whitespace-nowrap">
-              <span>最近连接</span>
-            </div>
-        {/if}
-        {#if filteredHistory.length > 0}
-          {#each filteredHistory as item}
+      {#if !$isSidebarCollapsed}
+        <div class="px-2 py-1.5 flex justify-between items-center text-xs font-semibold text-app-text-secondary uppercase tracking-wider whitespace-nowrap">
+          <span>服务器列表</span>
+          <div class="flex gap-1">
+            <button class="p-1 hover:text-app-text transition-colors" title="导入配置" on:click={importConnections}>
+              <UploadIcon class="w-3 h-3" />
+            </button>
+            <button class="p-1 hover:text-app-text transition-colors" title="导出配置" on:click={() => exportConnections()}>
+              <DownloadIcon class="w-3 h-3" />
+            </button>
+          </div>
+        </div>
+      {/if}
+      {#if tagRows.length > 0}
+        {#each tagRows as row (row.id)}
+          {#if row.kind === 'folder'}
             <div class="group relative">
               <button
-                class="w-full text-left flex items-center {$isSidebarCollapsed ? 'justify-center p-2' : 'gap-3 p-2.5'} rounded-lg hover:bg-app-surface transition-colors group-hover:shadow-sm"
-                on:click={() => handleConnect(item.connection)}
-                title={$isSidebarCollapsed ? `${item.connection.name} - ${formatTimeAgo(item.lastConnected)}` : ''}
+                class="w-full text-left flex items-center {$isSidebarCollapsed ? 'justify-center p-2' : 'gap-2 p-2'} rounded-lg transition-colors drop-target hover:bg-app-surface"
+                class:drag-over={dragOverFolderPath === row.path}
+                on:click={() => toggleFolder(row.path)}
+                on:contextmenu|preventDefault|stopPropagation={(e) => openContextMenu(e, 'folder', row)}
+                title={$isSidebarCollapsed ? row.name : ''}
+                style={!$isSidebarCollapsed ? `padding-left: ${0.5 + row.depth * 0.75}rem;` : ''}
+                on:dragover={handleDragOver}
+                on:dragenter={() => (dragOverFolderPath = row.path)}
+                on:dragleave={() => {
+                  if (dragOverFolderPath === row.path) dragOverFolderPath = null;
+                }}
+                on:drop={(e) => handleDrop(e, row.path)}
               >
-                {#if $connectingConnections.has(item.connection.id)}
-                  <div class="text-green-500 animate-spin shrink-0">
+                {#if !$isSidebarCollapsed}
+                  <span class="text-app-text-secondary w-4 inline-flex justify-center">
+                    {#if expandedPaths.has(row.path)}
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                      </svg>
+                    {:else}
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                      </svg>
+                    {/if}
+                  </span>
+                  <span class="flex-1 min-w-0">
+                    <span class="font-medium text-app-text truncate">{row.name}</span>
+                  </span>
+                  <span class="text-[10px] text-app-text-secondary bg-app-surface px-1.5 py-0.5 rounded-full">
+                    {row.count}
+                  </span>
+                {/if}
+              </button>
+            </div>
+          {:else}
+            <div class="group relative">
+              <button
+                class="w-full text-left flex items-center {$isSidebarCollapsed ? 'justify-center p-2' : 'gap-3 p-2'} rounded-lg transition-colors group-hover:shadow-sm cursor-move hover:bg-app-surface"
+                on:click={() => handleConnect(row.connection)}
+                on:contextmenu|preventDefault|stopPropagation={(e) => openContextMenu(e, 'connection', row)}
+                title={$isSidebarCollapsed ? `${row.connection.name} (${row.connection.username}@${row.connection.host})` : ''}
+                style={!$isSidebarCollapsed ? `padding-left: ${0.5 + row.depth * 0.75}rem;` : ''}
+                draggable="true"
+                on:dragstart={(e) => handleDragStart(e, row.connection)}
+                on:dragend={handleDragEnd}
+              >
+                {#if $connectingConnections.has(row.connection.id)}
+                  <div class="text-primary-500 animate-spin shrink-0">
                     <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
                   </div>
                 {:else}
-                  <div class="text-app-text-secondary group-hover:text-green-500 dark:group-hover:text-green-400 transition-colors shrink-0">
-                    <ClockIcon className="w-4 h-4" />
+                  <div class="text-app-text-secondary group-hover:text-primary-500 dark:group-hover:text-primary-400 transition-colors shrink-0">
+                    <ServerIcon class="w-4 h-4" />
                   </div>
                 {/if}
                 {#if !$isSidebarCollapsed}
                   <div class="flex-1 min-w-0">
-                    <div class="flex justify-between items-center">
-                       <div class="font-medium text-app-text truncate group-hover:text-app-text transition-colors flex items-center gap-2">
-                         <span class="truncate">{item.connection.name}</span>
-                         <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-app-surface text-app-text-secondary shrink-0">
-                           {(item.connection as any).protocol === 'Rdp' ? 'RDP' : 'SSH'}
-                         </span>
-                       </div>
-                       <span class="text-[10px] text-app-text-secondary bg-app-surface px-1.5 py-0.5 rounded-full">
-                         {formatTimeAgo(item.lastConnected)}
-                       </span>
+                    <div class="font-medium text-app-text truncate group-hover:text-app-text transition-colors flex items-center gap-2">
+                      <span class="truncate">{row.connection.name}</span>
+                      <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-app-surface text-app-text-secondary shrink-0">
+                        {(row.connection as any).protocol === 'Rdp' ? 'RDP' : 'SSH'}
+                      </span>
                     </div>
                     <div class="text-xs text-app-text-secondary truncate mt-0.5 font-mono opacity-80">
-                      {#if item.connection.username}{item.connection.username}@{/if}{item.connection.host}
+                      {#if row.connection.username}{row.connection.username}@{/if}{row.connection.host}
                     </div>
                   </div>
                 {/if}
               </button>
-            </div>
-          {/each}
-        {:else}
-          {#if !$isSidebarCollapsed}
-            <div class="flex flex-col items-center justify-center py-10 text-app-text-secondary">
-              <p class="text-sm">无历史记录</p>
+
+              {#if !$isSidebarCollapsed}
+                {#if activeConnectionIds.has(row.connection.id)}
+                  <button
+                    class="absolute right-[4.25rem] top-2.5 p-1.5 rounded-md text-green-500 hover:text-green-600 hover:bg-green-100 dark:hover:bg-green-900/30 transition-all"
+                    on:click={(e) => openMonitor(row.connection, e)}
+                    title="系统监控"
+                  >
+                    <ActivityIcon class="w-3.5 h-3.5" />
+                  </button>
+                {/if}
+                <button
+                  class="absolute right-9 top-2.5 p-1.5 rounded-md text-app-text-secondary hover:text-primary-500 dark:hover:text-primary-400 hover:bg-app-border opacity-0 group-hover:opacity-100 transition-all"
+                  on:click={(e) => handleEdit(row.connection, e)}
+                  title="编辑连接"
+                >
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 4H6a2 2 0 00-2 2v12a2 2 0 002 2h12a2 2 0 002-2v-5M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+                </button>
+                <button
+                  class="absolute right-2 top-2.5 p-1.5 rounded-md text-app-text-secondary hover:text-red-500 dark:hover:text-red-400 hover:bg-app-border opacity-0 group-hover:opacity-100 transition-all"
+                  on:click={(e) => handleDelete(row.connection.id, e)}
+                  title="删除连接"
+                >
+                  <TrashIcon class="w-3.5 h-3.5" />
+                </button>
+              {/if}
             </div>
           {/if}
+        {/each}
+      {:else}
+        {#if !$isSidebarCollapsed}
+          <div class="flex flex-col items-center justify-center py-10 text-app-text-secondary">
+            <p class="text-sm">未找到连接</p>
+          </div>
         {/if}
+      {/if}
+    {:else if activeTab === 'history'}
+      {#if !$isSidebarCollapsed}
+        <div class="px-2 py-1.5 flex justify-between items-center text-xs font-semibold text-app-text-secondary uppercase tracking-wider whitespace-nowrap">
+          <span>最近连接</span>
+        </div>
+      {/if}
+      {#if filteredHistory.length > 0}
+        {#each filteredHistory as item}
+          <div class="group relative">
+            <button
+              class="w-full text-left flex items-center {$isSidebarCollapsed ? 'justify-center p-2' : 'gap-3 p-2.5'} rounded-lg transition-colors group-hover:shadow-sm hover:bg-app-surface"
+              on:click={() => handleConnect(item.connection)}
+              title={$isSidebarCollapsed ? `${item.connection.name} - ${formatTimeAgo(item.lastConnected)}` : ''}
+            >
+              {#if $connectingConnections.has(item.connection.id)}
+                <div class="text-green-500 animate-spin shrink-0">
+                  <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                </div>
+              {:else}
+                <div class="text-app-text-secondary group-hover:text-green-500 dark:group-hover:text-green-400 transition-colors shrink-0">
+                  <ClockIcon className="w-4 h-4" />
+                </div>
+              {/if}
+              {#if !$isSidebarCollapsed}
+                <div class="flex-1 min-w-0">
+                  <div class="flex justify-between items-center">
+                    <div class="font-medium text-app-text truncate group-hover:text-app-text transition-colors flex items-center gap-2">
+                      <span class="truncate">{item.connection.name}</span>
+                      <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-app-surface text-app-text-secondary shrink-0">
+                        {(item.connection as any).protocol === 'Rdp' ? 'RDP' : 'SSH'}
+                      </span>
+                    </div>
+                    <span class="text-[10px] text-app-text-secondary bg-app-surface px-1.5 py-0.5 rounded-full">
+                      {formatTimeAgo(item.lastConnected)}
+                    </span>
+                  </div>
+                  <div class="text-xs text-app-text-secondary truncate mt-0.5 font-mono opacity-80">
+                    {#if item.connection.username}{item.connection.username}@{/if}{item.connection.host}
+                  </div>
+                </div>
+              {/if}
+            </button>
+          </div>
+        {/each}
+      {:else}
+        {#if !$isSidebarCollapsed}
+          <div class="flex flex-col items-center justify-center py-10 text-app-text-secondary">
+            <p class="text-sm">无历史记录</p>
+          </div>
+        {/if}
+      {/if}
     {/if}
   </div>
 
