@@ -31,6 +31,8 @@ vi.mock('./connectionService', () => ({
 vi.mock('./store', () => ({
   successMessage: { set: mocks.successSet },
   errorMessage: { set: mocks.errorSet },
+  showSuccessMessage: mocks.successSet,
+  showErrorMessage: mocks.errorSet,
 }));
 
 function createBaseConnection(overrides: Record<string, unknown> = {}) {
@@ -279,7 +281,7 @@ describe('importExportService importConnections', () => {
       }),
     );
     expect(mocks.loadConnections).toHaveBeenCalledTimes(1);
-    expect(mocks.successSet).toHaveBeenCalledWith('成功导入 1 个连接');
+    expect(mocks.successSet).toHaveBeenCalledWith('成功导入 1 个连接', 3000);
 
     randomUuidSpy.mockRestore();
   });

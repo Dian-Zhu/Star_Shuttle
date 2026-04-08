@@ -1,5 +1,43 @@
 # Star Shuttle — AI 功能开发计划
 
+## 当前进度记录（2026-04-08）
+
+### Agent 重构完成度
+
+- 当前完成度约为 `85% ~ 90%`，首版已达到可交付状态。
+- 本轮已经完成的核心内容：
+  - Agent 后端已从单文件循环式实现重构为 `Planner + Orchestrator + Tool Registry + Persisted History`
+  - `PlannerAction` 已收敛为强类型动作：`ToolCall / Complete / Fail`
+  - 任务、步骤、事件已落库，可通过历史记录回放查看
+  - Tauri Agent 接口已切换为稳定的 `ai_agent_*` 命令族
+  - 前端已切换为 `activeTask + activeTaskEvents + taskHistory` 模型
+  - 当前任务面板、步骤展示、最近任务历史查看已接入
+  - 取消、确认、空响应、最大步数、工具失败等主要终态已统一
+  - 已补充架构文档、前端测试基建和后端状态机相关测试
+- 当前验证状态：
+  - `cargo test` 通过
+  - `npm test` 通过
+  - `npm run check` 通过
+
+### 首版仍未覆盖的范围
+
+- 不支持应用重启后的执行恢复
+- 不支持等待确认状态在重启后恢复
+- 历史记录仅支持查看，不支持任务重放
+- 事件流展示和历史回放 UI 仍属于首版能力，细节体验还有优化空间
+
+### 下一个任务
+
+- 任务名称：补齐 Agent 命令层接口测试与回放体验收口
+- 目标：
+  - 从 `ai_agent_start / confirm / cancel / get_task / get_task_events` 这一层补一组更高层测试
+  - 重点覆盖确认超时、取消中的迟到结果、失败终态一致性、历史事件顺序
+  - 同时优化前端历史回放的事件展示，使失败/拒绝/超时原因更容易辨认
+- 验收标准：
+  - 至少新增一组 Tauri 命令层或 manager 接口层测试，覆盖关键终态
+  - 历史面板能明确区分 `completed / failed / cancelled / rejected / timed_out`
+  - 不引入新的接口回退或状态分叉
+
 ## 概述
 
 在现有 SSH 远程管理应用中引入 AI 能力，分为 **Chat 模式** 和 **Agent 模式** 两大功能模块。

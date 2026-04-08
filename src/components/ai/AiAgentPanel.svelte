@@ -1,16 +1,22 @@
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
+  import { createEventDispatcher, onDestroy, onMount } from 'svelte';
   import { tick } from 'svelte';
   import { slide, fade } from 'svelte/transition';
   import { marked } from 'marked';
   import {
-    currentTask,
+    activeTask,
+    activeTaskEvents,
     sandboxMode,
     pendingConfirm,
+    taskHistory,
     startAgent,
     confirmStep,
     cancelTask,
+    loadTaskHistory,
+    openTask,
+    cleanup,
   } from '../../lib/aiAgentService';
+  import { formatAgentEventLabel, formatAgentEventSummary } from '../../lib/agentEventFormatter';
   import AgentToolCallStep from './AgentToolCallStep.svelte';
   import AiModeSwitcher from './AiModeSwitcher.svelte';
   import AiSandboxSwitcher from './AiSandboxSwitcher.svelte';
@@ -30,16 +36,27 @@
   let startError = '';
   let stepsEl: HTMLDivElement;
 
-  $: isRunning = ['running', 'retrying', 'waiting_confirm', 'cancelling'].includes($currentTask?.status ?? '');
-  $: isWaiting = $currentTask?.status === 'waiting_confirm';
-  $: isDone = $currentTask?.status === 'completed' || $currentTask?.status === 'failed' || $currentTask?.status === 'cancelled';
-  $: canCancel = !!$currentTask && ['running', 'retrying', 'waiting_confirm', 'cancelling'].includes($currentTask.status);
-  $: if ($currentTask?.status !== 'cancelling') {
+  onMount(() => {
+    void loadTaskHistory(sessionId);
+  });
+
+  onDestroy(() => {
+    cleanup();
+  });
+
+  $: if (sessionId) {
+    void loadTaskHistory(sessionId);
+  }
+
+  $: isRunning = ['queued', 'planning', 'executing', 'waiting_confirm', 'retrying', 'cancelling'].includes($activeTask?.status ?? '');
+  $: isWaiting = $activeTask?.status === 'waiting_confirm';
+  $: isDone = ['completed', 'failed', 'cancelled'].includes($activeTask?.status ?? '');
+  $: canCancel = !!$activeTask && ['queued', 'planning', 'executing', 'waiting_confirm', 'retrying', 'cancelling'].includes($activeTask.status);
+  $: if ($activeTask?.status !== 'cancelling') {
     isCancelling = false;
   }
 
-  // Auto-scroll steps
-  $: if ($currentTask?.steps) {
+  $: if ($activeTask?.steps) {
     tick().then(() => stepsEl?.lastElementChild?.scrollIntoView({ behavior: 'smooth', block: 'end' }));
   }
 
@@ -70,17 +87,22 @@
   }
 
   async function handleCancel() {
-    if (!$currentTask || isCancelling) return;
+    if (!$activeTask || isCancelling) return;
 
     isCancelling = true;
     startError = '';
 
     try {
-      await cancelTask($currentTask.id);
+      await cancelTask($activeTask.id);
     } catch (e: any) {
       startError = e?.message ?? String(e);
       isCancelling = false;
     }
+  }
+
+  async function handleOpenHistory(taskId: string) {
+    startError = '';
+    await openTask(taskId);
   }
 
   function handleKeydown(e: KeyboardEvent) {
@@ -91,9 +113,11 @@
   }
 
   const STATUS_LABELS: Record<string, string> = {
-    running: '运行中',
-    retrying: '重试中',
+    queued: '排队中',
+    planning: '规划中',
+    executing: '执行中',
     waiting_confirm: '等待确认',
+    retrying: '重试中',
     cancelling: '停止中',
     completed: '已完成',
     failed: '失败',
@@ -101,9 +125,11 @@
   };
 
   const STATUS_COLORS: Record<string, string> = {
-    running: 'text-blue-400',
-    retrying: 'text-orange-400',
+    queued: 'text-app-text-secondary',
+    planning: 'text-blue-400',
+    executing: 'text-blue-400',
     waiting_confirm: 'text-yellow-400',
+    retrying: 'text-orange-400',
     cancelling: 'text-app-text-secondary',
     completed: 'text-green-400',
     failed: 'text-red-400',
@@ -124,14 +150,15 @@
     }
   }
 
-  $: finalResultStep = [...($currentTask?.steps ?? [])]
+  $: finalResultStep = [...($activeTask?.steps ?? [])]
     .reverse()
-    .find((step) => step.kind === 'result' && (step.output?.trim() || step.description?.trim()));
-  $: summaryText = finalResultStep?.output?.trim() || '';
+    .find((step) => step.kind === 'result' && (step.output?.trim() || step.title?.trim()));
+  $: summaryText = $activeTask?.summary?.trim() || $activeTask?.final_result?.summary?.trim() || finalResultStep?.output?.trim() || '';
   $: summaryHtml = summaryText ? renderMarkdown(summaryText) : '';
-  $: doneCardStyle = $currentTask ? DONE_CARD_STYLES[$currentTask.status] ?? 'bg-app-surface border-app-border' : 'bg-app-surface border-app-border';
-  $: visibleSteps = ($currentTask?.steps ?? []).filter((step) => showThinking || (step.kind !== 'thinking' && step.kind !== 'execute_command' && step.kind !== 'result'));
-  $: hasStructuredOutcome = !!summaryText || !!$currentTask?.error;
+  $: doneCardStyle = $activeTask ? DONE_CARD_STYLES[$activeTask.status] ?? 'bg-app-surface border-app-border' : 'bg-app-surface border-app-border';
+  $: visibleSteps = ($activeTask?.steps ?? []).filter((step) => showThinking || step.kind !== 'planning');
+  $: hasStructuredOutcome = !!summaryText || !!$activeTask?.error_message;
+  $: recentEvents = [...$activeTaskEvents].slice(-6).reverse();
 </script>
 
 <style>
@@ -141,17 +168,13 @@
   }
 </style>
 
-<!-- Confirm Modal -->
-
 {#if $pendingConfirm}
   <CommandConfirmModal confirm={$pendingConfirm} on:confirm={handleConfirm} />
 {/if}
 
 <div class="flex flex-col h-full bg-app-bg overflow-hidden">
-  <!-- Steps List -->
   <div class="flex-1 overflow-y-auto py-2" bind:this={stepsEl}>
-    {#if !$currentTask}
-      <!-- Empty state -->
+    {#if !$activeTask}
       <div class="h-full flex flex-col items-center justify-center text-center px-6 py-12 select-none">
         <div class="w-12 h-12 rounded-2xl bg-primary-600/20 flex items-center justify-center mb-4">
           <svg class="w-6 h-6 text-primary-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -179,13 +202,19 @@
         {/if}
       </div>
     {:else}
-      <!-- Instruction reminder -->
       <div class="px-3 py-2 mx-3 mb-1 bg-primary-600/10 border border-primary-500/20 rounded-lg">
-        <p class="text-xs text-primary-400 font-medium">任务</p>
-        <p class="text-sm text-app-text mt-0.5">{$currentTask.instruction}</p>
+        <div class="flex items-center justify-between gap-3">
+          <div class="min-w-0">
+            <p class="text-xs text-primary-400 font-medium">任务</p>
+            <p class="text-sm text-app-text mt-0.5 truncate">{$activeTask.instruction}</p>
+          </div>
+          <div class="text-right">
+            <p class="text-xs text-app-text-secondary">事件</p>
+            <p class="text-sm text-app-text">{$activeTaskEvents.length}</p>
+          </div>
+        </div>
       </div>
 
-      <!-- Steps timeline -->
       <div class="px-1">
         {#each visibleSteps as step (step.id)}
           <AgentToolCallStep {step} />
@@ -197,15 +226,15 @@
               <div class="flex items-center justify-between gap-3">
                 <div>
                   <p class="text-xs text-app-text-secondary">处理结果</p>
-                  <p class="text-sm font-medium {STATUS_COLORS[$currentTask.status]}">
-                    {STATUS_LABELS[$currentTask.status]}
+                  <p class="text-sm font-medium {STATUS_COLORS[$activeTask.status]}">
+                    {STATUS_LABELS[$activeTask.status]}
                   </p>
                 </div>
                 {#if summaryText}
                   <span class="text-xs text-app-text-secondary">已生成最终摘要</span>
-                {:else if $currentTask.status === 'failed'}
+                {:else if $activeTask.status === 'failed'}
                   <span class="text-xs text-red-400">未生成最终结果</span>
-                {:else if $currentTask.status === 'cancelled'}
+                {:else if $activeTask.status === 'cancelled'}
                   <span class="text-xs text-app-text-secondary">任务已被用户终止</span>
                 {/if}
               </div>
@@ -221,9 +250,9 @@
                 </div>
               {/if}
 
-              {#if $currentTask.error}
+              {#if $activeTask.error_message}
                 <div class="mt-2 rounded-md border border-red-500/20 bg-red-500/10 px-2.5 py-2 text-xs text-red-400 whitespace-pre-wrap break-words">
-                  {$currentTask.error}
+                  {$activeTask.error_message}
                 </div>
               {/if}
 
@@ -236,34 +265,96 @@
           </div>
         {/if}
 
-        <!-- Spinning indicator when running -->
         {#if isRunning && !isWaiting}
           <div class="flex items-center gap-2 px-3 py-2 text-xs text-blue-400">
             <div class="w-3 h-3 rounded-full border-2 border-blue-400 border-t-transparent animate-spin"></div>
-            {#if $currentTask?.status === 'retrying'}
+            {#if $activeTask?.status === 'retrying'}
               AI 正在重试...
-            {:else if $currentTask?.status === 'cancelling'}
+            {:else if $activeTask?.status === 'cancelling'}
               正在停止当前任务...
+            {:else if $activeTask?.status === 'planning'}
+              AI 正在规划...
             {:else}
-              AI 正在思考...
+              AI 正在执行...
             {/if}
           </div>
         {/if}
       </div>
 
-      <!-- Error display -->
-      {#if $currentTask.error && !isDone}
+      {#if $activeTask.error_message && !isDone}
         <div
           class="mx-3 mt-2 p-3 bg-red-500/10 border border-red-500/20 rounded-lg text-red-400 text-xs"
           transition:fade={{ duration: 200 }}
         >
-          {$currentTask.error}
+          {$activeTask.error_message}
+        </div>
+      {/if}
+
+      {#if recentEvents.length}
+        <div class="mx-3 mt-2 rounded-lg border border-app-border bg-app-surface/40 p-3">
+          <div class="flex items-center justify-between gap-3 mb-2">
+            <p class="text-xs font-medium text-app-text-secondary">最近事件</p>
+            <p class="text-[11px] text-app-text-secondary">共 {$activeTaskEvents.length} 条</p>
+          </div>
+          <div class="space-y-1.5">
+            {#each recentEvents as event (event.id)}
+              <div class="rounded-md bg-app-bg border border-app-border px-2.5 py-2">
+                <div class="flex items-center justify-between gap-3">
+                  <p class="text-xs text-app-text">{formatAgentEventLabel(event.event_type)}</p>
+                  <p class="text-[11px] text-app-text-secondary">#{event.seq}</p>
+                </div>
+                <p class="mt-1 text-[11px] text-app-text-secondary whitespace-pre-wrap break-all leading-relaxed">
+                  {formatAgentEventSummary(event)}
+                </p>
+                <details class="mt-1">
+                  <summary class="cursor-pointer text-[11px] text-app-text-secondary hover:text-app-text">
+                    查看原始数据
+                  </summary>
+                  <pre class="mt-1 text-[11px] text-app-text-secondary whitespace-pre-wrap break-all leading-relaxed">{JSON.stringify(event.payload_json, null, 2)}</pre>
+                </details>
+              </div>
+            {/each}
+          </div>
         </div>
       {/if}
     {/if}
   </div>
 
-  <!-- Input Area -->
+  {#if $taskHistory.length}
+    <div class="border-t border-app-border bg-app-surface/40 px-3 py-2">
+      <div class="flex items-center justify-between gap-3 mb-2">
+        <p class="text-xs font-medium text-app-text-secondary">最近任务</p>
+        <button
+          class="text-xs text-app-text-secondary hover:text-app-text transition-colors"
+          on:click={() => loadTaskHistory(sessionId)}
+          type="button"
+        >
+          刷新
+        </button>
+      </div>
+      <div class="space-y-1.5 max-h-32 overflow-y-auto">
+        {#each $taskHistory as item (item.id)}
+          <button
+            class="w-full text-left rounded-lg border px-3 py-2 transition-colors
+              {$activeTask?.id === item.id
+                ? 'bg-primary-600/10 border-primary-500/20'
+                : 'bg-app-bg border-app-border hover:border-app-border/80'}"
+            on:click={() => handleOpenHistory(item.id)}
+            type="button"
+          >
+            <div class="flex items-center justify-between gap-3">
+              <p class="text-xs text-app-text truncate">{item.instruction}</p>
+              <span class="text-[11px] {STATUS_COLORS[item.status]}">{STATUS_LABELS[item.status]}</span>
+            </div>
+            {#if item.summary || item.error_message}
+              <p class="text-[11px] text-app-text-secondary mt-1 truncate">{item.summary || item.error_message}</p>
+            {/if}
+          </button>
+        {/each}
+      </div>
+    </div>
+  {/if}
+
   {#if !isRunning}
     <div class="border-t border-app-border bg-app-bg p-3" transition:slide={{ duration: 150 }}>
       {#if startError}
@@ -319,19 +410,9 @@
       {/if}
       <div class="flex items-center justify-between gap-3 rounded-[18px] bg-app-surface px-3 py-2.5 shadow-[0_10px_30px_rgba(0,0,0,0.12)]">
         <div class="min-w-0">
-          <p class="text-sm text-app-text">
-            {#if $currentTask?.status === 'retrying'}
-              正在重试任务
-            {:else if $currentTask?.status === 'cancelling'}
-              正在停止任务
-            {:else if $currentTask?.status === 'waiting_confirm'}
-              等待确认敏感操作
-            {:else}
-              Agent 正在执行任务
-            {/if}
-          </p>
+          <p class="text-sm text-app-text">{STATUS_LABELS[$activeTask?.status ?? 'planning']}</p>
           <p class="text-xs text-app-text-secondary mt-0.5 truncate">
-            {$currentTask?.instruction}
+            {$activeTask?.instruction}
           </p>
         </div>
         <button
@@ -343,7 +424,7 @@
           title="停止当前任务"
           type="button"
         >
-          {#if isCancelling || $currentTask?.status === 'cancelling'}
+          {#if isCancelling || $activeTask?.status === 'cancelling'}
             停止中
           {:else}
             停止

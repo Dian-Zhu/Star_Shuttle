@@ -230,7 +230,41 @@
 
 ---
 
-## 10. 推荐推进顺序（最短路径）
+## 10. AI Agent 重构专项（P1/P2）
+
+### 10.1 Agent 架构重构（P1）
+- ✅ Agent 后端已完成分层重构
+  - 位置：`src-tauri/src/modules/ai/agent.rs`、`planner.rs`、`orchestrator.rs`、`agent_store.rs`、`agent_types.rs`、`tools/`
+  - 现状：
+    - 已由 `Planner + Orchestrator + Tool Registry + Persisted History` 四层替代旧单循环实现
+    - 任务/步骤/事件已落库
+    - 新 Tauri 接口 `ai_agent_*` 已接入前端
+  - 验收：
+    - `cargo test` 通过
+    - `npm test` 通过
+    - `npm run check` 通过
+
+### 10.2 Agent 前端快照与事件流（P1）
+- ✅ 当前任务与历史查看首版已落地
+  - 位置：`src/lib/aiAgentService.ts`、`src/components/ai/AiAgentPanel.svelte`
+  - 现状：
+    - 当前任务使用快照 + 事件流渲染
+    - 最近任务历史可查看
+    - 首版不支持应用重启后的继续执行
+
+### 10.3 下一任务（P2）
+- 🟡 补齐 Agent 命令层接口测试与历史回放细节
+  - 优先级：P2
+  - 建议动作：
+    - 增加 `ai_agent_start / confirm / cancel / get_task / get_task_events` 的更高层测试
+    - 增强历史事件展示，明确失败、拒绝、确认超时等原因
+  - 验收：
+    - 关键终态具备更高层测试覆盖
+    - 历史面板能清晰区分 `completed / failed / cancelled / rejected / timed_out`
+
+---
+
+## 11. 推荐推进顺序（最短路径）
 
 1) P0：修复类型体系与 lint/check 基线（先让工程可持续迭代）
 2) P0：连接配置持久化 + 凭证 keyring 落地（安全与数据不丢）

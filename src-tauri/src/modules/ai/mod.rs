@@ -1,14 +1,20 @@
 pub mod agent;
+pub mod agent_store;
+pub mod agent_types;
 pub mod chat;
 pub mod client;
 pub mod command_parser;
 pub mod config;
 pub mod context_collector;
+pub mod orchestrator;
+pub mod planner;
 pub mod sandbox;
+pub mod tools;
 pub mod types;
 
 use crate::modules::ai::{
-    agent::{AgentManager, AgentTask},
+    agent::AgentManager,
+    agent_types::{AgentEvent, AgentTaskSnapshot, AgentTaskSummary},
     chat::ChatManager,
     config::{
         default_base_url, default_model, load_config, save_config,
@@ -188,17 +194,34 @@ pub async fn ai_agent_cancel(
     task_id: Uuid,
 ) -> Result<(), String> {
     agent_manager.cancel_task(task_id)?;
-    if let Some(task) = agent_manager.get_task(task_id) {
+    if let Some(task) = agent_manager.get_task(task_id)? {
         use tauri::Emitter;
-        let _ = app.emit(&format!("ai-agent-status-{}", task_id), task);
+        let _ = app.emit(&format!("ai-agent-task-{}", task_id), task);
     }
     Ok(())
 }
 
 #[tauri::command]
-pub async fn ai_agent_status(
+pub async fn ai_agent_get_task(
     agent_manager: State<'_, Arc<AgentManager>>,
     task_id: Uuid,
-) -> Result<Option<AgentTask>, String> {
-    Ok(agent_manager.get_task(task_id))
+) -> Result<Option<AgentTaskSnapshot>, String> {
+    agent_manager.get_task(task_id)
+}
+
+#[tauri::command]
+pub async fn ai_agent_list_tasks(
+    agent_manager: State<'_, Arc<AgentManager>>,
+    session_id: Option<Uuid>,
+    limit: Option<u32>,
+) -> Result<Vec<AgentTaskSummary>, String> {
+    agent_manager.list_tasks(session_id, limit.unwrap_or(20))
+}
+
+#[tauri::command]
+pub async fn ai_agent_get_task_events(
+    agent_manager: State<'_, Arc<AgentManager>>,
+    task_id: Uuid,
+) -> Result<Vec<AgentEvent>, String> {
+    agent_manager.get_task_events(task_id)
 }

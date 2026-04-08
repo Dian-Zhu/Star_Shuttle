@@ -18,12 +18,9 @@
   $: renderedOutput = hasOutput ? renderMarkdown(step.output ?? '') : '';
 
   const KIND_LABELS: Record<string, string> = {
-    thinking: '思考中',
-    execute_command: '执行命令',
-    read_file: '读取文件',
-    list_directory: '列出目录',
-    get_system_info: '获取系统信息',
-    awaiting_confirm: '等待确认',
+    planning: '规划',
+    tool_execution: '工具执行',
+    confirmation: '确认',
     result: '任务结果',
   };
 
@@ -40,6 +37,7 @@
   };
 
   $: isRunning = step.status === 'running';
+  $: isWaitingConfirm = step.kind === 'confirmation' && step.status === 'running';
   $: hasOutput = !!step.output;
   $: riskColor = step.risk_level ? RISK_COLORS[step.risk_level] : '';
   $: riskLabel = step.risk_level ? RISK_LABELS[step.risk_level] : '';
@@ -52,19 +50,19 @@
   <!-- Status indicator -->
   <div class="flex-shrink-0 flex flex-col items-center pt-0.5">
     <div class="w-4 h-4 flex items-center justify-center">
-      {#if isRunning}
+      {#if isWaitingConfirm}
+        <svg class="w-4 h-4 text-yellow-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+        </svg>
+      {:else if isRunning}
         <div class="w-3 h-3 rounded-full border-2 border-blue-400 border-t-transparent animate-spin"></div>
-      {:else if step.status === 'completed' || step.status === 'confirmed'}
+      {:else if step.status === 'completed'}
         <svg class="w-4 h-4 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7" />
         </svg>
       {:else if step.status === 'failed' || step.status === 'rejected'}
         <svg class="w-4 h-4 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M6 18L18 6M6 6l12 12" />
-        </svg>
-      {:else if step.status === 'waiting_confirm'}
-        <svg class="w-4 h-4 text-yellow-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
         </svg>
       {:else}
         <div class="w-2 h-2 rounded-full bg-app-border"></div>
@@ -94,11 +92,13 @@
         <span class="text-xs text-red-400">已拒绝</span>
       {:else if step.status === 'failed'}
         <span class="text-xs text-red-400">失败</span>
+      {:else if step.status === 'skipped'}
+        <span class="text-xs text-app-text-secondary">已跳过</span>
       {/if}
     </div>
 
     <!-- Description -->
-    <p class="text-sm {isResultStep ? 'text-app-text font-medium' : 'text-app-text'} mt-0.5 leading-snug">{step.description}</p>
+    <p class="text-sm {isResultStep ? 'text-app-text font-medium' : 'text-app-text'} mt-0.5 leading-snug">{step.title}</p>
 
     {#if isResultStep && hasOutput}
       <div

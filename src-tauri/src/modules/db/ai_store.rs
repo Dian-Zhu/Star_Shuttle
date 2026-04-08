@@ -38,6 +38,45 @@ pub fn create_tables(conn: &Connection) -> Result<()> {
             output      TEXT,
             executed_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
+
+        CREATE TABLE IF NOT EXISTS ai_agent_tasks (
+            id                   TEXT PRIMARY KEY,
+            session_id           TEXT NOT NULL,
+            instruction          TEXT NOT NULL,
+            sandbox_mode         TEXT NOT NULL,
+            status               TEXT NOT NULL,
+            summary              TEXT,
+            error_code           TEXT,
+            error_message        TEXT,
+            pending_confirm_json TEXT,
+            final_result_json    TEXT,
+            started_at           TEXT NOT NULL,
+            finished_at          TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS ai_agent_steps (
+            id          TEXT PRIMARY KEY,
+            task_id     TEXT NOT NULL REFERENCES ai_agent_tasks(id) ON DELETE CASCADE,
+            seq         INTEGER NOT NULL,
+            kind        TEXT NOT NULL,
+            title       TEXT NOT NULL,
+            tool_name   TEXT,
+            command     TEXT,
+            output      TEXT,
+            status      TEXT NOT NULL,
+            risk_level  TEXT,
+            started_at  TEXT NOT NULL,
+            finished_at TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS ai_agent_events (
+            id          TEXT PRIMARY KEY,
+            task_id     TEXT NOT NULL REFERENCES ai_agent_tasks(id) ON DELETE CASCADE,
+            seq         INTEGER NOT NULL,
+            event_type  TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at  TEXT NOT NULL
+        );
         ",
     )
 }

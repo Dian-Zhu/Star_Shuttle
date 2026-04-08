@@ -1114,7 +1114,9 @@ pub fn run() {
             crate::modules::ai::ai_agent_start,
             crate::modules::ai::ai_agent_confirm,
             crate::modules::ai::ai_agent_cancel,
-            crate::modules::ai::ai_agent_status,
+            crate::modules::ai::ai_agent_get_task,
+            crate::modules::ai::ai_agent_list_tasks,
+            crate::modules::ai::ai_agent_get_task_events,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

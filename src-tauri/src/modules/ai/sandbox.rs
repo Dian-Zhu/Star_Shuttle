@@ -93,52 +93,6 @@ const STANDARD_CONFIRM_SUBCMDS: &[(&str, &str, RiskLevel)] = &[
     ("kubectl", "cordon", RiskLevel::High),
 ];
 
-// ── 严格沙箱黑名单 ────────────────────────────────────────────────────────────
-
-/// 高危命令（Critical - 严格沙箱必须确认）
-const STRICT_CRITICAL: &[&str] = &[
-    "mkfs", "mkswap", "fdisk", "parted", "gdisk", "blkdiscard",
-    "dd", "shred",
-    "halt", "poweroff", "shutdown", "reboot", "init",
-    ":(){ :|:& };:",  // fork bomb
-    "userdel", "deluser",
-];
-
-/// 敏感命令（High - 严格沙箱需要确认）
-const STRICT_HIGH: &[&str] = &[
-    "rm", "rmdir", "unlink",
-    "chmod", "chown", "chgrp", "chattr",
-    "mv", "cp",  // 覆盖时危险
-    "kill", "pkill", "killall",
-    "mount", "umount",
-    "iptables", "ip6tables", "nftables", "firewall-cmd", "ufw",
-    "useradd", "usermod", "adduser", "passwd",
-    "visudo", "sudoers",
-    "crontab",
-    "at",
-    "pip", "pip3", "npm", "yarn", "cargo", "gem", "go",
-    "apt", "apt-get", "yum", "dnf", "pacman", "brew",
-    "systemctl", "service",
-    "ln",
-    "truncate",
-    "mkfifo",
-];
-
-/// 严格沙箱：特定参数使普通命令升级为 Critical
-const STRICT_CRITICAL_PATTERNS: &[(&str, &[&str])] = &[
-    ("rm", &["-rf", "-fr", "--no-preserve-root"]),
-    ("chmod", &["777", "a+x", "o+w"]),
-    ("dd", &["if=/dev/", "of=/dev/"]),
-    ("curl", &["|", "bash", "sh"]),
-    ("wget", &["-O-", "|"]),
-    ("python", &["-c"]),
-    ("python3", &["-c"]),
-    ("bash", &["-c"]),
-    ("sh", &["-c"]),
-    ("eval", &[]),
-    ("exec", &[]),
-];
-
 // ── 判定引擎 ──────────────────────────────────────────────────────────────────
 
 pub struct Sandbox {
@@ -216,70 +170,6 @@ impl Sandbox {
         None
     }
 
-    // ── 严格沙箱（黑名单） ──────────────────────────────────────────────────
-
-    fn check_strict(&self, stmt: &crate::modules::ai::command_parser::ParsedStatement, _raw: &str) -> SandboxVerdict {
-        for cmd in &stmt.commands {
-            let name = cmd.name.as_str();
-
-            // Critical 黑名单
-            if STRICT_CRITICAL.contains(&name) {
-                return SandboxVerdict::NeedConfirm {
-                    reason: format!("`{}` 是高危命令，可能造成不可逆损坏", name),
-                    risk_level: RiskLevel::Critical,
-                    matched_command: cmd.raw.clone(),
-                };
-            }
-
-            // High 黑名单
-            if STRICT_HIGH.contains(&name) {
-                // 再检查是否有让它升级为 Critical 的参数
-                if let Some(v) = self.check_critical_args(cmd) {
-                    return v;
-                }
-                return SandboxVerdict::NeedConfirm {
-                    reason: format!("`{}` 是敏感命令，需要确认", name),
-                    risk_level: RiskLevel::High,
-                    matched_command: cmd.raw.clone(),
-                };
-            }
-
-            // 检查参数模式（升级 Critical）
-            if let Some(v) = self.check_critical_args(cmd) {
-                return v;
-            }
-        }
-        SandboxVerdict::Allow
-    }
-
-    fn check_critical_args(&self, cmd: &crate::modules::ai::command_parser::ParsedCommand) -> Option<SandboxVerdict> {
-        let name = cmd.name.as_str();
-        for (base, danger_args) in STRICT_CRITICAL_PATTERNS {
-            if name == *base {
-                if danger_args.is_empty() {
-                    // 仅命令名匹配即为 Critical
-                    return Some(SandboxVerdict::NeedConfirm {
-                        reason: format!("`{}` 是极高风险命令，需要确认", name),
-                        risk_level: RiskLevel::Critical,
-                        matched_command: cmd.raw.clone(),
-                    });
-                }
-                for danger_arg in *danger_args {
-                    if cmd.args.iter().any(|a| a.contains(danger_arg)) {
-                        return Some(SandboxVerdict::NeedConfirm {
-                            reason: format!(
-                                "`{}` 带有危险参数 `{}`，可能造成不可逆损坏",
-                                name, danger_arg
-                            ),
-                            risk_level: RiskLevel::Critical,
-                            matched_command: cmd.raw.clone(),
-                        });
-                    }
-                }
-            }
-        }
-        None
-    }
 }
 
 #[cfg(test)]
@@ -299,6 +189,25 @@ mod tests {
         let sb = Sandbox::new(SandboxMode::Standard);
         assert!(matches!(sb.check("rm -rf /tmp/test"), SandboxVerdict::NeedConfirm { .. }));
         assert!(matches!(sb.check("apt install nginx"), SandboxVerdict::NeedConfirm { .. }));
+    }
+
+    #[test]
+    fn test_standard_subcommand_need_confirm() {
+        let sb = Sandbox::new(SandboxMode::Standard);
+        assert!(matches!(
+            sb.check("docker rm container-1"),
+            SandboxVerdict::NeedConfirm {
+                risk_level: RiskLevel::High,
+                ..
+            }
+        ));
+        assert!(matches!(
+            sb.check("kubectl delete pod demo"),
+            SandboxVerdict::NeedConfirm {
+                risk_level: RiskLevel::Critical,
+                ..
+            }
+        ));
     }
 
     #[test]
