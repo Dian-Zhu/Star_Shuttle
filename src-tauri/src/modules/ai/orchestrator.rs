@@ -4,6 +4,7 @@ use crate::modules::ai::agent_types::{
 };
 use crate::modules::ai::planner::{Planner, PlannerError};
 use crate::modules::ai::sandbox::SandboxMode;
+use crate::modules::ai::skills::AiSkill;
 use crate::modules::ai::tools::{AgentTool, ToolAuthorization, ToolRegistry};
 use std::sync::Arc;
 use tauri::AppHandle;
@@ -19,6 +20,7 @@ pub struct Orchestrator {
     app: AppHandle,
     task_id: Uuid,
     session_id: Uuid,
+    skill: Option<AiSkill>,
     cancel_rx: tokio::sync::oneshot::Receiver<()>,
 }
 
@@ -29,10 +31,17 @@ impl Orchestrator {
         task_id: Uuid,
         session_id: Uuid,
         sandbox_mode: SandboxMode,
+        skill: Option<AiSkill>,
         cancel_rx: tokio::sync::oneshot::Receiver<()>,
     ) -> Result<Self, String> {
         let planner = Planner::new(manager.db.clone())?;
-        let tools = ToolRegistry::new(manager.connection_manager.clone(), sandbox_mode);
+        let tools = ToolRegistry::new(
+            manager.connection_manager.clone(),
+            sandbox_mode,
+            skill
+                .as_ref()
+                .map(|item| item.summary.allowed_tools.as_slice()),
+        );
         Ok(Self {
             manager,
             planner,
@@ -40,6 +49,7 @@ impl Orchestrator {
             app,
             task_id,
             session_id,
+            skill,
             cancel_rx,
         })
     }
@@ -88,7 +98,12 @@ impl Orchestrator {
             let context = self.manager.build_planner_context(self.task_id)?;
             let action = self
                 .planner
-                .plan(&config, &context, &self.tools.schemas())
+                .plan(
+                    &config,
+                    &context,
+                    &self.tools.schemas(),
+                    self.skill.as_ref(),
+                )
                 .await;
 
             let action = match action {
@@ -178,7 +193,9 @@ impl Orchestrator {
                                 AgentStepKind::ToolExecution,
                                 format!("已拒绝工具 {} 的执行", tool_name),
                                 Some(tool_name.clone()),
-                                args.get("command").and_then(|v| v.as_str()).map(|v| v.to_string()),
+                                args.get("command")
+                                    .and_then(|v| v.as_str())
+                                    .map(|v| v.to_string()),
                                 AgentStepStatus::Rejected,
                                 None,
                             )?;
@@ -294,7 +311,8 @@ impl Orchestrator {
                             "模型尝试完成任务，但没有提供有效总结。",
                         )?;
                     } else {
-                        self.manager.complete_task(&self.app, self.task_id, summary.trim())?;
+                        self.manager
+                            .complete_task(&self.app, self.task_id, summary.trim())?;
                     }
                     return Ok(());
                 }
@@ -332,7 +350,9 @@ impl Orchestrator {
             AgentStepKind::ToolExecution,
             rationale,
             Some(tool_name.to_string()),
-            args.get("command").and_then(|v| v.as_str()).map(|v| v.to_string()),
+            args.get("command")
+                .and_then(|v| v.as_str())
+                .map(|v| v.to_string()),
             AgentStepStatus::Running,
             None,
         )?;
@@ -351,7 +371,8 @@ impl Orchestrator {
                     AgentStepStatus::Completed,
                     Some(output.output.clone()),
                 )?;
-                self.manager.mark_last_successful_step(self.task_id, step.id)?;
+                self.manager
+                    .mark_last_successful_step(self.task_id, step.id)?;
                 self.manager.append_event(
                     &self.app,
                     self.task_id,

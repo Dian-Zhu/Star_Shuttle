@@ -38,7 +38,11 @@ pub(crate) fn execute_prepared_terminal_start(
     }
 }
 
-fn sync_backend_state_on_terminal_exit(app: &tauri::AppHandle, session_id: Uuid, exit_reason: &str) {
+fn sync_backend_state_on_terminal_exit(
+    app: &tauri::AppHandle,
+    session_id: Uuid,
+    exit_reason: &str,
+) {
     let manager_state = app.state::<Arc<RwLock<super::DefaultConnectionManager>>>();
     let write_result = manager_state.write();
     match write_result {

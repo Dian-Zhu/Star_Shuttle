@@ -1,5 +1,5 @@
-mod command_snippets;
 pub mod ai_store;
+mod command_snippets;
 
 use rusqlite::{params, Connection, Result};
 use uuid::Uuid;

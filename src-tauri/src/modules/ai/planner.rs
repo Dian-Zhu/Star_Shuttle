@@ -1,6 +1,7 @@
 use crate::modules::ai::{
     agent_types::{PlannerAction, PlannerContext},
     config::load_config,
+    skills::AiSkill,
     types::AiConfig,
 };
 use crate::modules::db::DatabaseManager;
@@ -48,9 +49,10 @@ impl Planner {
         config: &AiConfig,
         context: &PlannerContext,
         tool_schemas: &[serde_json::Value],
+        skill: Option<&AiSkill>,
     ) -> Result<PlannerAction, PlannerError> {
         let url = format!("{}/chat/completions", config.base_url.trim_end_matches('/'));
-        let system_prompt = "You are the planning brain for an SSH desktop agent.\n\
+        let mut system_prompt = "You are the planning brain for an SSH desktop agent.\n\
 Return exactly one JSON object with no markdown fences.\n\
 Allowed actions:\n\
 1. {\"type\":\"tool_call\",\"tool_name\":\"...\",\"args\":{...},\"rationale\":\"...\"}\n\
@@ -60,12 +62,20 @@ Rules:\n\
 - Use complete only when the task is actually finished and summary is non-empty.\n\
 - Use fail when the task cannot continue safely or meaningfully.\n\
 - Do not repeat a rejected command without materially changing it.\n\
-- Prefer read-only inspection first.";
+- Prefer read-only inspection first."
+            .to_string();
+        if let Some(skill) = skill {
+            system_prompt.push_str(&format!(
+                "\n\n=== Active Skill ===\nName: {}\nDescription: {}\n{}\n=== End Skill ===",
+                skill.summary.name, skill.summary.description, skill.system_prompt_fragment
+            ));
+        }
 
         let user_prompt = json!({
             "task": {
                 "instruction": context.instruction,
                 "session_id": context.session_id,
+                "skill": context.skill,
                 "sandbox_mode": context.sandbox_mode,
                 "status": context.status,
             },
@@ -85,7 +95,11 @@ Rules:\n\
             "stream": false
         });
 
-        let mut req = self.http.post(&url).header("Content-Type", "application/json").json(&body);
+        let mut req = self
+            .http
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .json(&body);
         if !config.api_key.is_empty() {
             req = req.header("Authorization", format!("Bearer {}", config.api_key));
         }
@@ -167,7 +181,10 @@ mod tests {
     #[test]
     fn strips_json_code_fence() {
         let text = "```json\n{\"type\":\"fail\",\"reason\":\"x\"}\n```";
-        assert_eq!(strip_code_fence(text), "{\"type\":\"fail\",\"reason\":\"x\"}");
+        assert_eq!(
+            strip_code_fence(text),
+            "{\"type\":\"fail\",\"reason\":\"x\"}"
+        );
     }
 
     #[test]

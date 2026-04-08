@@ -2,7 +2,8 @@ use crate::modules::connection::{
     auth_method_to_auth_type,
     connect_helpers::{immediate_hop, preflight_connectivity_check},
     credential_sync::fill_saved_credentials,
-    keyboard_interactive::TauriKeyboardInteractivePrompter, ssh_connect::connect_ssh_via_proxy,
+    keyboard_interactive::TauriKeyboardInteractivePrompter,
+    ssh_connect::connect_ssh_via_proxy,
     ssh_impl, ConnectionConfig, ConnectionError, ConnectionProtocol,
     KeyboardInteractiveCoordinator,
 };

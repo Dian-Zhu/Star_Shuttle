@@ -24,13 +24,28 @@ pub struct ChatMessage {
 
 impl ChatMessage {
     pub fn system(content: impl Into<String>) -> Self {
-        Self { role: MessageRole::System, content: content.into(), tool_call_id: None, name: None }
+        Self {
+            role: MessageRole::System,
+            content: content.into(),
+            tool_call_id: None,
+            name: None,
+        }
     }
     pub fn user(content: impl Into<String>) -> Self {
-        Self { role: MessageRole::User, content: content.into(), tool_call_id: None, name: None }
+        Self {
+            role: MessageRole::User,
+            content: content.into(),
+            tool_call_id: None,
+            name: None,
+        }
     }
     pub fn assistant(content: impl Into<String>) -> Self {
-        Self { role: MessageRole::Assistant, content: content.into(), tool_call_id: None, name: None }
+        Self {
+            role: MessageRole::Assistant,
+            content: content.into(),
+            tool_call_id: None,
+            name: None,
+        }
     }
 }
 
@@ -78,9 +93,15 @@ pub struct AiConfig {
     pub context_lines: u32,
 }
 
-fn default_temperature() -> f32 { 0.7 }
-fn default_max_tokens() -> u32 { 4096 }
-fn default_context_lines() -> u32 { 100 }
+fn default_temperature() -> f32 {
+    0.7
+}
+fn default_max_tokens() -> u32 {
+    4096
+}
+fn default_context_lines() -> u32 {
+    100
+}
 
 impl Default for AiConfig {
     fn default() -> Self {
@@ -114,6 +135,7 @@ pub struct StoredMessage {
     pub role: String,
     pub content: String,
     pub context_snapshot: Option<String>,
+    pub skill_id: Option<String>,
     pub created_at: String,
 }
 

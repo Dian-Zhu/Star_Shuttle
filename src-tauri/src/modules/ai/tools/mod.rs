@@ -45,17 +45,34 @@ impl ToolRegistry {
     pub fn new(
         connection_manager: Arc<RwLock<DefaultConnectionManager>>,
         sandbox_mode: SandboxMode,
+        allowed_tools: Option<&[String]>,
     ) -> Self {
         let mut tools: HashMap<String, Arc<dyn AgentTool>> = HashMap::new();
         let execute_command = Arc::new(execute_command::ExecuteCommandTool::new(
             connection_manager.clone(),
             sandbox_mode,
         ));
-        let get_system_info =
-            Arc::new(get_system_info::GetSystemInfoTool::new(connection_manager));
+        let get_system_info = Arc::new(get_system_info::GetSystemInfoTool::new(connection_manager));
 
-        tools.insert(execute_command.name().to_string(), execute_command);
-        tools.insert(get_system_info.name().to_string(), get_system_info);
+        let tool_list = [
+            (
+                execute_command.name().to_string(),
+                execute_command as Arc<dyn AgentTool>,
+            ),
+            (
+                get_system_info.name().to_string(),
+                get_system_info as Arc<dyn AgentTool>,
+            ),
+        ];
+
+        for (name, tool) in tool_list {
+            if allowed_tools
+                .map(|items| items.iter().any(|item| item == &name))
+                .unwrap_or(true)
+            {
+                tools.insert(name, tool);
+            }
+        }
 
         Self { tools }
     }

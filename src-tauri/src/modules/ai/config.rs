@@ -19,7 +19,8 @@ pub fn load_config(db: &Arc<Mutex<DatabaseManager>>) -> Result<AiConfig, String>
 pub fn save_config(db: &Arc<Mutex<DatabaseManager>>, config: &AiConfig) -> Result<(), String> {
     let json = serde_json::to_string(config).map_err(|e| e.to_string())?;
     let db = db.lock().map_err(|e| e.to_string())?;
-    db.save_setting(CONFIG_KEY, &json).map_err(|e| e.to_string())
+    db.save_setting(CONFIG_KEY, &json)
+        .map_err(|e| e.to_string())
 }
 
 /// 根据 provider 返回默认 base_url
@@ -47,7 +48,8 @@ pub fn default_model(provider: &AiProvider) -> &'static str {
 pub fn validate_agent_compatibility(config: &AiConfig) -> Result<(), String> {
     let base_url = config.base_url.trim();
     let uses_anthropic_native_api = matches!(config.provider, AiProvider::Claude)
-        && (base_url.contains(ANTHROPIC_API_HOST) || base_url == default_base_url(&AiProvider::Claude));
+        && (base_url.contains(ANTHROPIC_API_HOST)
+            || base_url == default_base_url(&AiProvider::Claude));
 
     if uses_anthropic_native_api {
         return Err(

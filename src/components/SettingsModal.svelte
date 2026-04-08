@@ -13,6 +13,7 @@
   import { applyScrollbarColor } from '../lib/terminalService';
   import { getShortcutFromKeyboardEvent, normalizeShortcut } from '../lib/shortcuts';
   import { getAiConfig, saveAiConfig, getProviderDefaults, testAiConnection, type AiConfig, DEFAULT_CONFIG } from '../lib/aiConfigService';
+  import AiSkillManager from './ai/AiSkillManager.svelte';
 
   let activeTab = 'terminal';
 
@@ -2269,6 +2270,8 @@
                 {aiTesting ? '测试中...' : '测试连接'}
               </button>
             </div>
+
+            <AiSkillManager />
           </div>
         {/if}
       </div>

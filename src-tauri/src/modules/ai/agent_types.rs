@@ -156,6 +156,7 @@ pub struct AgentTaskSnapshot {
     pub id: Uuid,
     pub session_id: Uuid,
     pub instruction: String,
+    pub skill_id: Option<String>,
     pub sandbox_mode: SandboxMode,
     pub status: AgentTaskStatus,
     pub steps: Vec<AgentStep>,
@@ -173,6 +174,7 @@ pub struct AgentTaskSummary {
     pub id: Uuid,
     pub session_id: Uuid,
     pub instruction: String,
+    pub skill_id: Option<String>,
     pub sandbox_mode: SandboxMode,
     pub status: AgentTaskStatus,
     pub summary: Option<String>,
@@ -220,10 +222,19 @@ pub struct PlannerContextStep {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlannerSkillContext {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub recommended_sandbox: Option<SandboxMode>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlannerContext {
     pub task_id: Uuid,
     pub session_id: Uuid,
     pub instruction: String,
+    pub skill: Option<PlannerSkillContext>,
     pub sandbox_mode: SandboxMode,
     pub status: AgentTaskStatus,
     pub steps: Vec<PlannerContextStep>,

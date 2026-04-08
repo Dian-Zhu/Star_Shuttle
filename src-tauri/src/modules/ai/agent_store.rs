@@ -52,12 +52,13 @@ pub fn save_task(conn: &Connection, task: &AgentTaskSnapshot) -> Result<(), Stri
 
     conn.execute(
         "INSERT INTO ai_agent_tasks (
-            id, session_id, instruction, sandbox_mode, status, summary, error_code, error_message,
+            id, session_id, instruction, skill_id, sandbox_mode, status, summary, error_code, error_message,
             pending_confirm_json, final_result_json, started_at, finished_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             session_id = excluded.session_id,
             instruction = excluded.instruction,
+            skill_id = excluded.skill_id,
             sandbox_mode = excluded.sandbox_mode,
             status = excluded.status,
             summary = excluded.summary,
@@ -71,6 +72,7 @@ pub fn save_task(conn: &Connection, task: &AgentTaskSnapshot) -> Result<(), Stri
             task.id.to_string(),
             task.session_id.to_string(),
             task.instruction,
+            task.skill_id,
             sandbox_mode_to_str(&task.sandbox_mode),
             task.status.as_str(),
             task.summary,
@@ -150,10 +152,18 @@ fn load_steps(conn: &Connection, task_id: Uuid) -> Result<Vec<AgentStep>, String
         .query_map(params![task_id.to_string()], |row| {
             let id = parse_uuid(row.get(0)?)?;
             let kind = AgentStepKind::from_str(&row.get::<_, String>(2)?).ok_or_else(|| {
-                rusqlite::Error::InvalidColumnType(2, "kind".to_string(), rusqlite::types::Type::Text)
+                rusqlite::Error::InvalidColumnType(
+                    2,
+                    "kind".to_string(),
+                    rusqlite::types::Type::Text,
+                )
             })?;
             let status = AgentStepStatus::from_str(&row.get::<_, String>(7)?).ok_or_else(|| {
-                rusqlite::Error::InvalidColumnType(7, "status".to_string(), rusqlite::types::Type::Text)
+                rusqlite::Error::InvalidColumnType(
+                    7,
+                    "status".to_string(),
+                    rusqlite::types::Type::Text,
+                )
             })?;
             Ok(AgentStep {
                 id,
@@ -171,14 +181,15 @@ fn load_steps(conn: &Connection, task_id: Uuid) -> Result<Vec<AgentStep>, String
         })
         .map_err(|e| e.to_string())?;
 
-    rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())
 }
 
 pub fn load_task(conn: &Connection, task_id: Uuid) -> Result<Option<AgentTaskSnapshot>, String> {
     let row = conn
         .query_row(
             "SELECT id, session_id, instruction, sandbox_mode, status, summary, error_code, error_message,
-                    pending_confirm_json, final_result_json, started_at, finished_at
+                    skill_id, pending_confirm_json, final_result_json, started_at, finished_at
              FROM ai_agent_tasks WHERE id = ?",
             params![task_id.to_string()],
             |row| {
@@ -188,23 +199,23 @@ pub fn load_task(conn: &Connection, task_id: Uuid) -> Result<Option<AgentTaskSna
                     rusqlite::Error::InvalidColumnType(4, "status".to_string(), rusqlite::types::Type::Text)
                 })?;
                 let pending_confirm = row
-                    .get::<_, Option<String>>(8)?
+                    .get::<_, Option<String>>(9)?
                     .map(|json| serde_json::from_str::<PendingConfirm>(&json))
                     .transpose()
                     .map_err(|e| {
                         rusqlite::Error::FromSqlConversionFailure(
-                            8,
+                            9,
                             rusqlite::types::Type::Text,
                             Box::new(e),
                         )
                     })?;
                 let final_result = row
-                    .get::<_, Option<String>>(9)?
+                    .get::<_, Option<String>>(10)?
                     .map(|json| serde_json::from_str::<AgentFinalResult>(&json))
                     .transpose()
                     .map_err(|e| {
                         rusqlite::Error::FromSqlConversionFailure(
-                            9,
+                            10,
                             rusqlite::types::Type::Text,
                             Box::new(e),
                         )
@@ -214,6 +225,7 @@ pub fn load_task(conn: &Connection, task_id: Uuid) -> Result<Option<AgentTaskSna
                     id,
                     session_id,
                     instruction: row.get(2)?,
+                    skill_id: row.get(8)?,
                     sandbox_mode: sandbox_mode_from_str(&row.get::<_, String>(3)?),
                     status,
                     steps: Vec::new(),
@@ -222,8 +234,8 @@ pub fn load_task(conn: &Connection, task_id: Uuid) -> Result<Option<AgentTaskSna
                     summary: row.get(5)?,
                     error_code: row.get(6)?,
                     error_message: row.get(7)?,
-                    started_at: row.get(10)?,
-                    finished_at: row.get(11)?,
+                    started_at: row.get(11)?,
+                    finished_at: row.get(12)?,
                 })
             },
         )
@@ -243,10 +255,10 @@ pub fn list_tasks(
     limit: u32,
 ) -> Result<Vec<AgentTaskSummary>, String> {
     let sql = if session_id.is_some() {
-        "SELECT id, session_id, instruction, sandbox_mode, status, summary, error_code, error_message, started_at, finished_at
+        "SELECT id, session_id, instruction, skill_id, sandbox_mode, status, summary, error_code, error_message, started_at, finished_at
          FROM ai_agent_tasks WHERE session_id = ? ORDER BY started_at DESC LIMIT ?"
     } else {
-        "SELECT id, session_id, instruction, sandbox_mode, status, summary, error_code, error_message, started_at, finished_at
+        "SELECT id, session_id, instruction, skill_id, sandbox_mode, status, summary, error_code, error_message, started_at, finished_at
          FROM ai_agent_tasks ORDER BY started_at DESC LIMIT ?"
     };
     let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
@@ -256,15 +268,20 @@ pub fn list_tasks(
             id: parse_uuid(row.get(0)?)?,
             session_id: parse_uuid(row.get(1)?)?,
             instruction: row.get(2)?,
-            sandbox_mode: sandbox_mode_from_str(&row.get::<_, String>(3)?),
-            status: AgentTaskStatus::from_str(&row.get::<_, String>(4)?).ok_or_else(|| {
-                rusqlite::Error::InvalidColumnType(4, "status".to_string(), rusqlite::types::Type::Text)
+            skill_id: row.get(3)?,
+            sandbox_mode: sandbox_mode_from_str(&row.get::<_, String>(4)?),
+            status: AgentTaskStatus::from_str(&row.get::<_, String>(5)?).ok_or_else(|| {
+                rusqlite::Error::InvalidColumnType(
+                    5,
+                    "status".to_string(),
+                    rusqlite::types::Type::Text,
+                )
             })?,
-            summary: row.get(5)?,
-            error_code: row.get(6)?,
-            error_message: row.get(7)?,
-            started_at: row.get(8)?,
-            finished_at: row.get(9)?,
+            summary: row.get(6)?,
+            error_code: row.get(7)?,
+            error_message: row.get(8)?,
+            started_at: row.get(9)?,
+            finished_at: row.get(10)?,
         })
     };
 
@@ -272,10 +289,12 @@ pub fn list_tasks(
         stmt.query_map(params![session_id.to_string(), limit], mapper)
             .map_err(|e| e.to_string())?
     } else {
-        stmt.query_map(params![limit], mapper).map_err(|e| e.to_string())?
+        stmt.query_map(params![limit], mapper)
+            .map_err(|e| e.to_string())?
     };
 
-    rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())
 }
 
 pub fn list_events(conn: &Connection, task_id: Uuid) -> Result<Vec<AgentEvent>, String> {
@@ -305,7 +324,8 @@ pub fn list_events(conn: &Connection, task_id: Uuid) -> Result<Vec<AgentEvent>, 
         })
         .map_err(|e| e.to_string())?;
 
-    rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -326,6 +346,7 @@ mod tests {
             id: task_id,
             session_id,
             instruction: "list containers".to_string(),
+            skill_id: Some("docker_troubleshooting".to_string()),
             sandbox_mode: SandboxMode::Standard,
             status: AgentTaskStatus::Completed,
             steps: vec![AgentStep {
@@ -370,8 +391,11 @@ mod tests {
         )
         .expect("save event");
 
-        let loaded = load_task(&conn, task_id).expect("load task").expect("task exists");
+        let loaded = load_task(&conn, task_id)
+            .expect("load task")
+            .expect("task exists");
         assert_eq!(loaded.summary.as_deref(), Some("done"));
+        assert_eq!(loaded.skill_id.as_deref(), Some("docker_troubleshooting"));
         assert_eq!(loaded.steps.len(), 1);
 
         let listed = list_tasks(&conn, None, 10).expect("list tasks");
@@ -390,13 +414,19 @@ mod tests {
         let session_b = Uuid::new_v4();
 
         for (session_id, instruction, status, error_code) in [
-            (session_a, "inspect nginx", AgentTaskStatus::Failed, Some("planner_failed")),
+            (
+                session_a,
+                "inspect nginx",
+                AgentTaskStatus::Failed,
+                Some("planner_failed"),
+            ),
             (session_b, "check disk", AgentTaskStatus::Completed, None),
         ] {
             let snapshot = AgentTaskSnapshot {
                 id: Uuid::new_v4(),
                 session_id,
                 instruction: instruction.to_string(),
+                skill_id: None,
                 sandbox_mode: SandboxMode::Standard,
                 status: status.clone(),
                 steps: Vec::new(),
@@ -420,7 +450,10 @@ mod tests {
         let session_a_tasks = list_tasks(&conn, Some(session_a), 10).expect("list filtered tasks");
         assert_eq!(session_a_tasks.len(), 1);
         assert_eq!(session_a_tasks[0].instruction, "inspect nginx");
-        assert_eq!(session_a_tasks[0].error_code.as_deref(), Some("planner_failed"));
+        assert_eq!(
+            session_a_tasks[0].error_code.as_deref(),
+            Some("planner_failed")
+        );
     }
 
     #[test]
@@ -440,6 +473,7 @@ mod tests {
             id: task_id,
             session_id: Uuid::new_v4(),
             instruction: "restart nginx".to_string(),
+            skill_id: Some("log_diagnostics".to_string()),
             sandbox_mode: SandboxMode::Standard,
             status: AgentTaskStatus::WaitingConfirm,
             steps: Vec::new(),
@@ -453,9 +487,14 @@ mod tests {
         };
 
         save_task(&conn, &snapshot).expect("save task");
-        let loaded = load_task(&conn, task_id).expect("load task").expect("task exists");
+        let loaded = load_task(&conn, task_id)
+            .expect("load task")
+            .expect("task exists");
         assert_eq!(
-            loaded.pending_confirm.as_ref().map(|item| item.command.as_str()),
+            loaded
+                .pending_confirm
+                .as_ref()
+                .map(|item| item.command.as_str()),
             Some("systemctl restart nginx")
         );
     }

@@ -1,6 +1,7 @@
 use crate::modules::ai::{
     client::LlmClient,
     config::load_config,
+    skills::{resolve_skill, AiSkill, SkillMode},
     types::{AiConfig, ChatMessage, Conversation, StoredMessage, StreamEvent, TerminalContext},
 };
 use crate::modules::db::DatabaseManager;
@@ -46,9 +47,9 @@ impl ChatManager {
 
     pub fn cancel_active_request(&self, conversation_id: Uuid) -> Result<(), String> {
         let inflight = self.inflight_requests.lock().map_err(|e| e.to_string())?;
-        let request_id = inflight
-            .iter()
-            .find_map(|(request_id, request)| (request.conversation_id == conversation_id).then_some(*request_id));
+        let request_id = inflight.iter().find_map(|(request_id, request)| {
+            (request.conversation_id == conversation_id).then_some(*request_id)
+        });
         drop(inflight);
 
         let Some(request_id) = request_id else {
@@ -83,13 +84,15 @@ impl ChatManager {
             .map_err(|e| e.to_string())?;
         Ok(rows
             .into_iter()
-            .map(|(id, title, session_id, created_at, updated_at)| Conversation {
-                id: Uuid::parse_str(&id).unwrap_or_default(),
-                title,
-                session_id: session_id.and_then(|s| Uuid::parse_str(&s).ok()),
-                created_at,
-                updated_at,
-            })
+            .map(
+                |(id, title, session_id, created_at, updated_at)| Conversation {
+                    id: Uuid::parse_str(&id).unwrap_or_default(),
+                    title,
+                    session_id: session_id.and_then(|s| Uuid::parse_str(&s).ok()),
+                    created_at,
+                    updated_at,
+                },
+            )
             .collect())
     }
 
@@ -100,14 +103,17 @@ impl ChatManager {
             .map_err(|e| e.to_string())?;
         Ok(rows
             .into_iter()
-            .map(|(id, role, content, context_snapshot, created_at)| StoredMessage {
-                id: Uuid::parse_str(&id).unwrap_or_default(),
-                conversation_id,
-                role,
-                content,
-                context_snapshot,
-                created_at,
-            })
+            .map(
+                |(id, role, content, context_snapshot, skill_id, created_at)| StoredMessage {
+                    id: Uuid::parse_str(&id).unwrap_or_default(),
+                    conversation_id,
+                    role,
+                    content,
+                    context_snapshot,
+                    skill_id,
+                    created_at,
+                },
+            )
             .collect())
     }
 
@@ -132,10 +138,12 @@ impl ChatManager {
         conversation_id: Uuid,
         user_content: String,
         terminal_context: Option<TerminalContext>,
+        skill_id: Option<String>,
     ) -> Result<String, String> {
         use tauri::Emitter;
 
         let config = load_config(&self.db)?;
+        let skill = resolve_skill(&self.db, skill_id.as_deref(), SkillMode::Chat)?;
 
         // 构建历史消息
         let history = self.get_messages(conversation_id)?;
@@ -152,12 +160,19 @@ impl ChatManager {
                 "user",
                 &user_content,
                 context_snapshot.as_deref(),
+                skill.as_ref().map(|item| item.summary.id.as_str()),
             )
             .map_err(|e| e.to_string())?;
         }
 
         // 构建发送给 LLM 的消息列表
-        let messages = build_messages(&history, &user_content, &config, terminal_context.as_ref());
+        let messages = build_messages(
+            &history,
+            &user_content,
+            &config,
+            terminal_context.as_ref(),
+            skill.as_ref(),
+        );
 
         // 注册可取消请求
         let request_id = Uuid::new_v4();
@@ -180,9 +195,14 @@ impl ChatManager {
 
         let full_response = self
             .client
-            .stream_chat(&config, &messages, move |event| {
-                let _ = app_clone.emit(&event_name_clone, &event);
-            }, Some(cancel_rx))
+            .stream_chat(
+                &config,
+                &messages,
+                move |event| {
+                    let _ = app_clone.emit(&event_name_clone, &event);
+                },
+                Some(cancel_rx),
+            )
             .await;
 
         {
@@ -206,6 +226,7 @@ impl ChatManager {
                 "assistant",
                 &full_response,
                 None,
+                skill.as_ref().map(|item| item.summary.id.as_str()),
             )
             .map_err(|e| e.to_string())?;
         }
@@ -237,11 +258,18 @@ fn build_messages(
     user_content: &str,
     _config: &AiConfig,
     terminal_context: Option<&TerminalContext>,
+    skill: Option<&AiSkill>,
 ) -> Vec<ChatMessage> {
     let mut messages = Vec::new();
 
     // 系统提示
     let mut system_prompt = SYSTEM_PROMPT_BASE.to_string();
+    if let Some(skill) = skill {
+        system_prompt.push_str(&format!(
+            "\n\n=== Active Skill ===\nName: {}\nDescription: {}\n{}\n=== End Skill ===",
+            skill.summary.name, skill.summary.description, skill.system_prompt_fragment
+        ));
+    }
     if let Some(ctx) = terminal_context {
         system_prompt.push_str(&format!(
             "\n\n=== Terminal Context ===\nHost: {}\n\n{}\n=== End Context ===",
@@ -258,7 +286,12 @@ fn build_messages(
             "assistant" => crate::modules::ai::types::MessageRole::Assistant,
             _ => continue,
         };
-        messages.push(ChatMessage { role, content: msg.content.clone(), tool_call_id: None, name: None });
+        messages.push(ChatMessage {
+            role,
+            content: msg.content.clone(),
+            tool_call_id: None,
+            name: None,
+        });
     }
 
     // 当前用户消息
@@ -273,5 +306,57 @@ fn generate_title(content: &str) -> String {
         trimmed.to_string()
     } else {
         format!("{}...", &trimmed[..37])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_messages;
+    use crate::modules::ai::{
+        skills::{resolve_skill, SkillMode},
+        types::{AiConfig, StoredMessage},
+    };
+    use crate::modules::db::DatabaseManager;
+    use std::sync::{Arc, Mutex};
+    use uuid::Uuid;
+
+    #[test]
+    fn build_messages_includes_skill_prompt_fragment() {
+        let history: Vec<StoredMessage> = Vec::new();
+        let db = Arc::new(Mutex::new(
+            DatabaseManager::new(":memory:").expect("in-memory db"),
+        ));
+        let skill = resolve_skill(&db, Some("log_diagnostics"), SkillMode::Chat)
+            .expect("resolve")
+            .expect("skill");
+
+        let messages = build_messages(
+            &history,
+            "check logs",
+            &AiConfig::default(),
+            None,
+            Some(&skill),
+        );
+
+        assert!(messages[0].content.contains("Active Skill"));
+        assert!(messages[0].content.contains("日志诊断"));
+    }
+
+    #[test]
+    fn build_messages_keeps_history_and_user_message() {
+        let history = vec![StoredMessage {
+            id: Uuid::new_v4(),
+            conversation_id: Uuid::new_v4(),
+            role: "assistant".to_string(),
+            content: "previous".to_string(),
+            context_snapshot: None,
+            skill_id: None,
+            created_at: "2026-04-08T00:00:00Z".to_string(),
+        }];
+
+        let messages = build_messages(&history, "next", &AiConfig::default(), None, None);
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[1].content, "previous");
+        assert_eq!(messages[2].content, "next");
     }
 }

@@ -615,7 +615,10 @@ where
         }
         Err(e) => {
             error!("Authentication error (details redacted for security)");
-            return Err(anyhow!("Authentication failed: {}", classify_auth_error(&e)));
+            return Err(anyhow!(
+                "Authentication failed: {}",
+                classify_auth_error(&e)
+            ));
         }
     };
 

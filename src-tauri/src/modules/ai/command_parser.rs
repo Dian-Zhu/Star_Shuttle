@@ -68,7 +68,10 @@ fn split_commands(input: &str) -> Vec<&str> {
     if start < input.len() {
         segments.push(&input[start..]);
     }
-    segments.into_iter().filter(|s| !s.trim().is_empty()).collect()
+    segments
+        .into_iter()
+        .filter(|s| !s.trim().is_empty())
+        .collect()
 }
 
 /// 解析单个命令段（提取命令名和参数）
@@ -104,7 +107,11 @@ fn parse_single(segment: &str) -> Option<ParsedCommand> {
     let name = tokens[idx].clone();
     let args = tokens[idx + 1..].to_vec();
 
-    Some(ParsedCommand { name, args, raw: segment.to_string() })
+    Some(ParsedCommand {
+        name,
+        args,
+        raw: segment.to_string(),
+    })
 }
 
 /// 简单 tokenizer（按空白分词，保留引号内内容）

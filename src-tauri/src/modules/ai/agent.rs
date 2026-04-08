@@ -2,9 +2,11 @@ use crate::modules::ai::agent_store;
 use crate::modules::ai::agent_types::{
     AgentEvent, AgentFinalResult, AgentStep, AgentStepKind, AgentStepStatus, AgentTaskSnapshot,
     AgentTaskStatus, AgentTaskSummary, PendingConfirm, PlannerContext, PlannerContextStep,
+    PlannerSkillContext,
 };
 use crate::modules::ai::orchestrator::Orchestrator;
 use crate::modules::ai::sandbox::SandboxMode;
+use crate::modules::ai::skills::{resolve_skill, SkillMode};
 use crate::modules::connection::DefaultConnectionManager;
 use crate::modules::db::DatabaseManager;
 use serde_json::Value;
@@ -74,13 +76,16 @@ impl AgentManager {
         session_id: Uuid,
         instruction: String,
         sandbox_mode: SandboxMode,
+        skill_id: Option<String>,
     ) -> Result<Uuid, String> {
+        let skill = resolve_skill(&self.db, skill_id.as_deref(), SkillMode::Agent)?;
         let task_id = Uuid::new_v4();
         let started_at = agent_store::now_string();
         let snapshot = AgentTaskSnapshot {
             id: task_id,
             session_id,
             instruction,
+            skill_id: skill.as_ref().map(|item| item.summary.id.clone()),
             sandbox_mode,
             status: AgentTaskStatus::Queued,
             steps: Vec::new(),
@@ -122,6 +127,7 @@ impl AgentManager {
             task_id,
             session_id,
             sandbox_mode,
+            skill,
             cancel_rx,
         )?;
         tokio::spawn(async move {
@@ -183,6 +189,18 @@ impl AgentManager {
             task_id: snapshot.id,
             session_id: snapshot.session_id,
             instruction: snapshot.instruction,
+            skill: snapshot
+                .skill_id
+                .as_deref()
+                .map(|skill_id| resolve_skill(&self.db, Some(skill_id), SkillMode::Agent))
+                .transpose()?
+                .flatten()
+                .map(|skill| PlannerSkillContext {
+                    id: skill.summary.id,
+                    name: skill.summary.name,
+                    description: skill.summary.description,
+                    recommended_sandbox: skill.summary.recommended_sandbox,
+                }),
             sandbox_mode: snapshot.sandbox_mode,
             status: snapshot.status,
             steps: snapshot
@@ -562,8 +580,8 @@ mod tests {
     use super::{AgentManager, RuntimeTask};
     use crate::modules::ai::agent_store;
     use crate::modules::ai::agent_types::{
-        AgentFinalResult, AgentStepKind, AgentStepStatus, AgentTaskSnapshot, AgentTaskStatus,
-        PendingConfirm,
+        AgentEvent, AgentFinalResult, AgentStep, AgentStepKind, AgentStepStatus, AgentTaskSnapshot,
+        AgentTaskStatus, PendingConfirm,
     };
     use crate::modules::ai::sandbox::SandboxMode;
     use crate::modules::connection::DefaultConnectionManager;
@@ -573,7 +591,9 @@ mod tests {
 
     fn build_manager() -> Arc<AgentManager> {
         Arc::new(AgentManager::new(
-            Arc::new(Mutex::new(DatabaseManager::new(":memory:").expect("in-memory db"))),
+            Arc::new(Mutex::new(
+                DatabaseManager::new(":memory:").expect("in-memory db"),
+            )),
             Arc::new(RwLock::new(DefaultConnectionManager::new())),
         ))
     }
@@ -588,6 +608,7 @@ mod tests {
             id: task_id,
             session_id: Uuid::new_v4(),
             instruction: "test instruction".to_string(),
+            skill_id: None,
             sandbox_mode: SandboxMode::Standard,
             status,
             steps: Vec::new(),
@@ -599,20 +620,44 @@ mod tests {
             started_at: agent_store::now_string(),
             finished_at: None,
         };
+        manager.tasks.lock().expect("task mutex").insert(
+            task_id,
+            RuntimeTask {
+                snapshot,
+                next_step_seq: 1,
+                next_event_seq: 1,
+                last_successful_step_id: None,
+            },
+        );
         manager
-            .tasks
-            .lock()
-            .expect("task mutex")
-            .insert(
-                task_id,
-                RuntimeTask {
-                    snapshot,
-                    next_step_seq: 1,
-                    next_event_seq: 1,
-                    last_successful_step_id: None,
-                },
-            );
+            .persist_snapshot(
+                &manager
+                    .get_task(task_id)
+                    .expect("load task")
+                    .expect("task exists"),
+            )
+            .expect("persist snapshot");
         task_id
+    }
+
+    fn persist_history_task(
+        manager: &AgentManager,
+        snapshot: AgentTaskSnapshot,
+        events: &[AgentEvent],
+    ) {
+        manager
+            .persist_snapshot(&snapshot)
+            .expect("persist history snapshot");
+        for step in &snapshot.steps {
+            manager
+                .persist_step(snapshot.id, step)
+                .expect("persist history step");
+        }
+
+        let db = manager.db.lock().expect("db mutex");
+        for event in events {
+            agent_store::append_event(db.conn(), event).expect("persist history event");
+        }
     }
 
     #[test]
@@ -657,7 +702,9 @@ mod tests {
             }),
         );
 
-        manager.clear_pending_confirm(task_id).expect("clear confirm");
+        manager
+            .clear_pending_confirm(task_id)
+            .expect("clear confirm");
 
         let task = manager
             .get_task(task_id)
@@ -682,7 +729,9 @@ mod tests {
             }),
         );
 
-        manager.clear_pending_confirm(task_id).expect("clear confirm");
+        manager
+            .clear_pending_confirm(task_id)
+            .expect("clear confirm");
 
         let task = manager
             .get_task(task_id)
@@ -700,6 +749,7 @@ mod tests {
             id: task_id,
             session_id: Uuid::new_v4(),
             instruction: "late tool".to_string(),
+            skill_id: None,
             sandbox_mode: SandboxMode::Standard,
             status: AgentTaskStatus::Cancelled,
             steps: Vec::new(),
@@ -718,19 +768,15 @@ mod tests {
             finished_at: None,
         };
 
-        manager
-            .tasks
-            .lock()
-            .expect("task mutex")
-            .insert(
-                task_id,
-                RuntimeTask {
-                    snapshot: snapshot.clone(),
-                    next_step_seq: 1,
-                    next_event_seq: 1,
-                    last_successful_step_id: None,
-                },
-            );
+        manager.tasks.lock().expect("task mutex").insert(
+            task_id,
+            RuntimeTask {
+                snapshot: snapshot.clone(),
+                next_step_seq: 1,
+                next_event_seq: 1,
+                last_successful_step_id: None,
+            },
+        );
 
         let step = manager
             .add_step(
@@ -760,5 +806,195 @@ mod tests {
         let final_result = task.final_result.expect("final result");
         assert_eq!(final_result.status, AgentTaskStatus::Cancelled);
         assert_eq!(final_result.error_code.as_deref(), Some("task_cancelled"));
+    }
+
+    #[test]
+    fn get_task_falls_back_to_persisted_history_when_runtime_is_missing() {
+        let manager = build_manager();
+        let task_id = Uuid::new_v4();
+        let step_id = Uuid::new_v4();
+        let snapshot = AgentTaskSnapshot {
+            id: task_id,
+            session_id: Uuid::new_v4(),
+            instruction: "inspect disk".to_string(),
+            skill_id: Some("system_health_check".to_string()),
+            sandbox_mode: SandboxMode::Standard,
+            status: AgentTaskStatus::Completed,
+            steps: vec![AgentStep {
+                id: step_id,
+                seq: 1,
+                kind: AgentStepKind::ToolExecution,
+                title: "执行 df -h".to_string(),
+                tool_name: Some("execute_command".to_string()),
+                command: Some("df -h".to_string()),
+                output: Some("Filesystem ...".to_string()),
+                status: AgentStepStatus::Completed,
+                risk_level: None,
+                started_at: agent_store::now_string(),
+                finished_at: Some(agent_store::now_string()),
+            }],
+            pending_confirm: None,
+            final_result: Some(AgentFinalResult {
+                status: AgentTaskStatus::Completed,
+                summary: Some("磁盘空间正常".to_string()),
+                error_code: None,
+                error_message: None,
+                last_successful_step_id: Some(step_id),
+            }),
+            summary: Some("磁盘空间正常".to_string()),
+            error_code: None,
+            error_message: None,
+            started_at: agent_store::now_string(),
+            finished_at: Some(agent_store::now_string()),
+        };
+
+        persist_history_task(
+            &manager,
+            snapshot,
+            &[AgentEvent {
+                id: Uuid::new_v4(),
+                task_id,
+                seq: 1,
+                event_type: "task_completed".to_string(),
+                payload_json: serde_json::json!({ "summary": "磁盘空间正常" }),
+                created_at: agent_store::now_string(),
+            }],
+        );
+
+        let loaded = manager
+            .get_task(task_id)
+            .expect("load task")
+            .expect("task exists");
+        assert_eq!(loaded.status, AgentTaskStatus::Completed);
+        assert_eq!(loaded.steps.len(), 1);
+        assert_eq!(loaded.summary.as_deref(), Some("磁盘空间正常"));
+    }
+
+    #[test]
+    fn list_tasks_returns_session_history_in_descending_order() {
+        let manager = build_manager();
+        let session_a = Uuid::new_v4();
+        let session_b = Uuid::new_v4();
+        let snapshots = [
+            AgentTaskSnapshot {
+                id: Uuid::new_v4(),
+                session_id: session_a,
+                instruction: "older".to_string(),
+                skill_id: None,
+                sandbox_mode: SandboxMode::Standard,
+                status: AgentTaskStatus::Completed,
+                steps: Vec::new(),
+                pending_confirm: None,
+                final_result: None,
+                summary: Some("older".to_string()),
+                error_code: None,
+                error_message: None,
+                started_at: "2026-04-08T10:00:00Z".to_string(),
+                finished_at: Some("2026-04-08T10:00:01Z".to_string()),
+            },
+            AgentTaskSnapshot {
+                id: Uuid::new_v4(),
+                session_id: session_a,
+                instruction: "newer".to_string(),
+                skill_id: Some("log_diagnostics".to_string()),
+                sandbox_mode: SandboxMode::Standard,
+                status: AgentTaskStatus::Failed,
+                steps: Vec::new(),
+                pending_confirm: None,
+                final_result: None,
+                summary: None,
+                error_code: Some("planner_failed".to_string()),
+                error_message: Some("boom".to_string()),
+                started_at: "2026-04-08T11:00:00Z".to_string(),
+                finished_at: Some("2026-04-08T11:00:01Z".to_string()),
+            },
+            AgentTaskSnapshot {
+                id: Uuid::new_v4(),
+                session_id: session_b,
+                instruction: "other session".to_string(),
+                skill_id: None,
+                sandbox_mode: SandboxMode::Standard,
+                status: AgentTaskStatus::Cancelled,
+                steps: Vec::new(),
+                pending_confirm: None,
+                final_result: None,
+                summary: None,
+                error_code: Some("task_cancelled".to_string()),
+                error_message: Some("cancelled".to_string()),
+                started_at: "2026-04-08T12:00:00Z".to_string(),
+                finished_at: Some("2026-04-08T12:00:01Z".to_string()),
+            },
+        ];
+
+        for snapshot in snapshots {
+            persist_history_task(&manager, snapshot, &[]);
+        }
+
+        let tasks = manager
+            .list_tasks(Some(session_a), 10)
+            .expect("list session tasks");
+        assert_eq!(tasks.len(), 2);
+        assert_eq!(tasks[0].instruction, "newer");
+        assert_eq!(tasks[1].instruction, "older");
+    }
+
+    #[test]
+    fn get_task_events_returns_ordered_history_for_replay() {
+        let manager = build_manager();
+        let task_id = Uuid::new_v4();
+        let snapshot = AgentTaskSnapshot {
+            id: task_id,
+            session_id: Uuid::new_v4(),
+            instruction: "restart nginx".to_string(),
+            skill_id: Some("log_diagnostics".to_string()),
+            sandbox_mode: SandboxMode::Standard,
+            status: AgentTaskStatus::Failed,
+            steps: Vec::new(),
+            pending_confirm: None,
+            final_result: None,
+            summary: None,
+            error_code: Some("planner_failed".to_string()),
+            error_message: Some("等待确认超时".to_string()),
+            started_at: agent_store::now_string(),
+            finished_at: Some(agent_store::now_string()),
+        };
+
+        persist_history_task(
+            &manager,
+            snapshot,
+            &[
+                AgentEvent {
+                    id: Uuid::new_v4(),
+                    task_id,
+                    seq: 2,
+                    event_type: "confirmation_timed_out".to_string(),
+                    payload_json: serde_json::json!({ "command": "systemctl restart nginx" }),
+                    created_at: agent_store::now_string(),
+                },
+                AgentEvent {
+                    id: Uuid::new_v4(),
+                    task_id,
+                    seq: 1,
+                    event_type: "confirmation_requested".to_string(),
+                    payload_json: serde_json::json!({ "command": "systemctl restart nginx" }),
+                    created_at: agent_store::now_string(),
+                },
+                AgentEvent {
+                    id: Uuid::new_v4(),
+                    task_id,
+                    seq: 3,
+                    event_type: "task_failed".to_string(),
+                    payload_json: serde_json::json!({ "error_code": "planner_failed" }),
+                    created_at: agent_store::now_string(),
+                },
+            ],
+        );
+
+        let events = manager.get_task_events(task_id).expect("load task events");
+        assert_eq!(
+            events.iter().map(|event| event.seq).collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+        assert_eq!(events[1].event_type, "confirmation_timed_out");
     }
 }

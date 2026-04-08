@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { writable } from 'svelte/store';
+import { get, writable } from 'svelte/store';
+import { deriveAgentHistoryMeta, type AgentHistoryCause } from './agentHistory';
 
 export type AgentStatus =
   | 'queued'
@@ -51,6 +52,7 @@ export interface AgentTaskSnapshot {
   id: string;
   session_id: string;
   instruction: string;
+  skill_id: string | null;
   sandbox_mode: 'standard' | 'full';
   status: AgentStatus;
   steps: AgentStep[];
@@ -67,6 +69,7 @@ export interface AgentTaskSummary {
   id: string;
   session_id: string;
   instruction: string;
+  skill_id: string | null;
   sandbox_mode: 'standard' | 'full';
   status: AgentStatus;
   summary: string | null;
@@ -74,6 +77,9 @@ export interface AgentTaskSummary {
   error_message: string | null;
   started_at: string;
   finished_at: string | null;
+  history_cause?: AgentHistoryCause | null;
+  history_cause_label?: string | null;
+  history_preview?: string | null;
 }
 
 export interface AgentEvent {
@@ -95,24 +101,39 @@ let taskUnsub: UnlistenFn | null = null;
 let eventUnsub: UnlistenFn | null = null;
 let currentSessionId: string | null = null;
 
-function upsertHistoryItem(task: AgentTaskSnapshot) {
+function toTaskSummary(task: AgentTaskSnapshot): AgentTaskSummary {
+  return {
+    id: task.id,
+    session_id: task.session_id,
+    instruction: task.instruction,
+    skill_id: task.skill_id,
+    sandbox_mode: task.sandbox_mode,
+    status: task.status,
+    summary: task.summary,
+    error_code: task.error_code,
+    error_message: task.error_message,
+    started_at: task.started_at,
+    finished_at: task.finished_at,
+  };
+}
+
+function decorateHistoryItem(task: AgentTaskSummary, events: AgentEvent[] = []): AgentTaskSummary {
+  const meta = deriveAgentHistoryMeta(task, events);
+  return {
+    ...task,
+    history_cause: meta.cause,
+    history_cause_label: meta.causeLabel,
+    history_preview: meta.preview,
+  };
+}
+
+function upsertHistoryItem(task: AgentTaskSnapshot, events: AgentEvent[] = []) {
   taskHistory.update((tasks) => {
     const next = [...tasks];
-    const summary = {
-      id: task.id,
-      session_id: task.session_id,
-      instruction: task.instruction,
-      sandbox_mode: task.sandbox_mode,
-      status: task.status,
-      summary: task.summary,
-      error_code: task.error_code,
-      error_message: task.error_message,
-      started_at: task.started_at,
-      finished_at: task.finished_at,
-    } satisfies AgentTaskSummary;
+    const summary = decorateHistoryItem(toTaskSummary(task), events);
     const index = next.findIndex((item) => item.id === task.id);
     if (index >= 0) {
-      next[index] = summary;
+      next[index] = { ...next[index], ...summary };
     } else {
       next.unshift(summary);
     }
@@ -127,11 +148,18 @@ async function subscribeToTask(taskId: string) {
   taskUnsub = await listen<AgentTaskSnapshot>(`ai-agent-task-${taskId}`, (ev) => {
     activeTask.set(ev.payload);
     pendingConfirm.set(ev.payload.pending_confirm ?? null);
-    upsertHistoryItem(ev.payload);
+    upsertHistoryItem(ev.payload, get(activeTaskEvents));
   });
 
   eventUnsub = await listen<AgentEvent>(`ai-agent-event-${taskId}`, (ev) => {
-    activeTaskEvents.update((events) => [...events, ev.payload].sort((a, b) => a.seq - b.seq));
+    activeTaskEvents.update((events) => {
+      const next = [...events, ev.payload].sort((a, b) => a.seq - b.seq);
+      const task = get(activeTask);
+      if (task?.id === taskId) {
+        upsertHistoryItem(task, next);
+      }
+      return next;
+    });
   });
 }
 
@@ -141,7 +169,15 @@ export async function loadTaskHistory(sessionId?: string | null): Promise<void> 
     sessionId: currentSessionId ?? undefined,
     limit: 20,
   });
-  taskHistory.set(tasks);
+  const decoratedTasks = await Promise.all(
+    tasks.map(async (task) =>
+      decorateHistoryItem(
+        task,
+        await invoke<AgentEvent[]>('ai_agent_get_task_events', { taskId: task.id }),
+      ),
+    ),
+  );
+  taskHistory.set(decoratedTasks);
 }
 
 export async function openTask(taskId: string): Promise<void> {
@@ -155,7 +191,7 @@ export async function openTask(taskId: string): Promise<void> {
   activeTaskEvents.set(events);
   pendingConfirm.set(task?.pending_confirm ?? null);
   if (task) {
-    upsertHistoryItem(task);
+    upsertHistoryItem(task, events);
   }
 }
 
@@ -163,12 +199,14 @@ export async function startAgent(
   sessionId: string,
   instruction: string,
   mode: 'standard' | 'full',
+  skillId: string | null,
 ): Promise<string> {
   currentSessionId = sessionId;
   const taskId = await invoke<string>('ai_agent_start', {
     sessionId,
     instruction,
     sandboxMode: mode,
+    skillId,
   });
   await openTask(taskId);
   await loadTaskHistory(sessionId);

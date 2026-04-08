@@ -18,6 +18,7 @@ export interface StoredMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
   context_snapshot: string | null;
+  skill_id: string | null;
   created_at: string;
 }
 
@@ -88,6 +89,7 @@ export async function sendMessage(
   conversationId: string,
   sessionId: string | null,
   includeContext: boolean,
+  skillId: string | null,
   onDelta?: (delta: string) => void,
 ): Promise<void> {
   isSending.set(true);
@@ -119,6 +121,7 @@ export async function sendMessage(
       role: 'user',
       content,
       context_snapshot: contextSnapshot,
+      skill_id: skillId,
       created_at: new Date().toISOString(),
     };
 
@@ -132,6 +135,7 @@ export async function sendMessage(
       role: 'assistant',
       content: '',
       context_snapshot: null,
+      skill_id: skillId,
       created_at: new Date().toISOString(),
     };
     messages.update(m => [...m, tempAiMsg]);
@@ -162,6 +166,7 @@ export async function sendMessage(
         content,
         sessionId: sessionId ?? null,
         includeTerminalContext: includeContext,
+        skillId,
       });
 
       // After completion, reload messages from DB to get the real IDs
@@ -194,4 +199,3 @@ export async function sendMessage(
 export async function cancelMessage(conversationId: string): Promise<void> {
   await invoke('ai_chat_cancel', { conversationId });
 }
-

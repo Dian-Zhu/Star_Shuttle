@@ -83,7 +83,8 @@ impl AgentTool for ExecuteCommandTool {
         let cmd = command.clone();
         let output = tokio::task::spawn_blocking(move || {
             let mgr = cm.read().map_err(|e| e.to_string())?;
-            mgr.exec_command(&session_id, &cmd).map_err(|e| e.to_string())
+            mgr.exec_command(&session_id, &cmd)
+                .map_err(|e| e.to_string())
         })
         .await
         .map_err(|e| e.to_string())??;
@@ -110,9 +111,14 @@ mod tests {
     #[test]
     fn authorize_allows_safe_command() {
         let tool = tool(SandboxMode::Standard);
-        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("runtime");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
         let result = runtime
-            .block_on(tool.authorize(&json!({ "command": "ls -la", "reason": "inspect directory" })))
+            .block_on(
+                tool.authorize(&json!({ "command": "ls -la", "reason": "inspect directory" })),
+            )
             .expect("authorize");
 
         assert!(matches!(result, ToolAuthorization::Allow));
@@ -121,10 +127,16 @@ mod tests {
     #[test]
     fn authorize_requests_confirmation_for_sensitive_command() {
         let tool = tool(SandboxMode::Standard);
-        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("runtime");
-        let result = runtime
-            .block_on(tool.authorize(&json!({ "command": "apt install nginx", "reason": "install package" })))
-            .expect("authorize");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let result =
+            runtime
+                .block_on(tool.authorize(
+                    &json!({ "command": "apt install nginx", "reason": "install package" }),
+                ))
+                .expect("authorize");
 
         match result {
             ToolAuthorization::NeedConfirm { command, .. } => {
@@ -137,10 +149,16 @@ mod tests {
     #[test]
     fn authorize_denies_destructive_command() {
         let tool = tool(SandboxMode::Standard);
-        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("runtime");
-        let result = runtime
-            .block_on(tool.authorize(&json!({ "command": "ls $(cat /etc/shadow)", "reason": "bad input" })))
-            .expect("authorize");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let result =
+            runtime
+                .block_on(tool.authorize(
+                    &json!({ "command": "ls $(cat /etc/shadow)", "reason": "bad input" }),
+                ))
+                .expect("authorize");
 
         assert!(matches!(result, ToolAuthorization::Deny { .. }));
     }

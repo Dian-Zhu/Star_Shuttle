@@ -9,6 +9,7 @@ pub mod context_collector;
 pub mod orchestrator;
 pub mod planner;
 pub mod sandbox;
+pub mod skills;
 pub mod tools;
 pub mod types;
 
@@ -17,11 +18,15 @@ use crate::modules::ai::{
     agent_types::{AgentEvent, AgentTaskSnapshot, AgentTaskSummary},
     chat::ChatManager,
     config::{
-        default_base_url, default_model, load_config, save_config,
-        validate_agent_compatibility,
+        default_base_url, default_model, load_config, save_config, validate_agent_compatibility,
     },
     context_collector::collect_terminal_context,
     sandbox::SandboxMode,
+    skills::{
+        install_skill_from_dir, list_installed_skills, list_skills, match_skills, reload_skills,
+        remove_skill, set_skill_enabled, set_skill_trusted, AiSkillMatchResult, AiSkillSummary,
+        SkillMode,
+    },
     types::{AiConfig, AiProvider, Conversation, StoredMessage},
 };
 use crate::modules::connection::DefaultConnectionManager;
@@ -32,10 +37,17 @@ use uuid::Uuid;
 
 // ── AI 配置 Commands ──────────────────────────────────────────────────────────
 
+fn parse_skill_mode(mode: Option<&str>) -> Result<Option<SkillMode>, String> {
+    match mode {
+        Some("chat") => Ok(Some(SkillMode::Chat)),
+        Some("agent") => Ok(Some(SkillMode::Agent)),
+        Some(other) => Err(format!("未知 skill mode: {}", other)),
+        None => Ok(None),
+    }
+}
+
 #[tauri::command]
-pub async fn ai_get_config(
-    db: State<'_, Arc<Mutex<DatabaseManager>>>,
-) -> Result<AiConfig, String> {
+pub async fn ai_get_config(db: State<'_, Arc<Mutex<DatabaseManager>>>) -> Result<AiConfig, String> {
     load_config(db.inner())
 }
 
@@ -63,10 +75,79 @@ pub async fn ai_get_provider_defaults(provider: String) -> Result<serde_json::Va
 }
 
 #[tauri::command]
-pub async fn ai_test_connection(
-    chat_manager: State<'_, Arc<ChatManager>>,
-) -> Result<(), String> {
+pub async fn ai_test_connection(chat_manager: State<'_, Arc<ChatManager>>) -> Result<(), String> {
     chat_manager.test_connection().await
+}
+
+#[tauri::command]
+pub async fn ai_list_skills(
+    db: State<'_, Arc<Mutex<DatabaseManager>>>,
+    mode: Option<String>,
+) -> Result<Vec<AiSkillSummary>, String> {
+    let mode = parse_skill_mode(mode.as_deref())?;
+    list_skills(db.inner(), mode)
+}
+
+#[tauri::command]
+pub async fn ai_list_installed_skills(
+    db: State<'_, Arc<Mutex<DatabaseManager>>>,
+    mode: Option<String>,
+) -> Result<Vec<AiSkillSummary>, String> {
+    let mode = parse_skill_mode(mode.as_deref())?;
+    list_installed_skills(db.inner(), mode)
+}
+
+#[tauri::command]
+pub async fn ai_install_skill_from_dir(
+    db: State<'_, Arc<Mutex<DatabaseManager>>>,
+    path: String,
+) -> Result<AiSkillSummary, String> {
+    install_skill_from_dir(db.inner(), std::path::Path::new(&path))
+}
+
+#[tauri::command]
+pub async fn ai_set_skill_enabled(
+    db: State<'_, Arc<Mutex<DatabaseManager>>>,
+    skill_id: String,
+    enabled: bool,
+) -> Result<AiSkillSummary, String> {
+    set_skill_enabled(db.inner(), &skill_id, enabled)
+}
+
+#[tauri::command]
+pub async fn ai_set_skill_trusted(
+    db: State<'_, Arc<Mutex<DatabaseManager>>>,
+    skill_id: String,
+    trusted: bool,
+) -> Result<AiSkillSummary, String> {
+    set_skill_trusted(db.inner(), &skill_id, trusted)
+}
+
+#[tauri::command]
+pub async fn ai_remove_skill(
+    db: State<'_, Arc<Mutex<DatabaseManager>>>,
+    skill_id: String,
+) -> Result<(), String> {
+    remove_skill(db.inner(), &skill_id)
+}
+
+#[tauri::command]
+pub async fn ai_reload_skills(
+    db: State<'_, Arc<Mutex<DatabaseManager>>>,
+    mode: Option<String>,
+) -> Result<Vec<AiSkillSummary>, String> {
+    let mode = parse_skill_mode(mode.as_deref())?;
+    reload_skills(db.inner(), mode)
+}
+
+#[tauri::command]
+pub async fn ai_match_skills(
+    db: State<'_, Arc<Mutex<DatabaseManager>>>,
+    input: String,
+    mode: Option<String>,
+) -> Result<AiSkillMatchResult, String> {
+    let mode = parse_skill_mode(mode.as_deref())?.unwrap_or(SkillMode::Chat);
+    match_skills(db.inner(), &input, mode)
 }
 
 // ── Chat Commands ─────────────────────────────────────────────────────────────
@@ -103,17 +184,16 @@ pub async fn ai_chat_send(
     content: String,
     session_id: Option<Uuid>,
     include_terminal_context: bool,
+    skill_id: Option<String>,
 ) -> Result<String, String> {
     let terminal_context = if include_terminal_context {
-        session_id.and_then(|sid| {
-            collect_terminal_context(manager.inner(), sid, 100).ok()
-        })
+        session_id.and_then(|sid| collect_terminal_context(manager.inner(), sid, 100).ok())
     } else {
         None
     };
 
     chat_manager
-        .send_message(&app, conversation_id, content, terminal_context)
+        .send_message(&app, conversation_id, content, terminal_context, skill_id)
         .await
 }
 
@@ -162,6 +242,7 @@ pub async fn ai_agent_start(
     session_id: Uuid,
     instruction: String,
     sandbox_mode: Option<String>,
+    skill_id: Option<String>,
 ) -> Result<Uuid, String> {
     let mode = match sandbox_mode.as_deref() {
         Some("full") => SandboxMode::Full,
@@ -174,7 +255,7 @@ pub async fn ai_agent_start(
     agent_manager
         .inner()
         .clone()
-        .start_task(app, session_id, instruction, mode)
+        .start_task(app, session_id, instruction, mode, skill_id)
         .await
 }
 

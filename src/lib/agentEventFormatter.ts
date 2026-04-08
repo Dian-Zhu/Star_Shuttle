@@ -16,6 +16,22 @@ const EVENT_LABELS: Record<string, string> = {
   task_cancelled: '任务取消',
 };
 
+const EVENT_TONES: Record<string, 'neutral' | 'success' | 'warning' | 'danger'> = {
+  task_started: 'neutral',
+  task_status_changed: 'neutral',
+  task_retrying: 'warning',
+  planner_action: 'neutral',
+  tool_completed: 'success',
+  tool_failed: 'danger',
+  tool_rejected_by_sandbox: 'danger',
+  confirmation_requested: 'warning',
+  confirmation_rejected: 'danger',
+  confirmation_timed_out: 'warning',
+  task_completed: 'success',
+  task_failed: 'danger',
+  task_cancelled: 'neutral',
+};
+
 function payloadField(payload: Record<string, unknown>, key: string): string {
   const value = payload[key];
   return value == null ? '' : String(value);
@@ -23,6 +39,12 @@ function payloadField(payload: Record<string, unknown>, key: string): string {
 
 export function formatAgentEventLabel(eventType: string): string {
   return EVENT_LABELS[eventType] ?? eventType;
+}
+
+export function formatAgentEventTone(
+  eventType: string,
+): 'neutral' | 'success' | 'warning' | 'danger' {
+  return EVENT_TONES[eventType] ?? 'neutral';
 }
 
 export function formatAgentEventSummary(event: Pick<AgentEvent, 'event_type' | 'payload_json'>): string {
@@ -34,25 +56,34 @@ export function formatAgentEventSummary(event: Pick<AgentEvent, 'event_type' | '
     case 'task_retrying':
       return `第 ${payloadField(payload, 'attempt') || '?'} 次，原因：${payloadField(payload, 'reason')}`;
     case 'planner_action':
+      if (payloadField(payload, 'type') === 'tool_call') {
+        return `准备调用 ${payloadField(payload, 'tool_name') || '工具'}`;
+      }
+      if (payloadField(payload, 'type') === 'complete') {
+        return '准备结束任务';
+      }
+      if (payloadField(payload, 'type') === 'fail') {
+        return `准备报告失败：${payloadField(payload, 'reason')}`;
+      }
       return payloadField(payload, 'type');
     case 'tool_completed':
-      return `${payloadField(payload, 'tool_name')} 已完成`;
+      return `${payloadField(payload, 'tool_name')} 已完成：${payloadField(payload, 'command') || payloadField(payload, 'title')}`;
     case 'tool_failed':
       return `${payloadField(payload, 'tool_name')} 失败：${payloadField(payload, 'error')}`;
     case 'tool_rejected_by_sandbox':
       return `${payloadField(payload, 'tool_name')} 被拒绝：${payloadField(payload, 'reason')}`;
     case 'confirmation_requested':
-      return payloadField(payload, 'command');
+      return `${payloadField(payload, 'command')} (${payloadField(payload, 'reason')})`;
     case 'confirmation_rejected':
-      return `${payloadField(payload, 'tool_name')} 被用户拒绝`;
+      return `用户拒绝执行：${payloadField(payload, 'command') || payloadField(payload, 'tool_name')}`;
     case 'confirmation_timed_out':
-      return `${payloadField(payload, 'tool_name')} 等待确认超时`;
+      return `等待确认超时：${payloadField(payload, 'command') || payloadField(payload, 'tool_name')}`;
     case 'task_completed':
       return payloadField(payload, 'summary');
     case 'task_failed':
-      return payloadField(payload, 'error_message');
+      return `${payloadField(payload, 'error_code') || 'failed'}：${payloadField(payload, 'error_message')}`;
     case 'task_cancelled':
-      return payloadField(payload, 'status');
+      return '任务已取消';
     default:
       return JSON.stringify(payload);
   }

@@ -16,11 +16,32 @@
     openTask,
     cleanup,
   } from '../../lib/aiAgentService';
-  import { formatAgentEventLabel, formatAgentEventSummary } from '../../lib/agentEventFormatter';
+  import {
+    formatAgentEventLabel,
+    formatAgentEventSummary,
+    formatAgentEventTone,
+  } from '../../lib/agentEventFormatter';
+  import {
+    filterSkillsByMode,
+    getSkillById,
+    getSkillLabel,
+    loadSkillCatalog,
+    matchSkills,
+    skillCatalog,
+    type AiSkillSummary,
+  } from '../../lib/aiSkillService';
+  import AiSkillSlashMenu from './AiSkillSlashMenu.svelte';
   import AgentToolCallStep from './AgentToolCallStep.svelte';
   import AiModeSwitcher from './AiModeSwitcher.svelte';
   import AiSandboxSwitcher from './AiSandboxSwitcher.svelte';
   import CommandConfirmModal from './CommandConfirmModal.svelte';
+  import {
+    buildSkillOptions,
+    findSkillCommand,
+    removeSkillCommand,
+    type SkillCommandMatch,
+    type SkillOption,
+  } from '../../lib/aiSkillInput';
 
   export let sessionId: string | null = null;
   export let activeMode: 'chat' | 'agent' = 'agent';
@@ -35,18 +56,35 @@
   let isCancelling = false;
   let startError = '';
   let stepsEl: HTMLDivElement;
+  let instructionEl: HTMLTextAreaElement;
+  let selectedSkillId = '';
+  let agentSkills = filterSkillsByMode([], 'agent');
+  let activeSkillCommand: SkillCommandMatch | null = null;
+  let skillOptions: SkillOption[] = [];
+  let highlightedSkillIndex = 0;
+  let dismissedCommandKey = '';
+  let autoMatchedSkillId = '';
+  let autoMatchedReason = '';
+  let autoMatchedSkill: AiSkillSummary | null = null;
+  let autoMatchDismissedInput = '';
+  let matchTimer: ReturnType<typeof setTimeout> | null = null;
 
   onMount(() => {
+    void loadSkillCatalog();
     void loadTaskHistory(sessionId);
   });
 
   onDestroy(() => {
+    if (matchTimer) {
+      clearTimeout(matchTimer);
+    }
     cleanup();
   });
 
   $: if (sessionId) {
     void loadTaskHistory(sessionId);
   }
+  $: agentSkills = filterSkillsByMode($skillCatalog, 'agent');
 
   $: isRunning = ['queued', 'planning', 'executing', 'waiting_confirm', 'retrying', 'cancelling'].includes($activeTask?.status ?? '');
   $: isWaiting = $activeTask?.status === 'waiting_confirm';
@@ -72,8 +110,12 @@
     startError = '';
 
     try {
-      await startAgent(sessionId, text, $sandboxMode);
+      await startAgent(sessionId, text, $sandboxMode, selectedSkillId || autoMatchedSkillId || null);
       instruction = '';
+      selectedSkillId = '';
+      autoMatchedSkillId = '';
+      autoMatchedReason = '';
+      autoMatchDismissedInput = '';
     } catch (e: any) {
       startError = e?.message ?? String(e);
     } finally {
@@ -106,10 +148,154 @@
   }
 
   function handleKeydown(e: KeyboardEvent) {
+    if (showSkillMenu) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        if (skillOptions.length > 0) {
+          highlightedSkillIndex = (highlightedSkillIndex + 1) % skillOptions.length;
+        }
+        return;
+      }
+
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (skillOptions.length > 0) {
+          highlightedSkillIndex =
+            (highlightedSkillIndex - 1 + skillOptions.length) % skillOptions.length;
+        }
+        return;
+      }
+
+      if ((e.key === 'Enter' || e.key === 'Tab') && skillOptions.length > 0) {
+        e.preventDefault();
+        applySkillSelection(skillOptions[highlightedSkillIndex]?.id ?? null);
+        return;
+      }
+
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        dismissedCommandKey = activeCommandKey;
+        return;
+      }
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleStart();
     }
+  }
+
+  function commandKey(match: SkillCommandMatch | null): string {
+    return match ? `${match.start}:${match.end}:${match.query}` : '';
+  }
+
+  function syncSkillCommand(resetHighlight = false) {
+    const nextCommand = findSkillCommand(
+      instruction,
+      instructionEl?.selectionStart ?? instruction.length,
+    );
+    const previousQuery = activeSkillCommand?.query ?? '';
+    const nextKey = commandKey(nextCommand);
+
+    activeSkillCommand = nextCommand;
+    skillOptions = nextCommand ? buildSkillOptions(agentSkills, nextCommand.query) : [];
+
+    if (!nextCommand) {
+      dismissedCommandKey = '';
+      highlightedSkillIndex = 0;
+      return;
+    }
+
+    if (dismissedCommandKey && dismissedCommandKey !== nextKey) {
+      dismissedCommandKey = '';
+    }
+
+    if (resetHighlight || previousQuery !== nextCommand.query) {
+      highlightedSkillIndex = 0;
+      return;
+    }
+
+    highlightedSkillIndex = Math.min(
+      highlightedSkillIndex,
+      Math.max(skillOptions.length - 1, 0),
+    );
+  }
+
+  function handleInstructionInput() {
+    syncSkillCommand(true);
+    queueSkillMatch();
+  }
+
+  function handleInstructionCaretChange() {
+    syncSkillCommand();
+  }
+
+  function applySkillSelection(skillId: string | null) {
+    selectedSkillId = skillId ?? '';
+    autoMatchedSkillId = '';
+    autoMatchedReason = '';
+    autoMatchDismissedInput = '';
+
+    if (activeSkillCommand) {
+      const nextInstruction = removeSkillCommand(instruction, activeSkillCommand);
+      instruction = nextInstruction.text;
+      dismissedCommandKey = '';
+
+      requestAnimationFrame(() => {
+        instructionEl?.focus();
+        instructionEl?.setSelectionRange(nextInstruction.cursor, nextInstruction.cursor);
+        syncSkillCommand();
+      });
+      return;
+    }
+
+    instructionEl?.focus();
+  }
+
+  function clearSkillSelection() {
+    selectedSkillId = '';
+    queueSkillMatch();
+    instructionEl?.focus();
+  }
+
+  function dismissAutoMatch() {
+    autoMatchedSkillId = '';
+    autoMatchedReason = '';
+    autoMatchDismissedInput = instruction.trim();
+  }
+
+  function queueSkillMatch() {
+    if (matchTimer) {
+      clearTimeout(matchTimer);
+    }
+    matchTimer = setTimeout(() => {
+      void refreshAutoMatch();
+    }, 180);
+  }
+
+  async function refreshAutoMatch() {
+    const input = instruction.trim();
+    if (
+      !input ||
+      !sessionId ||
+      selectedSkillId ||
+      isStarting ||
+      activeSkillCommand ||
+      autoMatchDismissedInput === input
+    ) {
+      if (!input) {
+        autoMatchedSkillId = '';
+        autoMatchedReason = '';
+      }
+      return;
+    }
+
+    const result = await matchSkills(input, 'agent');
+    if (instruction.trim() !== input || selectedSkillId) {
+      return;
+    }
+    autoMatchedSkillId = result.auto_applied ? result.matched_skill_id ?? '' : '';
+    autoMatchedReason = result.reason ?? '';
   }
 
   const STATUS_LABELS: Record<string, string> = {
@@ -142,6 +328,18 @@
     cancelled: 'bg-app-surface border-app-border',
   };
 
+  const EVENT_CARD_STYLES: Record<string, string> = {
+    neutral: 'bg-app-bg border-app-border',
+    success: 'bg-green-500/10 border-green-500/20',
+    warning: 'bg-yellow-500/10 border-yellow-500/20',
+    danger: 'bg-red-500/10 border-red-500/20',
+  };
+
+  const HISTORY_CAUSE_STYLES: Record<string, string> = {
+    rejected: 'bg-red-500/10 text-red-400 border-red-500/20',
+    timed_out: 'bg-yellow-500/10 text-yellow-300 border-yellow-500/20',
+  };
+
   function renderMarkdown(content: string): string {
     try {
       return marked.parse(content, { async: false, gfm: true, breaks: true }) as string;
@@ -153,12 +351,21 @@
   $: finalResultStep = [...($activeTask?.steps ?? [])]
     .reverse()
     .find((step) => step.kind === 'result' && (step.output?.trim() || step.title?.trim()));
+  $: selectedSkill = getSkillById(selectedSkillId || null);
+  $: autoMatchedSkill = !selectedSkill ? getSkillById(autoMatchedSkillId || null) : null;
+  $: activeCommandKey = commandKey(activeSkillCommand);
+  $: activeTaskSkillLabel = getSkillLabel($activeTask?.skill_id);
   $: summaryText = $activeTask?.summary?.trim() || $activeTask?.final_result?.summary?.trim() || finalResultStep?.output?.trim() || '';
   $: summaryHtml = summaryText ? renderMarkdown(summaryText) : '';
   $: doneCardStyle = $activeTask ? DONE_CARD_STYLES[$activeTask.status] ?? 'bg-app-surface border-app-border' : 'bg-app-surface border-app-border';
   $: visibleSteps = ($activeTask?.steps ?? []).filter((step) => showThinking || step.kind !== 'planning');
   $: hasStructuredOutcome = !!summaryText || !!$activeTask?.error_message;
   $: recentEvents = [...$activeTaskEvents].slice(-6).reverse();
+  $: showSkillMenu =
+    !!activeSkillCommand &&
+    activeCommandKey !== dismissedCommandKey &&
+    !isStarting &&
+    !!sessionId;
 </script>
 
 <style>
@@ -206,7 +413,14 @@
         <div class="flex items-center justify-between gap-3">
           <div class="min-w-0">
             <p class="text-xs text-primary-400 font-medium">任务</p>
-            <p class="text-sm text-app-text mt-0.5 truncate">{$activeTask.instruction}</p>
+            <div class="mt-0.5 flex items-center gap-2 min-w-0">
+              <p class="text-sm text-app-text truncate">{$activeTask.instruction}</p>
+              {#if activeTaskSkillLabel}
+                <span class="shrink-0 rounded-full border border-primary-500/20 bg-primary-600/10 px-2 py-0.5 text-[11px] text-primary-400">
+                  {activeTaskSkillLabel}
+                </span>
+              {/if}
+            </div>
           </div>
           <div class="text-right">
             <p class="text-xs text-app-text-secondary">事件</p>
@@ -296,9 +510,9 @@
             <p class="text-xs font-medium text-app-text-secondary">最近事件</p>
             <p class="text-[11px] text-app-text-secondary">共 {$activeTaskEvents.length} 条</p>
           </div>
-          <div class="space-y-1.5">
+              <div class="space-y-1.5">
             {#each recentEvents as event (event.id)}
-              <div class="rounded-md bg-app-bg border border-app-border px-2.5 py-2">
+              <div class="rounded-md border px-2.5 py-2 {EVENT_CARD_STYLES[formatAgentEventTone(event.event_type)]}">
                 <div class="flex items-center justify-between gap-3">
                   <p class="text-xs text-app-text">{formatAgentEventLabel(event.event_type)}</p>
                   <p class="text-[11px] text-app-text-secondary">#{event.seq}</p>
@@ -344,10 +558,24 @@
           >
             <div class="flex items-center justify-between gap-3">
               <p class="text-xs text-app-text truncate">{item.instruction}</p>
-              <span class="text-[11px] {STATUS_COLORS[item.status]}">{STATUS_LABELS[item.status]}</span>
+              <div class="flex items-center gap-1.5 shrink-0">
+                {#if item.skill_id}
+                  <span class="text-[11px] px-1.5 py-0.5 rounded border border-primary-500/20 bg-primary-600/10 text-primary-400">
+                    {getSkillLabel(item.skill_id)}
+                  </span>
+                {/if}
+                {#if item.history_cause && item.history_cause_label}
+                  <span class="text-[11px] px-1.5 py-0.5 rounded border {HISTORY_CAUSE_STYLES[item.history_cause]}">
+                    {item.history_cause_label}
+                  </span>
+                {/if}
+                <span class="text-[11px] {STATUS_COLORS[item.status]}">{STATUS_LABELS[item.status]}</span>
+              </div>
             </div>
-            {#if item.summary || item.error_message}
-              <p class="text-[11px] text-app-text-secondary mt-1 truncate">{item.summary || item.error_message}</p>
+            {#if item.history_preview || item.summary || item.error_message}
+              <p class="text-[11px] text-app-text-secondary mt-1 truncate">
+                {item.history_preview || item.summary || item.error_message}
+              </p>
             {/if}
           </button>
         {/each}
@@ -362,10 +590,51 @@
       {/if}
 
       <div class="rounded-[18px] bg-app-surface px-3 py-2.5 shadow-[0_10px_30px_rgba(0,0,0,0.12)]">
+        {#if !selectedSkill && autoMatchedSkill}
+          <div class="mb-2 rounded-2xl border border-blue-500/20 bg-blue-500/10 px-3 py-2">
+            <div class="flex items-start justify-between gap-3">
+              <div class="min-w-0">
+                <div class="flex items-center gap-2">
+                  <span class="rounded-full border border-blue-500/25 bg-blue-500/10 px-2 py-0.5 text-[10px] text-blue-400">
+                    自动匹配
+                  </span>
+                  <span class="text-xs font-medium text-app-text">{autoMatchedSkill.name}</span>
+                </div>
+                <p class="mt-1 text-[11px] leading-relaxed text-app-text-secondary">
+                  {autoMatchedReason || autoMatchedSkill.description}
+                </p>
+              </div>
+              <button
+                class="shrink-0 rounded-full border border-app-border bg-app-bg px-2 py-1 text-[11px] text-app-text-secondary transition-colors hover:border-app-border/80 hover:text-app-text"
+                type="button"
+                on:click={dismissAutoMatch}
+              >
+                忽略
+              </button>
+            </div>
+          </div>
+        {/if}
+
+        <AiSkillSlashMenu
+          {selectedSkill}
+          visible={showSkillMenu}
+          query={activeSkillCommand?.query ?? ''}
+          options={skillOptions}
+          highlightedIndex={highlightedSkillIndex}
+          on:select={(e) => applySkillSelection(e.detail)}
+          on:clear={clearSkillSelection}
+          on:highlight={(e) => (highlightedSkillIndex = e.detail)}
+        />
+
         <textarea
+          bind:this={instructionEl}
           bind:value={instruction}
+          on:input={handleInstructionInput}
           on:keydown={handleKeydown}
-          placeholder="描述你想让 Agent 做什么..."
+          on:click={handleInstructionCaretChange}
+          on:keyup={handleInstructionCaretChange}
+          on:focus={handleInstructionCaretChange}
+          placeholder="描述你想让 Agent 做什么，输入“/”选择 Skill..."
           rows="2"
           disabled={isStarting || !sessionId}
           class="w-full resize-none bg-transparent px-0 py-0 text-sm text-app-text placeholder-app-text-secondary/80
@@ -411,9 +680,16 @@
       <div class="flex items-center justify-between gap-3 rounded-[18px] bg-app-surface px-3 py-2.5 shadow-[0_10px_30px_rgba(0,0,0,0.12)]">
         <div class="min-w-0">
           <p class="text-sm text-app-text">{STATUS_LABELS[$activeTask?.status ?? 'planning']}</p>
-          <p class="text-xs text-app-text-secondary mt-0.5 truncate">
-            {$activeTask?.instruction}
-          </p>
+          <div class="mt-0.5 flex items-center gap-2 min-w-0">
+            <p class="text-xs text-app-text-secondary truncate">
+              {$activeTask?.instruction}
+            </p>
+            {#if activeTaskSkillLabel}
+              <span class="shrink-0 rounded-full border border-primary-500/20 bg-primary-600/10 px-2 py-0.5 text-[11px] text-primary-400">
+                {activeTaskSkillLabel}
+              </span>
+            {/if}
+          </div>
         </div>
         <button
           on:click={handleCancel}

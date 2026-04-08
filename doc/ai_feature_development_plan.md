@@ -2,6 +2,40 @@
 
 ## 当前进度记录（2026-04-08）
 
+### Skills 二阶段进度快照
+
+- 当前完成度约为 `40% ~ 50%`，已具备最小可用骨架。
+- 本轮已经完成的核心内容：
+  - 后端已从“纯内置硬编码 skills”扩展为“内置 + 本地安装记录”的组合注册表
+  - 数据库已新增 `ai_skills` 元信息表，用于保存 `enabled / trusted / source_type / content_hash` 等状态
+  - 已新增 skills 管理命令骨架：列举、目录导入、启用/停用、信任/取消信任、删除、重载、自动匹配
+  - Chat / Agent 输入区已支持自动匹配 Skill badge，同时保留 `/` 手动选择
+  - Settings -> `AI 助手` 已接入 Skills 管理面板，可查看列表并操作本地导入 Skill
+  - `Linux 应急响应` 已作为系统默认内置 skill 保留
+- 当前验证状态：
+  - `cargo test --lib` 通过
+  - `npm test -- --run src/lib/aiSkillService.test.ts src/lib/aiSkillInput.test.ts src/lib/aiChatService.test.ts src/lib/aiAgentService.test.ts` 通过
+  - `npm run check` 通过
+
+### Skills 二阶段当前断点
+
+- 目前只支持“本地目录导入”，尚未补齐 zip 直接导入链路
+- references 仍未做真正的按需加载，目前安装型 skill 主要使用 `SKILL.md` 主体
+- 历史消息 / Agent 任务仅保存 `skill_id`，尚未区分 `manual / auto / suggested`
+- 内置 skill 与外部 skill 虽已在运行时统一列举，但“安装治理状态”还没有完全统一到同一条数据流
+
+### Skills 二阶段下一个任务
+
+- 任务名称：补齐 zip 导入与 references 按需加载
+- 目标：
+  - 支持从本地 zip 直接导入 skill 包
+  - 将 `references/` 纳入运行时按需读取，而不是只依赖 `SKILL.md`
+  - 为 Chat / Agent 历史增加 skill 选择来源标记，区分 `manual / auto`
+- 验收标准：
+  - zip 导入后的 skill 可在 Settings 中启用、信任、删除
+  - 带 `references/` 的 skill 在运行时可按需参与 prompt 构建
+  - 历史消息和任务记录能区分 skill 的手动选择与自动匹配来源
+
 ### Agent 重构完成度
 
 - 当前完成度约为 `85% ~ 90%`，首版已达到可交付状态。

@@ -15,6 +15,7 @@
     cancelMessage,
     type Conversation,
   } from '../../lib/aiChatService';
+  import { filterSkillsByMode, loadSkillCatalog, skillCatalog } from '../../lib/aiSkillService';
   import ChatMessage from './ChatMessage.svelte';
   import ChatInput from './ChatInput.svelte';
   import AiAgentPanel from './AiAgentPanel.svelte';
@@ -32,6 +33,7 @@
   let sendError = '';
   let includeContext = false;
   let removeInsertDraftListener: (() => void) | null = null;
+  let chatSkills = filterSkillsByMode([], 'chat');
 
   // Track last streaming message for cursor animation
   $: streamingMsgId = $isSending && $messages.length > 0
@@ -39,6 +41,7 @@
     : null;
 
   onMount(async () => {
+    await loadSkillCatalog();
     await loadConversations();
     // Auto-open latest conversation if any
     if ($conversations.length > 0 && !$activeConversationId) {
@@ -61,6 +64,8 @@
       window.removeEventListener('ai:insert-chat-draft', handleInsertDraft as EventListener);
     };
   });
+
+  $: chatSkills = filterSkillsByMode($skillCatalog, 'chat');
 
   onDestroy(() => {
     removeInsertDraftListener?.();
@@ -101,7 +106,9 @@
     await deleteConversation(conv.id);
   }
 
-  async function handleSend(e: CustomEvent<{ content: string; includeContext: boolean }>) {
+  async function handleSend(
+    e: CustomEvent<{ content: string; includeContext: boolean; skillId: string | null }>,
+  ) {
     if (!$activeConversationId) {
       const id = await createConversation(sessionId ?? undefined);
       await loadMessages(id);
@@ -114,6 +121,7 @@
         $activeConversationId!,
         sessionId,
         e.detail.includeContext,
+        e.detail.skillId ?? null,
       );
     } catch (err: any) {
       const message = err?.message ?? String(err);
@@ -267,6 +275,7 @@
       disabled={false}
       isSending={$isSending}
       {includeContext}
+      skills={chatSkills}
       hasActiveSession={!!sessionId}
       activeMode={activeTab}
       on:send={handleSend}

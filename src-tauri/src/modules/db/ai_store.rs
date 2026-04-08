@@ -1,5 +1,47 @@
 use rusqlite::{params, Connection, Result};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StoredSkillRecord {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub applies_to: String,
+    pub source_type: String,
+    pub source_path: String,
+    pub manifest_path: String,
+    pub trigger_mode: String,
+    pub trigger_regex: Option<String>,
+    pub match_keywords_json: String,
+    pub allowed_tools_json: String,
+    pub starter_examples_json: String,
+    pub recommended_sandbox: Option<String>,
+    pub enabled: bool,
+    pub trusted: bool,
+    pub content_hash: Option<String>,
+    pub installed_at: String,
+    pub updated_at: String,
+}
+
+fn ensure_column(conn: &Connection, table: &str, column: &str, definition: &str) -> Result<()> {
+    let pragma = format!("PRAGMA table_info({})", table);
+    let mut stmt = conn.prepare(&pragma)?;
+    let columns = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    let exists = columns
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .any(|name| name == column);
+
+    if !exists {
+        conn.execute(
+            &format!("ALTER TABLE {} ADD COLUMN {} {}", table, column, definition),
+            [],
+        )?;
+    }
+
+    Ok(())
+}
 
 /// 创建 AI 相关数据表
 pub fn create_tables(conn: &Connection) -> Result<()> {
@@ -19,6 +61,7 @@ pub fn create_tables(conn: &Connection) -> Result<()> {
             role             TEXT NOT NULL,
             content          TEXT NOT NULL,
             context_snapshot TEXT,
+            skill_id         TEXT,
             created_at       TEXT NOT NULL DEFAULT (datetime('now'))
         );
 
@@ -48,6 +91,7 @@ pub fn create_tables(conn: &Connection) -> Result<()> {
             summary              TEXT,
             error_code           TEXT,
             error_message        TEXT,
+            skill_id             TEXT,
             pending_confirm_json TEXT,
             final_result_json    TEXT,
             started_at           TEXT NOT NULL,
@@ -77,8 +121,33 @@ pub fn create_tables(conn: &Connection) -> Result<()> {
             payload_json TEXT NOT NULL,
             created_at  TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS ai_skills (
+            id                   TEXT PRIMARY KEY,
+            name                 TEXT NOT NULL,
+            description          TEXT NOT NULL,
+            applies_to           TEXT NOT NULL,
+            source_type          TEXT NOT NULL,
+            source_path          TEXT NOT NULL,
+            manifest_path        TEXT NOT NULL,
+            trigger_mode         TEXT NOT NULL DEFAULT 'auto',
+            trigger_regex        TEXT,
+            match_keywords_json  TEXT NOT NULL DEFAULT '[]',
+            allowed_tools_json   TEXT NOT NULL DEFAULT '[]',
+            starter_examples_json TEXT NOT NULL DEFAULT '[]',
+            recommended_sandbox  TEXT,
+            enabled              INTEGER NOT NULL DEFAULT 0,
+            trusted              INTEGER NOT NULL DEFAULT 0,
+            content_hash         TEXT,
+            installed_at         TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at           TEXT NOT NULL DEFAULT (datetime('now'))
+        );
         ",
-    )
+    )?;
+
+    ensure_column(conn, "ai_messages", "skill_id", "TEXT")?;
+    ensure_column(conn, "ai_agent_tasks", "skill_id", "TEXT")?;
+    Ok(())
 }
 
 // ── Conversation CRUD ─────────────────────────────────────────────────────────
@@ -91,16 +160,14 @@ pub fn create_conversation(
 ) -> Result<()> {
     conn.execute(
         "INSERT INTO ai_conversations (id, title, session_id) VALUES (?, ?, ?)",
-        params![
-            id.to_string(),
-            title,
-            session_id.map(|s| s.to_string())
-        ],
+        params![id.to_string(), title, session_id.map(|s| s.to_string())],
     )?;
     Ok(())
 }
 
-pub fn get_all_conversations(conn: &Connection) -> Result<Vec<(String, String, Option<String>, String, String)>> {
+pub fn get_all_conversations(
+    conn: &Connection,
+) -> Result<Vec<(String, String, Option<String>, String, String)>> {
     let mut stmt = conn.prepare(
         "SELECT id, title, session_id, created_at, updated_at FROM ai_conversations ORDER BY updated_at DESC",
     )?;
@@ -149,15 +216,17 @@ pub fn save_message(
     role: &str,
     content: &str,
     context_snapshot: Option<&str>,
+    skill_id: Option<&str>,
 ) -> Result<()> {
     conn.execute(
-        "INSERT INTO ai_messages (id, conversation_id, role, content, context_snapshot) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO ai_messages (id, conversation_id, role, content, context_snapshot, skill_id) VALUES (?, ?, ?, ?, ?, ?)",
         params![
             id.to_string(),
             conversation_id.to_string(),
             role,
             content,
             context_snapshot,
+            skill_id,
         ],
     )?;
     touch_conversation(conn, conversation_id)?;
@@ -167,9 +236,18 @@ pub fn save_message(
 pub fn get_messages(
     conn: &Connection,
     conversation_id: &Uuid,
-) -> Result<Vec<(String, String, String, Option<String>, String)>> {
+) -> Result<
+    Vec<(
+        String,
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        String,
+    )>,
+> {
     let mut stmt = conn.prepare(
-        "SELECT id, role, content, context_snapshot, created_at
+        "SELECT id, role, content, context_snapshot, skill_id, created_at
          FROM ai_messages
          WHERE conversation_id = ?
          ORDER BY created_at ASC",
@@ -180,7 +258,8 @@ pub fn get_messages(
             row.get::<_, String>(1)?,
             row.get::<_, String>(2)?,
             row.get::<_, Option<String>>(3)?,
-            row.get::<_, String>(4)?,
+            row.get::<_, Option<String>>(4)?,
+            row.get::<_, String>(5)?,
         ))
     })?;
     rows.collect()
@@ -191,6 +270,146 @@ pub fn delete_messages(conn: &Connection, conversation_id: &Uuid) -> Result<()> 
         "DELETE FROM ai_messages WHERE conversation_id = ?",
         params![conversation_id.to_string()],
     )?;
+    Ok(())
+}
+
+// ── Installed Skills ───────────────────────────────────────────────────────────
+
+pub fn save_skill_record(conn: &Connection, record: &StoredSkillRecord) -> Result<()> {
+    conn.execute(
+        "INSERT INTO ai_skills (
+            id, name, description, applies_to, source_type, source_path, manifest_path,
+            trigger_mode, trigger_regex, match_keywords_json, allowed_tools_json,
+            starter_examples_json, recommended_sandbox, enabled, trusted, content_hash
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            name = excluded.name,
+            description = excluded.description,
+            applies_to = excluded.applies_to,
+            source_type = excluded.source_type,
+            source_path = excluded.source_path,
+            manifest_path = excluded.manifest_path,
+            trigger_mode = excluded.trigger_mode,
+            trigger_regex = excluded.trigger_regex,
+            match_keywords_json = excluded.match_keywords_json,
+            allowed_tools_json = excluded.allowed_tools_json,
+            starter_examples_json = excluded.starter_examples_json,
+            recommended_sandbox = excluded.recommended_sandbox,
+            enabled = excluded.enabled,
+            trusted = excluded.trusted,
+            content_hash = excluded.content_hash,
+            updated_at = datetime('now')",
+        params![
+            record.id,
+            record.name,
+            record.description,
+            record.applies_to,
+            record.source_type,
+            record.source_path,
+            record.manifest_path,
+            record.trigger_mode,
+            record.trigger_regex,
+            record.match_keywords_json,
+            record.allowed_tools_json,
+            record.starter_examples_json,
+            record.recommended_sandbox,
+            record.enabled as i64,
+            record.trusted as i64,
+            record.content_hash,
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn list_skill_records(conn: &Connection) -> Result<Vec<StoredSkillRecord>> {
+    let mut stmt = conn.prepare(
+        "SELECT
+            id, name, description, applies_to, source_type, source_path, manifest_path,
+            trigger_mode, trigger_regex, match_keywords_json, allowed_tools_json,
+            starter_examples_json, recommended_sandbox, enabled, trusted, content_hash,
+            installed_at, updated_at
+         FROM ai_skills
+         ORDER BY installed_at DESC, id ASC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(StoredSkillRecord {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            description: row.get(2)?,
+            applies_to: row.get(3)?,
+            source_type: row.get(4)?,
+            source_path: row.get(5)?,
+            manifest_path: row.get(6)?,
+            trigger_mode: row.get(7)?,
+            trigger_regex: row.get(8)?,
+            match_keywords_json: row.get(9)?,
+            allowed_tools_json: row.get(10)?,
+            starter_examples_json: row.get(11)?,
+            recommended_sandbox: row.get(12)?,
+            enabled: row.get::<_, i64>(13)? != 0,
+            trusted: row.get::<_, i64>(14)? != 0,
+            content_hash: row.get(15)?,
+            installed_at: row.get(16)?,
+            updated_at: row.get(17)?,
+        })
+    })?;
+    rows.collect()
+}
+
+pub fn get_skill_record(conn: &Connection, skill_id: &str) -> Result<Option<StoredSkillRecord>> {
+    let mut stmt = conn.prepare(
+        "SELECT
+            id, name, description, applies_to, source_type, source_path, manifest_path,
+            trigger_mode, trigger_regex, match_keywords_json, allowed_tools_json,
+            starter_examples_json, recommended_sandbox, enabled, trusted, content_hash,
+            installed_at, updated_at
+         FROM ai_skills
+         WHERE id = ?",
+    )?;
+    let mut rows = stmt.query(params![skill_id])?;
+    if let Some(row) = rows.next()? {
+        return Ok(Some(StoredSkillRecord {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            description: row.get(2)?,
+            applies_to: row.get(3)?,
+            source_type: row.get(4)?,
+            source_path: row.get(5)?,
+            manifest_path: row.get(6)?,
+            trigger_mode: row.get(7)?,
+            trigger_regex: row.get(8)?,
+            match_keywords_json: row.get(9)?,
+            allowed_tools_json: row.get(10)?,
+            starter_examples_json: row.get(11)?,
+            recommended_sandbox: row.get(12)?,
+            enabled: row.get::<_, i64>(13)? != 0,
+            trusted: row.get::<_, i64>(14)? != 0,
+            content_hash: row.get(15)?,
+            installed_at: row.get(16)?,
+            updated_at: row.get(17)?,
+        }));
+    }
+    Ok(None)
+}
+
+pub fn set_skill_enabled(conn: &Connection, skill_id: &str, enabled: bool) -> Result<()> {
+    conn.execute(
+        "UPDATE ai_skills SET enabled = ?, updated_at = datetime('now') WHERE id = ?",
+        params![enabled as i64, skill_id],
+    )?;
+    Ok(())
+}
+
+pub fn set_skill_trusted(conn: &Connection, skill_id: &str, trusted: bool) -> Result<()> {
+    conn.execute(
+        "UPDATE ai_skills SET trusted = ?, updated_at = datetime('now') WHERE id = ?",
+        params![trusted as i64, skill_id],
+    )?;
+    Ok(())
+}
+
+pub fn delete_skill_record(conn: &Connection, skill_id: &str) -> Result<()> {
+    conn.execute("DELETE FROM ai_skills WHERE id = ?", params![skill_id])?;
     Ok(())
 }
 
@@ -254,10 +473,11 @@ pub fn save_sandbox_rule(
     Ok(())
 }
 
-pub fn get_sandbox_rules(conn: &Connection) -> Result<Vec<(String, String, String, Option<String>)>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, rule_type, pattern, reason FROM sandbox_rules ORDER BY created_at",
-    )?;
+pub fn get_sandbox_rules(
+    conn: &Connection,
+) -> Result<Vec<(String, String, String, Option<String>)>> {
+    let mut stmt = conn
+        .prepare("SELECT id, rule_type, pattern, reason FROM sandbox_rules ORDER BY created_at")?;
     let rows = stmt.query_map([], |row| {
         Ok((
             row.get::<_, String>(0)?,

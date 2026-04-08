@@ -51,34 +51,124 @@ pub enum SandboxVerdict {
 /// 安全的只读/查询命令（标准沙箱自动放行）
 const STANDARD_WHITELIST: &[&str] = &[
     // 文件系统查看
-    "ls", "ll", "la", "dir", "cat", "head", "tail", "less", "more", "file",
-    "stat", "du", "df", "find", "locate", "which", "whereis", "tree",
+    "ls",
+    "ll",
+    "la",
+    "dir",
+    "cat",
+    "head",
+    "tail",
+    "less",
+    "more",
+    "file",
+    "stat",
+    "du",
+    "df",
+    "find",
+    "locate",
+    "which",
+    "whereis",
+    "tree",
     // 文本处理
-    "grep", "egrep", "fgrep", "rg", "awk", "sed", "cut", "sort", "uniq",
-    "wc", "tr", "diff", "comm", "join", "paste", "column", "jq", "yq",
-    "echo", "printf", "tee",
+    "grep",
+    "egrep",
+    "fgrep",
+    "rg",
+    "awk",
+    "sed",
+    "cut",
+    "sort",
+    "uniq",
+    "wc",
+    "tr",
+    "diff",
+    "comm",
+    "join",
+    "paste",
+    "column",
+    "jq",
+    "yq",
+    "echo",
+    "printf",
+    "tee",
     // 系统信息
-    "pwd", "whoami", "id", "hostname", "uname", "date", "uptime", "w",
-    "who", "last", "lastlog", "env", "printenv", "set",
+    "pwd",
+    "whoami",
+    "id",
+    "hostname",
+    "uname",
+    "date",
+    "uptime",
+    "w",
+    "who",
+    "last",
+    "lastlog",
+    "env",
+    "printenv",
+    "set",
     // 进程查看
-    "ps", "top", "htop", "pgrep", "pstree", "lsof",
+    "ps",
+    "top",
+    "htop",
+    "pgrep",
+    "pstree",
+    "lsof",
     // 网络查看
-    "netstat", "ss", "ip", "ifconfig", "arp", "route", "ping", "traceroute",
-    "tracepath", "mtr", "dig", "nslookup", "host", "nmap", "curl", "wget",
+    "netstat",
+    "ss",
+    "ip",
+    "ifconfig",
+    "arp",
+    "route",
+    "ping",
+    "traceroute",
+    "tracepath",
+    "mtr",
+    "dig",
+    "nslookup",
+    "host",
+    "nmap",
+    "curl",
+    "wget",
     // 日志查看
-    "journalctl", "dmesg", "syslog",
+    "journalctl",
+    "dmesg",
+    "syslog",
     // 包管理（只读）
-    "apt-cache", "yum", "dnf", "rpm", "dpkg",
+    "apt-cache",
+    "yum",
+    "dnf",
+    "rpm",
+    "dpkg",
     // 容器（只读）
-    "docker", "podman", "kubectl", "helm",
+    "docker",
+    "podman",
+    "kubectl",
+    "helm",
     // 其他工具
-    "man", "info", "help", "type", "history", "alias",
-    "openssl", "base64", "md5sum", "sha256sum",
-    "systemctl", "service",
+    "man",
+    "info",
+    "help",
+    "type",
+    "history",
+    "alias",
+    "openssl",
+    "base64",
+    "md5sum",
+    "sha256sum",
+    "systemctl",
+    "service",
     // 编辑器（查看模式）
-    "vim", "vi", "nano", "less",
+    "vim",
+    "vi",
+    "nano",
+    "less",
     // 性能
-    "vmstat", "iostat", "sar", "free", "nproc",
+    "vmstat",
+    "iostat",
+    "sar",
+    "free",
+    "nproc",
 ];
 
 /// 标准沙箱中需要确认的命令子命令（docker rm 等）
@@ -127,7 +217,11 @@ impl Sandbox {
 
     // ── 标准沙箱（白名单） ──────────────────────────────────────────────────
 
-    fn check_standard(&self, stmt: &crate::modules::ai::command_parser::ParsedStatement, _raw: &str) -> SandboxVerdict {
+    fn check_standard(
+        &self,
+        stmt: &crate::modules::ai::command_parser::ParsedStatement,
+        _raw: &str,
+    ) -> SandboxVerdict {
         for cmd in &stmt.commands {
             let name = cmd.name.as_str();
 
@@ -143,10 +237,7 @@ impl Sandbox {
 
             // 不在白名单：需要确认
             return SandboxVerdict::NeedConfirm {
-                reason: format!(
-                    "命令 `{}` 不在安全白名单中，需要确认后执行",
-                    name
-                ),
+                reason: format!("命令 `{}` 不在安全白名单中，需要确认后执行", name),
                 risk_level: RiskLevel::Medium,
                 matched_command: cmd.raw.clone(),
             };
@@ -154,7 +245,10 @@ impl Sandbox {
         SandboxVerdict::Allow
     }
 
-    fn check_standard_subcmd(&self, cmd: &crate::modules::ai::command_parser::ParsedCommand) -> Option<SandboxVerdict> {
+    fn check_standard_subcmd(
+        &self,
+        cmd: &crate::modules::ai::command_parser::ParsedCommand,
+    ) -> Option<SandboxVerdict> {
         let name = cmd.name.as_str();
         for (base, sub, level) in STANDARD_CONFIRM_SUBCMDS {
             if name == *base {
@@ -169,7 +263,6 @@ impl Sandbox {
         }
         None
     }
-
 }
 
 #[cfg(test)]
@@ -180,15 +273,24 @@ mod tests {
     fn test_standard_allow() {
         let sb = Sandbox::new(SandboxMode::Standard);
         assert!(matches!(sb.check("ls -la /tmp"), SandboxVerdict::Allow));
-        assert!(matches!(sb.check("ps aux | grep nginx"), SandboxVerdict::Allow));
+        assert!(matches!(
+            sb.check("ps aux | grep nginx"),
+            SandboxVerdict::Allow
+        ));
         assert!(matches!(sb.check("cat /etc/hosts"), SandboxVerdict::Allow));
     }
 
     #[test]
     fn test_standard_need_confirm() {
         let sb = Sandbox::new(SandboxMode::Standard);
-        assert!(matches!(sb.check("rm -rf /tmp/test"), SandboxVerdict::NeedConfirm { .. }));
-        assert!(matches!(sb.check("apt install nginx"), SandboxVerdict::NeedConfirm { .. }));
+        assert!(matches!(
+            sb.check("rm -rf /tmp/test"),
+            SandboxVerdict::NeedConfirm { .. }
+        ));
+        assert!(matches!(
+            sb.check("apt install nginx"),
+            SandboxVerdict::NeedConfirm { .. }
+        ));
     }
 
     #[test]
@@ -214,13 +316,19 @@ mod tests {
     fn test_full_allow() {
         let sb = Sandbox::new(SandboxMode::Full);
         assert!(matches!(sb.check("rm -rf /"), SandboxVerdict::Allow));
-        assert!(matches!(sb.check("mkfs.ext4 /dev/sda"), SandboxVerdict::Allow));
+        assert!(matches!(
+            sb.check("mkfs.ext4 /dev/sda"),
+            SandboxVerdict::Allow
+        ));
     }
 
     #[test]
     fn test_full_allows_injection_patterns() {
         let sb = Sandbox::new(SandboxMode::Full);
-        assert!(matches!(sb.check("ls $(cat /etc/shadow)"), SandboxVerdict::Allow));
+        assert!(matches!(
+            sb.check("ls $(cat /etc/shadow)"),
+            SandboxVerdict::Allow
+        ));
     }
 
     #[test]
@@ -233,6 +341,9 @@ mod tests {
     #[test]
     fn test_injection_denied() {
         let sb = Sandbox::new(SandboxMode::Standard);
-        assert!(matches!(sb.check("ls $(cat /etc/shadow)"), SandboxVerdict::Deny { .. }));
+        assert!(matches!(
+            sb.check("ls $(cat /etc/shadow)"),
+            SandboxVerdict::Deny { .. }
+        ));
     }
 }

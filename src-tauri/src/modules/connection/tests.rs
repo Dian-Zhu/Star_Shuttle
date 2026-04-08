@@ -80,7 +80,10 @@ fn test_preflight_connectivity_check_reports_unreachable_host() {
 
 #[test]
 fn test_immediate_hop_uses_proxy_or_jump_host_endpoint() {
-    assert_eq!(immediate_hop(&ProxyType::None, "target.example", 22), ("target.example".to_string(), 22));
+    assert_eq!(
+        immediate_hop(&ProxyType::None, "target.example", 22),
+        ("target.example".to_string(), 22)
+    );
     assert_eq!(
         immediate_hop(
             &ProxyType::Socks5 {

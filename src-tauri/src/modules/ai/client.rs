@@ -84,7 +84,10 @@ impl LlmClient {
             request = request.header("Authorization", format!("Bearer {}", config.api_key));
         }
 
-        let response = request.send().await.map_err(|e| format!("HTTP error: {}", e))?;
+        let response = request
+            .send()
+            .await
+            .map_err(|e| format!("HTTP error: {}", e))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -130,7 +133,9 @@ impl LlmClient {
                         if let Some(choice) = chunk.choices.first() {
                             if let Some(content) = &choice.delta.content {
                                 full_content.push_str(content);
-                                on_event(StreamEvent::Delta { content: content.clone() });
+                                on_event(StreamEvent::Delta {
+                                    content: content.clone(),
+                                });
                             }
                             if choice.finish_reason.is_some() {
                                 return Ok(full_content);
@@ -146,8 +151,6 @@ impl LlmClient {
                 return Err("Request cancelled".to_string());
             }
         }
-
-
 
         Ok(full_content)
     }
@@ -178,7 +181,10 @@ impl LlmClient {
             request = request.header("Authorization", format!("Bearer {}", config.api_key));
         }
 
-        let response = request.send().await.map_err(|e| format!("HTTP error: {}", e))?;
+        let response = request
+            .send()
+            .await
+            .map_err(|e| format!("HTTP error: {}", e))?;
 
         if !response.status().is_success() {
             let status = response.status();

@@ -2,11 +2,13 @@
   import { tick } from 'svelte';
   import { marked } from 'marked';
   import type { StoredMessage } from '../../lib/aiChatService';
+  import { getSkillLabel } from '../../lib/aiSkillService';
 
   export let message: StoredMessage;
   export let isStreaming = false;
 
   const isUser = message.role === 'user';
+  $: skillLabel = getSkillLabel(message.skill_id);
 
   // Render markdown for assistant messages
   function renderMarkdown(content: string): string {
@@ -142,6 +144,14 @@
   {/if}
 
   <div class="max-w-[85%] {isUser ? 'order-first' : ''}">
+    {#if skillLabel}
+      <div class="mb-1 flex {isUser ? 'justify-end' : 'justify-start'}">
+        <span class="rounded-full border border-primary-500/20 bg-primary-600/10 px-2 py-0.5 text-[11px] text-primary-400">
+          {skillLabel}
+        </span>
+      </div>
+    {/if}
+
     <!-- Bubble -->
     <div
       class="rounded-xl px-3.5 py-2.5 text-sm leading-relaxed

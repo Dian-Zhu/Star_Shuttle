@@ -466,9 +466,8 @@ pub(crate) mod commands {
         }
         content.push_str("prompt for credentials:i:1\n");
         let temp_dir = std::env::temp_dir().join("starshuttle-rdp");
-        std::fs::create_dir_all(&temp_dir).map_err(|e| {
-            format!("Failed to create RDP temp directory: {}", e)
-        })?;
+        std::fs::create_dir_all(&temp_dir)
+            .map_err(|e| format!("Failed to create RDP temp directory: {}", e))?;
 
         for _ in 0..8 {
             let filename = format!("starshuttle-{}.rdp", Uuid::new_v4());
@@ -930,7 +929,6 @@ pub(crate) mod commands {
         let db = db.lock().map_err(|e| e.to_string())?;
         db.increment_usage_count(&id).map_err(|e| e.to_string())
     }
-
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1102,6 +1100,14 @@ pub fn run() {
             crate::modules::ai::ai_save_config,
             crate::modules::ai::ai_get_provider_defaults,
             crate::modules::ai::ai_test_connection,
+            crate::modules::ai::ai_list_skills,
+            crate::modules::ai::ai_list_installed_skills,
+            crate::modules::ai::ai_install_skill_from_dir,
+            crate::modules::ai::ai_set_skill_enabled,
+            crate::modules::ai::ai_set_skill_trusted,
+            crate::modules::ai::ai_remove_skill,
+            crate::modules::ai::ai_reload_skills,
+            crate::modules::ai::ai_match_skills,
             crate::modules::ai::ai_chat_new,
             crate::modules::ai::ai_chat_list,
             crate::modules::ai::ai_chat_messages,
