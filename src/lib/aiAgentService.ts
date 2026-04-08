@@ -6,7 +6,9 @@ import { writable } from 'svelte/store';
 
 export type AgentStatus =
   | 'running'
+  | 'retrying'
   | 'waiting_confirm'
+  | 'cancelling'
   | 'completed'
   | 'failed'
   | 'cancelled';
@@ -98,6 +100,17 @@ export async function startAgent(
   confirmUnsub = await listen<PendingConfirm>('ai-agent-confirm-request', (ev) => {
     pendingConfirm.set(ev.payload);
   });
+
+  // The backend may emit early status updates before the frontend listener is attached,
+  // especially for very short tasks. Pull the latest snapshot once after subscribing so
+  // the UI always has the authoritative current state.
+  const latestTask = await getTaskStatus(taskId);
+  if (latestTask) {
+    currentTask.set(latestTask);
+    pendingConfirm.set(latestTask.pending_confirm ?? null);
+  } else {
+    pendingConfirm.set(null);
+  }
 
   return taskId;
 }

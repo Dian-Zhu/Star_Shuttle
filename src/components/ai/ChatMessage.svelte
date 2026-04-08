@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from 'svelte';
   import { marked } from 'marked';
   import type { StoredMessage } from '../../lib/aiChatService';
 
@@ -35,6 +36,64 @@
     if (pre) dispatch('runCommand', pre.textContent ?? '');
   }
 
+  function isCommandContinuation(line: string): boolean {
+    const trimmed = line.trim();
+    if (!trimmed) return false;
+
+    if (trimmed.startsWith('```')) return true;
+    if (/[|&;$><`]/.test(trimmed)) return true;
+    if (trimmed.includes('{{') || trimmed.includes('}}')) return true;
+    if (/^[('"[{]/.test(trimmed) || /[)\]'}]$/.test(trimmed)) return true;
+    if (/^(sudo|docker|kubectl|systemctl|journalctl|cat|grep|find|ps|top|df|du|free|uname|awk|sed|tail|head|chmod|chown|curl|wget|ssh|scp|tar|ls|cd|pwd|echo)\b/i.test(trimmed)) return true;
+    if (/^[a-z0-9_.:/~-]+[\s=:].*/i.test(trimmed)) return true;
+    if (/^[a-z0-9_.:/~'"-]+$/i.test(trimmed) && !/^[\u4e00-\u9fff]/.test(trimmed)) return true;
+
+    return false;
+  }
+
+  function normalizeAssistantContent(content: string): string {
+    const lines = content.split('\n');
+    const output: string[] = [];
+
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i];
+      const match = line.match(/^\s*命令[:：]\s*(.*)$/);
+      if (!match) {
+        output.push(line);
+        continue;
+      }
+
+      const commandLines: string[] = [];
+      const firstLine = match[1]?.trim() ?? '';
+      if (firstLine) {
+        commandLines.push(firstLine);
+      }
+
+      while (i + 1 < lines.length) {
+        const nextLine = lines[i + 1];
+        const trimmedNext = nextLine.trim();
+        if (!trimmedNext) break;
+        if (/^\s*(说明|解释|提示|注意|输出|风险|原因|理由)[:：]/.test(trimmedNext)) break;
+        if (/^\s*命令[:：]/.test(trimmedNext)) break;
+        if (!isCommandContinuation(nextLine)) break;
+        commandLines.push(trimmedNext);
+        i += 1;
+      }
+
+      if (commandLines.length === 0) {
+        output.push(line);
+        continue;
+      }
+
+      output.push('命令：');
+      output.push('```bash');
+      output.push(commandLines.join('\n'));
+      output.push('```');
+    }
+
+    return output.join('\n');
+  }
+
   // Post-process rendered HTML to wrap code blocks with action buttons
   function processHtml(html: string): string {
     return html.replace(
@@ -43,7 +102,7 @@
         <div class="flex items-center justify-between gap-2 px-3 py-2 border-b border-app-border bg-app-surface/80">
           <span class="text-[11px] font-medium tracking-wide text-primary-400 uppercase">命令</span>
           <div class="flex gap-1">
-            <button type="button" class="run-command-btn text-xs px-2 py-0.5 rounded bg-app-surface-light text-app-text-secondary hover:text-app-text border border-app-border transition-colors">运行</button>
+            <button type="button" class="run-command-btn text-xs px-2 py-0.5 rounded bg-app-surface-light text-app-text-secondary hover:text-app-text border border-app-border transition-colors">插入</button>
             <button type="button" class="copy-code-btn text-xs px-2 py-0.5 rounded bg-app-surface-light text-app-text-secondary hover:text-app-text border border-app-border transition-colors">复制</button>
           </div>
         </div>
@@ -54,18 +113,22 @@
 
   $: renderedHtml = isUser
     ? ''
-    : processHtml(renderMarkdown(message.content));
+    : processHtml(renderMarkdown(normalizeAssistantContent(message.content)));
 
   // Bind the message container to attach click handlers dynamically
   let containerEl: HTMLDivElement;
   $: if (containerEl) {
-    containerEl.querySelectorAll('.copy-code-btn').forEach(btn => {
-      btn.removeEventListener('click', handleCopyCode as EventListener);
-      btn.addEventListener('click', handleCopyCode as EventListener);
-    });
-    containerEl.querySelectorAll('.run-command-btn').forEach(btn => {
-      btn.removeEventListener('click', handleRunCommand as EventListener);
-      btn.addEventListener('click', handleRunCommand as EventListener);
+    renderedHtml;
+    tick().then(() => {
+      if (!containerEl) return;
+      containerEl.querySelectorAll('.copy-code-btn').forEach(btn => {
+        btn.removeEventListener('click', handleCopyCode as EventListener);
+        btn.addEventListener('click', handleCopyCode as EventListener);
+      });
+      containerEl.querySelectorAll('.run-command-btn').forEach(btn => {
+        btn.removeEventListener('click', handleRunCommand as EventListener);
+        btn.addEventListener('click', handleRunCommand as EventListener);
+      });
     });
   }
 </script>

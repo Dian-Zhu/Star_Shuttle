@@ -183,10 +183,16 @@ pub async fn ai_agent_confirm(
 
 #[tauri::command]
 pub async fn ai_agent_cancel(
+    app: AppHandle,
     agent_manager: State<'_, Arc<AgentManager>>,
     task_id: Uuid,
 ) -> Result<(), String> {
-    agent_manager.cancel_task(task_id)
+    agent_manager.cancel_task(task_id)?;
+    if let Some(task) = agent_manager.get_task(task_id) {
+        use tauri::Emitter;
+        let _ = app.emit(&format!("ai-agent-status-{}", task_id), task);
+    }
+    Ok(())
 }
 
 #[tauri::command]

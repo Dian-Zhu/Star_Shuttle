@@ -11,7 +11,6 @@
     createConversation,
     loadMessages,
     deleteConversation,
-    clearMessages,
     sendMessage,
     cancelMessage,
     type Conversation,
@@ -102,12 +101,6 @@
     await deleteConversation(conv.id);
   }
 
-  async function handleClearMessages() {
-    if (!$activeConversationId) return;
-    if (!confirm('清除本对话所有消息？')) return;
-    await clearMessages($activeConversationId);
-  }
-
   async function handleSend(e: CustomEvent<{ content: string; includeContext: boolean }>) {
     if (!$activeConversationId) {
       const id = await createConversation(sessionId ?? undefined);
@@ -154,8 +147,6 @@
     activeTab = 'chat';
     await handleNewChat();
   }
-
-  $: activeConv = $conversations.find(c => c.id === $activeConversationId);
 </script>
 
 <div class="flex flex-col h-full bg-app-bg overflow-hidden">

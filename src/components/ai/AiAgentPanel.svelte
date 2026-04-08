@@ -10,7 +10,6 @@
     startAgent,
     confirmStep,
     cancelTask,
-    cleanup,
   } from '../../lib/aiAgentService';
   import AgentToolCallStep from './AgentToolCallStep.svelte';
   import AiModeSwitcher from './AiModeSwitcher.svelte';
@@ -27,12 +26,17 @@
 
   let instruction = '';
   let isStarting = false;
+  let isCancelling = false;
   let startError = '';
   let stepsEl: HTMLDivElement;
 
-  $: isRunning = $currentTask?.status === 'running' || $currentTask?.status === 'waiting_confirm';
+  $: isRunning = ['running', 'retrying', 'waiting_confirm', 'cancelling'].includes($currentTask?.status ?? '');
   $: isWaiting = $currentTask?.status === 'waiting_confirm';
   $: isDone = $currentTask?.status === 'completed' || $currentTask?.status === 'failed' || $currentTask?.status === 'cancelled';
+  $: canCancel = !!$currentTask && ['running', 'retrying', 'waiting_confirm', 'cancelling'].includes($currentTask.status);
+  $: if ($currentTask?.status !== 'cancelling') {
+    isCancelling = false;
+  }
 
   // Auto-scroll steps
   $: if ($currentTask?.steps) {
@@ -66,12 +70,17 @@
   }
 
   async function handleCancel() {
-    if (!$currentTask) return;
-    await cancelTask($currentTask.id);
-  }
+    if (!$currentTask || isCancelling) return;
 
-  function handleNewTask() {
-    cleanup();
+    isCancelling = true;
+    startError = '';
+
+    try {
+      await cancelTask($currentTask.id);
+    } catch (e: any) {
+      startError = e?.message ?? String(e);
+      isCancelling = false;
+    }
   }
 
   function handleKeydown(e: KeyboardEvent) {
@@ -83,7 +92,9 @@
 
   const STATUS_LABELS: Record<string, string> = {
     running: '运行中',
+    retrying: '重试中',
     waiting_confirm: '等待确认',
+    cancelling: '停止中',
     completed: '已完成',
     failed: '失败',
     cancelled: '已取消',
@@ -91,7 +102,9 @@
 
   const STATUS_COLORS: Record<string, string> = {
     running: 'text-blue-400',
+    retrying: 'text-orange-400',
     waiting_confirm: 'text-yellow-400',
+    cancelling: 'text-app-text-secondary',
     completed: 'text-green-400',
     failed: 'text-red-400',
     cancelled: 'text-app-text-secondary',
@@ -113,14 +126,12 @@
 
   $: finalResultStep = [...($currentTask?.steps ?? [])]
     .reverse()
-    .find((step) => step.kind === 'result');
-  $: fallbackOutputStep = [...($currentTask?.steps ?? [])]
-    .reverse()
-    .find((step) => step.output && step.status !== 'running' && step.kind !== 'thinking');
-  $: summaryText = finalResultStep?.output || finalResultStep?.description || fallbackOutputStep?.output || fallbackOutputStep?.description || '';
+    .find((step) => step.kind === 'result' && (step.output?.trim() || step.description?.trim()));
+  $: summaryText = finalResultStep?.output?.trim() || '';
   $: summaryHtml = summaryText ? renderMarkdown(summaryText) : '';
   $: doneCardStyle = $currentTask ? DONE_CARD_STYLES[$currentTask.status] ?? 'bg-app-surface border-app-border' : 'bg-app-surface border-app-border';
   $: visibleSteps = ($currentTask?.steps ?? []).filter((step) => showThinking || (step.kind !== 'thinking' && step.kind !== 'execute_command' && step.kind !== 'result'));
+  $: hasStructuredOutcome = !!summaryText || !!$currentTask?.error;
 </script>
 
 <style>
@@ -190,8 +201,12 @@
                     {STATUS_LABELS[$currentTask.status]}
                   </p>
                 </div>
-                {#if finalResultStep || fallbackOutputStep}
+                {#if summaryText}
                   <span class="text-xs text-app-text-secondary">已生成最终摘要</span>
+                {:else if $currentTask.status === 'failed'}
+                  <span class="text-xs text-red-400">未生成最终结果</span>
+                {:else if $currentTask.status === 'cancelled'}
+                  <span class="text-xs text-app-text-secondary">任务已被用户终止</span>
                 {/if}
               </div>
 
@@ -211,6 +226,12 @@
                   {$currentTask.error}
                 </div>
               {/if}
+
+              {#if !hasStructuredOutcome}
+                <div class="mt-2 rounded-md border border-yellow-500/20 bg-yellow-500/10 px-2.5 py-2 text-xs text-yellow-300 whitespace-pre-wrap break-words">
+                  当前任务没有生成可展示的最终结果。
+                </div>
+              {/if}
             </div>
           </div>
         {/if}
@@ -219,7 +240,13 @@
         {#if isRunning && !isWaiting}
           <div class="flex items-center gap-2 px-3 py-2 text-xs text-blue-400">
             <div class="w-3 h-3 rounded-full border-2 border-blue-400 border-t-transparent animate-spin"></div>
-            AI 正在思考...
+            {#if $currentTask?.status === 'retrying'}
+              AI 正在重试...
+            {:else if $currentTask?.status === 'cancelling'}
+              正在停止当前任务...
+            {:else}
+              AI 正在思考...
+            {/if}
           </div>
         {/if}
       </div>
@@ -283,6 +310,45 @@
             </button>
           </div>
         </div>
+      </div>
+    </div>
+  {:else}
+    <div class="border-t border-app-border bg-app-bg p-3">
+      {#if startError}
+        <p class="mb-2 text-xs text-red-400">{startError}</p>
+      {/if}
+      <div class="flex items-center justify-between gap-3 rounded-[18px] bg-app-surface px-3 py-2.5 shadow-[0_10px_30px_rgba(0,0,0,0.12)]">
+        <div class="min-w-0">
+          <p class="text-sm text-app-text">
+            {#if $currentTask?.status === 'retrying'}
+              正在重试任务
+            {:else if $currentTask?.status === 'cancelling'}
+              正在停止任务
+            {:else if $currentTask?.status === 'waiting_confirm'}
+              等待确认敏感操作
+            {:else}
+              Agent 正在执行任务
+            {/if}
+          </p>
+          <p class="text-xs text-app-text-secondary mt-0.5 truncate">
+            {$currentTask?.instruction}
+          </p>
+        </div>
+        <button
+          on:click={handleCancel}
+          disabled={!canCancel || isCancelling}
+          class="inline-flex h-8 items-center justify-center rounded-full border px-3 text-xs transition-colors
+            disabled:opacity-40 disabled:cursor-not-allowed
+            border-red-500/30 bg-red-500/10 text-red-300 hover:bg-red-500/20"
+          title="停止当前任务"
+          type="button"
+        >
+          {#if isCancelling || $currentTask?.status === 'cancelling'}
+            停止中
+          {:else}
+            停止
+          {/if}
+        </button>
       </div>
     </div>
   {/if}

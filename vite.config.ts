@@ -19,11 +19,14 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks(id) {
-          if (id.includes('node_modules/xterm') || id.includes('node_modules/xterm-addon-')) {
+          if (id.includes('node_modules/@xterm/')) {
             return 'vendor-xterm';
           }
           if (id.includes('node_modules/@tauri-apps/')) {
             return 'vendor-tauri';
+          }
+          if (id.includes('node_modules/marked')) {
+            return 'vendor-markdown';
           }
           if (id.includes('node_modules/svelte')) {
             return 'vendor-svelte';

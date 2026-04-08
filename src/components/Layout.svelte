@@ -1,16 +1,21 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
+  import type { Component } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
-  import Sidebar from './Sidebar.svelte';
-  import RightSidebar from './RightSidebar.svelte';
-  import AiChatPanel from './ai/AiChatPanel.svelte';
   let isAiPanelOpen = false;
   let aiPanelWidth = 400;
   let aiPanelResizing = false;
-  let aiPanelRef: AiChatPanel | null = null;
+  let aiPanelRef: any = null;
   let aiPanelActiveTab: 'chat' | 'agent' = 'chat';
   let aiPanelShowThinking = true;
+  let RightSidebarComponent: Component<any> | null = null;
+  let AiChatPanelComponent: Component<any> | null = null;
+  let ConnectionModalComponent: Component<any> | null = null;
+  let SettingsModalComponent: Component<any> | null = null;
+  let CommandPaletteComponent: Component<any> | null = null;
+  let AdvancedModalComponent: Component<any> | null = null;
+  let PasswordPromptModalComponent: Component<any> | null = null;
 
   $: aiSessionId = (() => {
     const t = $activeTerminals[$selectedTerminalIndex];
@@ -38,13 +43,8 @@
   }
   import TitleBar from './TitleBar.svelte';
   import TerminalManager from './TerminalManager.svelte';
-  import ConnectionModal from './ConnectionModal.svelte';
-  import SettingsModal from './SettingsModal.svelte';
-  import CommandPalette from './CommandPalette.svelte';
   import AppLockOverlay from './AppLockOverlay.svelte';
-  import AdvancedModal from './AdvancedModal.svelte';
-  import PasswordPromptModal from './PasswordPromptModal.svelte';
-  import { showConnectionForm, editingConnection, showSettings, successMessage, errorMessage, settings, isSidebarCollapsed, isRightSidebarOpen, activeTerminals, selectedTerminalIndex, showCommandPalette, isLocked, showAdvancedModal, passwordPromptRequest } from '../lib/store';
+  import { showConnectionForm, editingConnection, showSettings, successMessage, errorMessage, settings, isRightSidebarOpen, activeTerminals, selectedTerminalIndex, showCommandPalette, isLocked, showAdvancedModal, passwordPromptRequest } from '../lib/store';
   import { closeAllTerminals, disconnectTerminal, restoreActiveSessions, sendTerminalData } from '../lib/terminalService';
   import { loadConnections } from '../lib/connectionService';
   import { themeColors, type ThemeColorKey } from '../lib/themeColors';
@@ -100,6 +100,55 @@
   let confirmDialogActive: ConfirmDialogDetail | null = null;
   let confirmDialogQueue: ConfirmDialogDetail[] = [];
   let confirmDialogSubmitting = false;
+
+  async function ensureRightSidebarLoaded() {
+    if (!RightSidebarComponent) {
+      const module = await import('./RightSidebar.svelte');
+      RightSidebarComponent = module.default;
+    }
+  }
+
+  async function ensureAiChatPanelLoaded() {
+    if (!AiChatPanelComponent) {
+      const module = await import('./ai/AiChatPanel.svelte');
+      AiChatPanelComponent = module.default;
+    }
+  }
+
+  async function ensureConnectionModalLoaded() {
+    if (!ConnectionModalComponent) {
+      const module = await import('./ConnectionModal.svelte');
+      ConnectionModalComponent = module.default;
+    }
+  }
+
+  async function ensureSettingsModalLoaded() {
+    if (!SettingsModalComponent) {
+      const module = await import('./SettingsModal.svelte');
+      SettingsModalComponent = module.default;
+    }
+  }
+
+  async function ensureCommandPaletteLoaded() {
+    if (!CommandPaletteComponent) {
+      const module = await import('./CommandPalette.svelte');
+      CommandPaletteComponent = module.default;
+    }
+  }
+
+  async function ensureAdvancedModalLoaded() {
+    if (!AdvancedModalComponent) {
+      const module = await import('./AdvancedModal.svelte');
+      AdvancedModalComponent = module.default;
+    }
+  }
+
+  async function ensurePasswordPromptModalLoaded() {
+    if (!PasswordPromptModalComponent) {
+      const module = await import('./PasswordPromptModal.svelte');
+      PasswordPromptModalComponent = module.default;
+    }
+  }
 
   async function applyAppLock() {
     try {
@@ -426,7 +475,13 @@
     updateTheme(); // Initial theme application
 
     // TitleBar AI button listener
-    const handleOpenAi = () => { isAiPanelOpen = !isAiPanelOpen; };
+    const handleOpenAi = async () => {
+      const nextOpen = !isAiPanelOpen;
+      if (nextOpen) {
+        await ensureAiChatPanelLoaded();
+      }
+      isAiPanelOpen = nextOpen;
+    };
     window.addEventListener('titlebar:open-ai', handleOpenAi);
     window.addEventListener('ai:run-command', handleAiRunCommand as EventListener);
     window.addEventListener('ai:open-with-context', handleAiOpenWithContext as EventListener);
@@ -489,6 +544,7 @@
     const content = customEvent.detail ?? '';
     if (!content.trim()) return;
 
+    await ensureAiChatPanelLoaded();
     isAiPanelOpen = true;
     await tick();
     window.dispatchEvent(new CustomEvent('ai:insert-chat-draft', { detail: content }));
@@ -496,11 +552,12 @@
 
   async function handleAiNewChat() {
     if (!isAiPanelOpen) {
+      await ensureAiChatPanelLoaded();
       isAiPanelOpen = true;
       await tick();
     }
 
-    await aiPanelRef?.startFreshChat();
+    await aiPanelRef?.startFreshChat?.();
   }
 
   function handleKeydown(event: KeyboardEvent) {
@@ -531,19 +588,15 @@
     // Command Palette
     if (matchShortcut(event, shortcuts.commandPalette)) {
       event.preventDefault();
+      if (!$showCommandPalette) void ensureCommandPaletteLoaded();
       showCommandPalette.update(v => !v);
-      return;
-    }
-
-    if (matchShortcut(event, shortcuts.toggleSidebar)) {
-      event.preventDefault();
-      isSidebarCollapsed.update(v => !v);
       return;
     }
 
     // Toggle File Browser
     if (matchShortcut(event, shortcuts.toggleFileBrowser)) {
       event.preventDefault();
+      if (!$isRightSidebarOpen) void ensureRightSidebarLoaded();
       isRightSidebarOpen.update(v => !v);
       return;
     }
@@ -551,6 +604,7 @@
     // Toggle AI Panel (Ctrl+Shift+A)
     if (event.ctrlKey && event.shiftKey && event.key === 'A') {
       event.preventDefault();
+      if (!isAiPanelOpen) void ensureAiChatPanelLoaded();
       isAiPanelOpen = !isAiPanelOpen;
       return;
     }
@@ -558,6 +612,7 @@
     // New Connection
     if (matchShortcut(event, shortcuts.newConnection)) {
       event.preventDefault();
+      void ensureConnectionModalLoaded();
       editingConnection.set(null);
       showConnectionForm.set(true);
       return;
@@ -566,6 +621,7 @@
     // Settings
     if (matchShortcut(event, shortcuts.settings)) {
       event.preventDefault();
+      if (!$showSettings) void ensureSettingsModalLoaded();
       showSettings.update(v => !v);
       return;
     }
@@ -610,6 +666,34 @@
     const appWindow = getCurrentWindow();
     await appWindow.close();
   }
+
+  $: if ($showConnectionForm) {
+    void ensureConnectionModalLoaded();
+  }
+
+  $: if ($showSettings) {
+    void ensureSettingsModalLoaded();
+  }
+
+  $: if ($showCommandPalette) {
+    void ensureCommandPaletteLoaded();
+  }
+
+  $: if ($showAdvancedModal) {
+    void ensureAdvancedModalLoaded();
+  }
+
+  $: if ($passwordPromptRequest) {
+    void ensurePasswordPromptModalLoaded();
+  }
+
+  $: if ($isRightSidebarOpen) {
+    void ensureRightSidebarLoaded();
+  }
+
+  $: if (isAiPanelOpen) {
+    void ensureAiChatPanelLoaded();
+  }
 </script>
 
 <svelte:window on:keydown={handleKeydown} />
@@ -635,8 +719,6 @@
     <TitleBar />
 
     <div class="relative z-10 flex h-full w-full pt-[35px]">
-      <Sidebar />
-      
       <main class="flex-1 flex overflow-hidden relative">
         <div class="flex-1 flex flex-col min-w-0 relative">
           <TerminalManager />
@@ -712,18 +794,23 @@
             </div>
             <!-- Content -->
             <div class="flex-1 overflow-hidden">
-              <AiChatPanel
-                bind:this={aiPanelRef}
-                bind:activeTab={aiPanelActiveTab}
-                bind:showThinking={aiPanelShowThinking}
-                sessionId={aiSessionId}
-              />
+              {#if AiChatPanelComponent}
+                <svelte:component
+                  this={AiChatPanelComponent}
+                  bind:this={aiPanelRef}
+                  bind:activeTab={aiPanelActiveTab}
+                  bind:showThinking={aiPanelShowThinking}
+                  sessionId={aiSessionId}
+                />
+              {/if}
             </div>
           </div>
         {/if}
         {#if $isRightSidebarOpen}
           <div transition:fly={{ x: $settings.ui.rightSidebarWidth || 400, duration: 200 }} class="h-full flex-shrink-0 z-20 shadow-lg">
-            <RightSidebar />
+            {#if RightSidebarComponent}
+              <svelte:component this={RightSidebarComponent} />
+            {/if}
           </div>
         {/if}
       </main>
@@ -741,26 +828,36 @@
 
 {#if $showConnectionForm}
   <div transition:fade={{ duration: 200 }}>
-    <ConnectionModal />
+    {#if ConnectionModalComponent}
+      <svelte:component this={ConnectionModalComponent} />
+    {/if}
   </div>
 {/if}
 
 {#if $showSettings}
   <div transition:fade={{ duration: 200 }}>
-    <SettingsModal />
+    {#if SettingsModalComponent}
+      <svelte:component this={SettingsModalComponent} />
+    {/if}
   </div>
 {/if}
 
 {#if $showAdvancedModal}
-  <AdvancedModal />
+  {#if AdvancedModalComponent}
+    <svelte:component this={AdvancedModalComponent} />
+  {/if}
 {/if}
 
 {#if $passwordPromptRequest}
-  <PasswordPromptModal />
+  {#if PasswordPromptModalComponent}
+    <svelte:component this={PasswordPromptModalComponent} />
+  {/if}
 {/if}
 
 {#if $showCommandPalette}
-  <CommandPalette />
+  {#if CommandPaletteComponent}
+    <svelte:component this={CommandPaletteComponent} />
+  {/if}
 {/if}
 
 {#if $isLocked}

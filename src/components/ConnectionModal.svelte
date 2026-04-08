@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { showConnectionForm, editingConnection, connections, type Connection, showSuccessMessage } from '../lib/store';
+  import { showConnectionForm, editingConnection, connections, connectionHistory, type Connection, showSuccessMessage } from '../lib/store';
   import { saveConnection, createBackendConfig } from '../lib/connectionService';
   import { connectAndOpen, invokeWithTimeout } from '../lib/terminalService';
   import {
@@ -12,6 +12,9 @@
   import XIcon from './icons/XIcon.svelte';
   import PlusIcon from './icons/PlusIcon.svelte';
   import ActivityIcon from './icons/ActivityIcon.svelte';
+  import ServerIcon from './icons/ServerIcon.svelte';
+  import FolderIcon from './icons/FolderIcon.svelte';
+  import ClockIcon from './icons/ClockIcon.svelte';
   import { slide, fade } from 'svelte/transition';
 
   function createDefaultFormData() {
@@ -304,6 +307,8 @@
 
   // Tabs
   let activeTab: 'basic' | 'advanced' = 'basic';
+  let modalView: 'chooser' | 'form' = 'form';
+  let chooserSearchTerm = '';
   let lastProtocol: 'Ssh' | 'Rdp' | 'Telnet' = formData.protocol;
 
   $: if (formData.protocol !== lastProtocol) {
@@ -380,12 +385,174 @@
 
     if (openedCreate || switchedFromEditToCreate) {
       resetFormData();
+      modalView = 'chooser';
     } else if (formVisible && editingId && editingId !== previousEditingConnectionId && $editingConnection) {
       hydrateFromConnection($editingConnection);
+      modalView = 'form';
     }
 
     previousFormVisible = formVisible;
     previousEditingConnectionId = editingId;
+  }
+
+  $: savedConnections = [...$connections].sort((a, b) => {
+    const aName = (a.name ?? '').toLowerCase();
+    const bName = (b.name ?? '').toLowerCase();
+    return aName.localeCompare(bName, 'zh-CN');
+  });
+
+  $: recentConnectionMap = new Map($connectionHistory.map(item => [item.connection.id, item.lastConnected]));
+
+  $: searchedSavedConnections = savedConnections.filter(connection => {
+    const term = chooserSearchTerm.trim().toLowerCase();
+    if (!term) return true;
+    const tags = Array.isArray(connection.tags) ? connection.tags.join(' ').toLowerCase() : '';
+    const address = `${connection.username ?? ''} ${connection.host ?? ''} ${connection.port ?? ''}`.toLowerCase();
+    return (
+      (connection.name ?? '').toLowerCase().includes(term) ||
+      address.includes(term) ||
+      tags.includes(term)
+    );
+  });
+
+  $: chooserStats = {
+    total: savedConnections.length,
+    recent: savedConnections.filter(connection => recentConnectionMap.has(connection.id)).length,
+    grouped: savedConnections.filter(connection => Array.isArray(connection.tags) && connection.tags.length > 0).length,
+  };
+
+  type ChooserTagNode = {
+    name: string;
+    path: string;
+    children: Map<string, ChooserTagNode>;
+    connections: Connection[];
+  };
+
+  type ChooserTreeRow =
+    | { kind: 'folder'; id: string; depth: number; name: string; path: string; count: number; hasChildren: boolean }
+    | { kind: 'connection'; id: string; depth: number; connection: Connection };
+
+  let chooserExpandedPaths = new Set<string>(['未分组']);
+
+  function splitTagPath(tag: string): string[] {
+    return tag
+      .split('/')
+      .map(part => part.trim())
+      .filter(Boolean);
+  }
+
+  function getPrimaryGroupTag(connection: Connection): string {
+    const tags = normalizeTagsValue(connection.tags);
+    return tags[0] ? String(tags[0]).trim() : '未分组';
+  }
+
+  function buildChooserTree(items: Connection[]): ChooserTagNode {
+    const root: ChooserTagNode = { name: '', path: '', children: new Map(), connections: [] };
+
+    for (const connection of items) {
+      const groupTag = getPrimaryGroupTag(connection);
+      const parts = groupTag === '未分组' ? ['未分组'] : splitTagPath(groupTag);
+      if (parts.length === 0) continue;
+
+      let node = root;
+      for (const part of parts) {
+        const nextPath = node.path ? `${node.path}/${part}` : part;
+        const existing = node.children.get(part);
+        if (existing) {
+          node = existing;
+        } else {
+          const created: ChooserTagNode = { name: part, path: nextPath, children: new Map(), connections: [] };
+          node.children.set(part, created);
+          node = created;
+        }
+      }
+      node.connections.push(connection);
+    }
+
+    if (!root.children.has('未分组')) {
+      root.children.set('未分组', { name: '未分组', path: '未分组', children: new Map(), connections: [] });
+    }
+
+    return root;
+  }
+
+  function countChooserConnections(node: ChooserTagNode): number {
+    let total = node.connections.length;
+    for (const child of node.children.values()) {
+      total += countChooserConnections(child);
+    }
+    return total;
+  }
+
+  function flattenChooserTree(node: ChooserTagNode, expanded: Set<string>, depth = 0): ChooserTreeRow[] {
+    const rows: ChooserTreeRow[] = [];
+    const children = Array.from(node.children.values()).sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN'));
+
+    for (const child of children) {
+      const hasChildren = child.children.size > 0;
+      rows.push({
+        kind: 'folder',
+        id: `folder:${child.path}`,
+        depth,
+        name: child.name,
+        path: child.path,
+        count: countChooserConnections(child),
+        hasChildren,
+      });
+
+      if (expanded.has(child.path)) {
+        rows.push(...flattenChooserTree(child, expanded, depth + 1));
+        const sortedConnections = [...child.connections].sort((a, b) =>
+          String(a.name ?? '').localeCompare(String(b.name ?? ''), 'zh-Hans-CN')
+        );
+        for (const connection of sortedConnections) {
+          rows.push({
+            kind: 'connection',
+            id: `connection:${child.path}:${connection.id}`,
+            depth: depth + 1,
+            connection,
+          });
+        }
+      }
+    }
+
+    return rows;
+  }
+
+  function toggleChooserFolder(path: string) {
+    const next = new Set(chooserExpandedPaths);
+    if (next.has(path)) next.delete(path);
+    else next.add(path);
+    chooserExpandedPaths = next;
+  }
+
+  $: chooserTree = buildChooserTree(searchedSavedConnections);
+  $: chooserTreeRows = flattenChooserTree(chooserTree, chooserExpandedPaths);
+
+  function formatLastConnected(timestamp: number | undefined): string {
+    if (!timestamp) return '';
+    const diff = Date.now() - timestamp;
+    const minute = 60 * 1000;
+    const hour = 60 * minute;
+    const day = 24 * hour;
+    if (diff < hour) return `${Math.max(1, Math.floor(diff / minute))} 分钟前`;
+    if (diff < day) return `${Math.floor(diff / hour)} 小时前`;
+    return `${Math.floor(diff / day)} 天前`;
+  }
+
+  async function handleQuickConnect(connection: Connection) {
+    await connectAndOpen(connection);
+    handleClose();
+  }
+
+  function openCreateForm() {
+    resetFormData();
+    modalView = 'form';
+  }
+
+  function goBackToChooser() {
+    testConnectionFeedback = null;
+    modalView = 'chooser';
   }
 
   function setTestConnectionFeedback(type: 'success' | 'error', message: string) {
@@ -535,23 +702,40 @@
     <!-- Header -->
     <div class="flex items-center justify-between px-6 py-4 border-b border-app-border bg-app-bg">
       <div class="flex items-center gap-4">
-        <h2 class="text-lg font-semibold text-app-text">{$editingConnection ? '编辑连接' : '新建连接'}</h2>
-        <!-- Tabs -->
-        <div class="flex bg-app-bg rounded-lg p-1 border border-app-border">
-          <button 
-            class="px-3 py-1 text-xs font-medium rounded-md transition-all {activeTab === 'basic' ? 'bg-app-surface text-primary-600 dark:text-primary-400 shadow-sm' : 'text-app-text-secondary hover:text-app-text'}"
-            on:click={() => activeTab = 'basic'}
-          >
-            基本信息
-          </button>
-          <button 
-            class="px-3 py-1 text-xs font-medium rounded-md transition-all {formData.protocol !== 'Ssh' ? 'opacity-40 cursor-not-allowed' : ''} {activeTab === 'advanced' ? 'bg-app-surface text-primary-600 dark:text-primary-400 shadow-sm' : 'text-app-text-secondary hover:text-app-text'}"
-            disabled={formData.protocol !== 'Ssh'}
-            on:click={() => activeTab = 'advanced'}
-          >
-            高级 & 隧道
-          </button>
+        <div class="flex items-center gap-3">
+          {#if !$editingConnection && modalView === 'form'}
+            <button
+              type="button"
+              class="inline-flex items-center justify-center rounded-md p-1.5 text-app-text-secondary transition-colors hover:bg-app-bg-hover hover:text-app-text"
+              on:click={goBackToChooser}
+              title="返回新建页"
+            >
+              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
+              </svg>
+            </button>
+          {/if}
+          <h2 class="text-lg font-semibold text-app-text">
+            {$editingConnection ? '编辑连接' : modalView === 'chooser' ? '新建页' : '新建连接'}
+          </h2>
         </div>
+        {#if modalView === 'form'}
+          <div class="flex bg-app-bg rounded-lg p-1 border border-app-border">
+            <button 
+              class="px-3 py-1 text-xs font-medium rounded-md transition-all {activeTab === 'basic' ? 'bg-app-surface text-primary-600 dark:text-primary-400 shadow-sm' : 'text-app-text-secondary hover:text-app-text'}"
+              on:click={() => activeTab = 'basic'}
+            >
+              基本信息
+            </button>
+            <button 
+              class="px-3 py-1 text-xs font-medium rounded-md transition-all {formData.protocol !== 'Ssh' ? 'opacity-40 cursor-not-allowed' : ''} {activeTab === 'advanced' ? 'bg-app-surface text-primary-600 dark:text-primary-400 shadow-sm' : 'text-app-text-secondary hover:text-app-text'}"
+              disabled={formData.protocol !== 'Ssh'}
+              on:click={() => activeTab = 'advanced'}
+            >
+              高级 & 隧道
+            </button>
+          </div>
+        {/if}
       </div>
       <button 
         class="text-app-text-secondary hover:text-app-text transition-colors p-1 rounded-md hover:bg-app-bg-hover"
@@ -563,6 +747,127 @@
 
     <!-- Scrollable Content -->
     <div class="flex-1 overflow-y-auto p-6 custom-scrollbar">
+      {#if !$editingConnection && modalView === 'chooser'}
+        <div class="space-y-6" in:fade={{ duration: 150 }}>
+          <div class="border-b border-app-border pb-5">
+            <div class="flex gap-2">
+              <button
+                type="button"
+                class="flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white shadow-md transition-all hover:bg-primary-500 hover:shadow-primary-900/30 active:scale-95"
+                on:click={openCreateForm}
+              >
+                <PlusIcon class="h-4 w-4" />
+                <span>新建连接</span>
+              </button>
+            </div>
+            <div class="mt-3 text-sm text-app-text-secondary">
+              已保存 <span class="text-app-text">{chooserStats.total}</span> 个连接，最近使用 <span class="text-app-text">{chooserStats.recent}</span> 个。
+            </div>
+          </div>
+
+          <div class="space-y-3">
+            <div class="px-2 py-1.5 flex justify-between items-center text-xs font-semibold text-app-text-secondary uppercase tracking-wider whitespace-nowrap">
+              <span>已保存连接</span>
+              <span>{searchedSavedConnections.length} 项</span>
+            </div>
+
+            <div class="px-2">
+              <div class="relative">
+                <input
+                  type="text"
+                  bind:value={chooserSearchTerm}
+                  placeholder="搜索连接..."
+                  class="w-full bg-app-surface border border-app-border rounded-lg py-1.5 px-3 pl-9 text-sm text-app-text placeholder-app-text-secondary focus:outline-none focus:border-primary-500/50 focus:ring-1 focus:ring-primary-500/50 transition-all"
+                />
+                <svg class="absolute left-3 top-2 w-4 h-4 text-app-text-secondary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+                </svg>
+              </div>
+            </div>
+
+            {#if chooserTreeRows.length > 0}
+              <div class="space-y-0.5">
+                {#each chooserTreeRows as row (row.id)}
+                  {#if row.kind === 'folder'}
+                    <button
+                      type="button"
+                      class="w-full text-left flex items-center gap-2 rounded-lg p-2 transition-colors hover:bg-app-surface"
+                      style={`padding-left: ${0.5 + row.depth * 0.75}rem;`}
+                      on:click={() => toggleChooserFolder(row.path)}
+                    >
+                      <span class="text-app-text-secondary w-4 inline-flex justify-center">
+                        {#if chooserExpandedPaths.has(row.path)}
+                          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                          </svg>
+                        {:else}
+                          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                          </svg>
+                        {/if}
+                      </span>
+                      <span class="text-app-text-secondary shrink-0">
+                        <FolderIcon class="w-4 h-4" />
+                      </span>
+                      <span class="flex-1 min-w-0">
+                        <span class="font-medium text-app-text truncate">{row.name}</span>
+                      </span>
+                      <span class="text-[10px] text-app-text-secondary bg-app-surface px-1.5 py-0.5 rounded-full">
+                        {row.count}
+                      </span>
+                    </button>
+                  {:else}
+                    <button
+                      type="button"
+                      class="group w-full text-left flex items-center gap-3 rounded-lg p-3 transition-colors hover:bg-app-surface"
+                      style={`padding-left: ${0.75 + row.depth * 0.75}rem;`}
+                      on:click={() => handleQuickConnect(row.connection)}
+                    >
+                      <div class="text-app-text-secondary group-hover:text-primary-500 dark:group-hover:text-primary-400 transition-colors shrink-0">
+                        <ServerIcon class="w-4 h-4" />
+                      </div>
+                      <div class="min-w-0 flex-1">
+                        <div class="font-medium text-app-text truncate flex items-center gap-2">
+                          <span class="truncate">{row.connection.name}</span>
+                          <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-app-surface text-app-text-secondary shrink-0">
+                            {(row.connection as any).protocol === 'Rdp' ? 'RDP' : 'SSH'}
+                          </span>
+                          {#if recentConnectionMap.has(row.connection.id)}
+                            <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-app-surface text-app-text-secondary shrink-0 inline-flex items-center gap-1">
+                              <ClockIcon className="w-3 h-3" />
+                              <span>{formatLastConnected(recentConnectionMap.get(row.connection.id))}</span>
+                            </span>
+                          {/if}
+                        </div>
+                        <div class="text-xs text-app-text-secondary truncate mt-0.5 font-mono opacity-80">
+                          {#if row.connection.username}{row.connection.username}@{/if}{row.connection.host}:{row.connection.port}
+                        </div>
+                      </div>
+                    </button>
+                  {/if}
+                {/each}
+              </div>
+            {:else}
+              <div class="flex flex-col items-center justify-center py-12 text-app-text-secondary">
+                <div class="mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-app-surface text-app-text-secondary">
+                  <ServerIcon class="h-5 w-5" />
+                </div>
+                <p class="text-sm font-medium text-app-text">{chooserSearchTerm.trim() ? '没有匹配的连接' : '还没有已保存连接'}</p>
+                <p class="mt-1 text-sm text-app-text-secondary">{chooserSearchTerm.trim() ? '换个关键词试试，或者直接创建一个新连接。' : '先创建一个连接配置，之后就可以在这里快速进入。'}</p>
+                {#if chooserSearchTerm.trim()}
+                  <button
+                    type="button"
+                    class="mt-4 inline-flex items-center gap-2 rounded-lg border border-app-border bg-app-surface px-4 py-2 text-sm text-app-text transition-colors hover:bg-app-bg-hover"
+                    on:click={() => (chooserSearchTerm = '')}
+                  >
+                    清空搜索
+                  </button>
+                {/if}
+              </div>
+            {/if}
+          </div>
+        </div>
+      {:else}
       <form id="connection-form" on:submit|preventDefault={handleSubmit} class="space-y-6">
         {#if activeTab === 'basic'}
           <div in:slide={{ duration: 200 }} class="space-y-5 p-1">
@@ -1251,9 +1556,11 @@
           </div>
         {/if}
       </form>
+      {/if}
     </div>
 
     <!-- Footer -->
+    {#if modalView === 'form' || $editingConnection}
     <div class="px-6 py-4 border-t border-app-border bg-app-surface space-y-3">
       {#if testConnectionFeedback}
         <div
@@ -1309,6 +1616,7 @@
         </button>
       </div>
     </div>
+    {/if}
   </div>
 </div>
 

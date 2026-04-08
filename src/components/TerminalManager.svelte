@@ -1,9 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { activeTerminals, selectedTerminalIndex } from '../lib/store';
+  import { activeTerminals, selectedTerminalIndex, showCommandPalette, showConnectionForm, editingConnection } from '../lib/store';
   import { execRemoteCommand } from '../lib/connectionService';
   import TerminalView from './TerminalView.svelte';
   import TerminalIcon from './icons/TerminalIcon.svelte';
+  import PlusIcon from './icons/PlusIcon.svelte';
   import { formatTransferRate } from '../lib/transferRateFormatter';
 
   let currentTime = '';
@@ -21,6 +22,15 @@
   const lastNetSampleBySession = new Map<string, { rx: number; tx: number; time: number }>();
   const lastCpuSampleBySession = new Map<string, { idle: number; total: number }>();
   const POLL_INTERVAL_MS = 15000;
+
+  function openNewConnection() {
+    editingConnection.set(null);
+    showConnectionForm.set(true);
+  }
+
+  function openCommandPalette() {
+    showCommandPalette.set(true);
+  }
 
   function updateClock() {
     const next = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -348,7 +358,25 @@
           <TerminalIcon class="w-8 h-8 opacity-50" />
         </div>
         <p class="text-lg font-medium text-app-text">无活动会话</p>
-        <p class="text-sm mt-2 opacity-60">请从左侧列表选择连接以开始</p>
+        <p class="text-sm mt-2 opacity-60">新建一个连接，或通过命令面板快速打开已保存的主机</p>
+        <div class="mt-6 flex items-center gap-3">
+          <button
+            class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white shadow-md transition-all hover:bg-primary-500"
+            on:click={openNewConnection}
+          >
+            <PlusIcon class="w-4 h-4" />
+            <span>新建连接</span>
+          </button>
+          <button
+            class="inline-flex items-center gap-2 rounded-lg border border-app-border bg-app-bg px-4 py-2 text-sm font-medium text-app-text transition-colors hover:bg-app-bg-hover"
+            on:click={openCommandPalette}
+          >
+            <svg class="w-4 h-4 text-app-text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M10.5 18a7.5 7.5 0 100-15 7.5 7.5 0 000 15z" />
+            </svg>
+            <span>命令面板</span>
+          </button>
+        </div>
       </div>
     {:else}
       {#each rootTerminals as terminal (terminal.sessionId)}

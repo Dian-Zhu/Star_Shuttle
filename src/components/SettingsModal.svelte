@@ -257,16 +257,6 @@
     updateAppearanceSetting('backgroundImage', null);
   }
 
-  function updateUiSetting<K extends keyof (typeof $settings)['ui']>(key: K, value: (typeof $settings)['ui'][K]) {
-    settings.update(s => ({
-      ...s,
-      ui: {
-        ...s.ui,
-        [key]: value
-      }
-    }));
-  }
-
   function updateTerminalSetting<K extends keyof (typeof $settings)['terminal']>(
     key: K,
     value: (typeof $settings)['terminal'][K]
@@ -1038,26 +1028,6 @@
               <p class="mt-2 text-xs text-app-text-secondary">语言设置暂未开放</p>
             </div>
 
-            <!-- UI -->
-            <div class="flex items-center justify-between">
-              <div>
-                <label class="block text-sm font-medium text-app-text-secondary" for="sidebarCollapsed">
-                  折叠侧边栏
-                </label>
-                <p class="text-xs text-app-text-secondary mt-0.5">在窗口左侧显示紧凑模式</p>
-              </div>
-              <label class="relative inline-flex items-center cursor-pointer">
-                <input
-                  type="checkbox"
-                  id="sidebarCollapsed"
-                  checked={$settings.ui.sidebarCollapsed}
-                  on:change={(e) => updateUiSetting('sidebarCollapsed', (e.target as HTMLInputElement).checked)}
-                  class="sr-only peer"
-                >
-                <div class="w-11 h-6 bg-app-surface-light peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-600"></div>
-              </label>
-            </div>
-
             <!-- App Info -->
             <div class="pt-6 border-t border-app-border">
                <div class="flex justify-between items-center">
@@ -1092,25 +1062,6 @@
                     />
                     {#if shortcutErrors.commandPalette}
                       <div class="text-xs text-red-500 dark:text-red-400">{shortcutErrors.commandPalette}</div>
-                    {/if}
-                  </div>
-                </div>
-
-                <div class="grid grid-cols-2 gap-4 items-center border-b border-app-border pb-4">
-                  <div>
-                    <span class="block text-sm font-medium text-app-text-secondary">切换侧边栏</span>
-                    <span class="text-xs text-app-text-secondary">显示/隐藏左侧侧边栏</span>
-                  </div>
-                  <div class="space-y-1">
-                    <input
-                      type="text"
-                      readonly
-                      value={shortcutDrafts.toggleSidebar}
-                      on:keydown={(e) => handleShortcutKeydown('toggleSidebar', e)}
-                      class="bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text text-sm font-mono focus:border-primary-500 outline-none w-full"
-                    />
-                    {#if shortcutErrors.toggleSidebar}
-                      <div class="text-xs text-red-500 dark:text-red-400">{shortcutErrors.toggleSidebar}</div>
                     {/if}
                   </div>
                 </div>

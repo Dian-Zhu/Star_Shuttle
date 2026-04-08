@@ -19,7 +19,9 @@ use uuid::Uuid;
 #[serde(rename_all = "snake_case")]
 pub enum AgentStatus {
     Running,
+    Retrying,
     WaitingConfirm,
+    Cancelling,
     Completed,
     Failed,
     Cancelled,
@@ -157,13 +159,39 @@ impl AgentManager {
         self.tasks.lock().ok()?.get(&task_id).cloned()
     }
 
+    fn extract_message_content(message: &serde_json::Value) -> String {
+        if let Some(content) = message.get("content").and_then(|v| v.as_str()) {
+            return content.to_string();
+        }
+
+        if let Some(parts) = message.get("content").and_then(|v| v.as_array()) {
+            let mut combined = String::new();
+            for part in parts {
+                if let Some(text) = part.get("text").and_then(|v| v.as_str()) {
+                    combined.push_str(text);
+                } else if let Some(text) = part.get("content").and_then(|v| v.as_str()) {
+                    combined.push_str(text);
+                }
+            }
+            return combined;
+        }
+
+        if let Some(reasoning) = message.get("reasoning_content").and_then(|v| v.as_str()) {
+            return reasoning.to_string();
+        }
+
+        String::new()
+    }
+
     pub fn cancel_task(&self, task_id: Uuid) -> Result<(), String> {
-        // Mark status
+        // Mark status immediately so the frontend can stop scheduling new work.
         {
             let mut tasks = self.tasks.lock().map_err(|e| e.to_string())?;
             if let Some(task) = tasks.get_mut(&task_id) {
-                task.status = AgentStatus::Cancelled;
+                task.status = AgentStatus::Cancelling;
                 task.pending_confirm = None;
+            } else {
+                return Err("Task not found".to_string());
             }
         }
         // Unblock any pending confirm (send false so loop can exit)
@@ -287,6 +315,7 @@ Sandbox mode: {mode}"#,
 
         let max_steps = 20usize;
         let mut step_count = 0;
+        let mut empty_response_retries = 0usize;
 
         loop {
             // 检查取消信号（非阻塞）
@@ -296,18 +325,30 @@ Sandbox mode: {mode}"#,
                 return Ok(());
             }
             // 检查任务状态
-            {
+            let should_finalize_cancel = {
                 let tasks = self.tasks.lock().map_err(|e| e.to_string())?;
-                if let Some(t) = tasks.get(&task_id) {
-                    if t.status == AgentStatus::Cancelled {
-                        return Ok(());
-                    }
-                }
+                tasks
+                    .get(&task_id)
+                    .map(|t| t.status == AgentStatus::Cancelled || t.status == AgentStatus::Cancelling)
+                    .unwrap_or(false)
+            };
+            if should_finalize_cancel {
+                self.set_task_status(task_id, AgentStatus::Cancelled)?;
+                self.emit_status(app, task_id);
+                return Ok(());
             }
 
             if step_count >= max_steps {
-                self.add_step(task_id, StepKind::Result, "已达最大步骤限制，停止执行".to_string(), None, None, StepStatus::Completed);
-                self.set_task_status(task_id, AgentStatus::Completed)?;
+                self.add_step(
+                    task_id,
+                    StepKind::Result,
+                    "任务未完成".to_string(),
+                    None,
+                    Some("已达最大步骤限制，未生成最终结果。".to_string()),
+                    StepStatus::Failed,
+                );
+                self.set_task_error(task_id, Some("已达最大步骤限制，未生成最终结果。".to_string()))?;
+                self.set_task_status(task_id, AgentStatus::Failed)?;
                 self.emit_status(app, task_id);
                 return Ok(());
             }
@@ -336,9 +377,41 @@ Sandbox mode: {mode}"#,
             if let Some(tool_calls) = response.get("tool_calls").and_then(|v| v.as_array()) {
                 if tool_calls.is_empty() {
                     // 纯文本回复，视为任务总结
-                    let content = response.get("content").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let content = Self::extract_message_content(&response).trim().to_string();
+                    if content.is_empty() {
+                        if empty_response_retries < 1 {
+                            empty_response_retries += 1;
+                            self.set_task_status(task_id, AgentStatus::Retrying)?;
+                            self.update_step(
+                                task_id,
+                                think_step_id,
+                                StepStatus::Failed,
+                                Some("模型返回了空响应，正在尝试重新引导执行工具调用...".to_string()),
+                            );
+                            messages.push(serde_json::json!({
+                                "role": "system",
+                                "content": "Your previous response was empty. You must either call an available tool or call task_complete with a non-empty summary. For server inspection tasks, prefer execute_command."
+                            }));
+                            self.emit_status(app, task_id);
+                            continue;
+                        }
+
+                        self.set_task_error(
+                            task_id,
+                            Some("模型返回了空响应，未生成工具调用或任务总结。请检查当前模型是否支持 tools/function calling。".to_string()),
+                        )?;
+                        return Err("模型返回了空响应，未生成工具调用或任务总结。请检查当前模型是否支持 tools/function calling。".to_string());
+                    }
+                    self.set_task_error(task_id, None)?;
                     self.update_step(task_id, think_step_id, StepStatus::Completed, Some(content.clone()));
-                    self.add_step(task_id, StepKind::Result, content, None, None, StepStatus::Completed);
+                    self.add_step(
+                        task_id,
+                        StepKind::Result,
+                        "任务完成".to_string(),
+                        None,
+                        Some(content),
+                        StepStatus::Completed,
+                    );
                     self.set_task_status(task_id, AgentStatus::Completed)?;
                     self.emit_status(app, task_id);
                     return Ok(());
@@ -369,7 +442,22 @@ Sandbox mode: {mode}"#,
                             self.handle_get_system_info(task_id, session_id).await?
                         }
                         "task_complete" => {
-                            let summary = args.get("summary").and_then(|v| v.as_str()).unwrap_or("Task completed");
+                            let summary = args.get("summary").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+                            if summary.is_empty() {
+                                self.add_step(
+                                    task_id,
+                                    StepKind::Result,
+                                    "任务未完成".to_string(),
+                                    None,
+                                    Some("模型调用了 task_complete，但没有提供有效总结。".to_string()),
+                                    StepStatus::Failed,
+                                );
+                                self.set_task_error(task_id, Some("模型调用了 task_complete，但没有提供有效总结。".to_string()))?;
+                                self.set_task_status(task_id, AgentStatus::Failed)?;
+                                self.emit_status(app, task_id);
+                                return Ok(());
+                            }
+                            self.set_task_error(task_id, None)?;
                             self.add_step(task_id, StepKind::Result, summary.to_string(), None, Some(summary.to_string()), StepStatus::Completed);
                             self.set_task_status(task_id, AgentStatus::Completed)?;
                             self.emit_status(app, task_id);
@@ -379,13 +467,18 @@ Sandbox mode: {mode}"#,
                     };
 
                     // 任务可能被取消/失败
-                    {
+                    let task_status = {
                         let tasks = self.tasks.lock().map_err(|e| e.to_string())?;
-                        if let Some(t) = tasks.get(&task_id) {
-                            if t.status == AgentStatus::Cancelled || t.status == AgentStatus::Failed {
-                                return Ok(());
-                            }
+                        tasks.get(&task_id).map(|t| t.status.clone())
+                    };
+                    match task_status {
+                        Some(AgentStatus::Cancelling) => {
+                            self.set_task_status(task_id, AgentStatus::Cancelled)?;
+                            self.emit_status(app, task_id);
+                            return Ok(());
                         }
+                        Some(AgentStatus::Cancelled) | Some(AgentStatus::Failed) => return Ok(()),
+                        _ => {}
                     }
 
                     self.emit_status(app, task_id);
@@ -397,16 +490,50 @@ Sandbox mode: {mode}"#,
                         "content": tool_result,
                     }));
                 }
+                empty_response_retries = 0;
             } else {
                 // 纯文本回复
-                let content = response.get("content").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let content = Self::extract_message_content(&response).trim().to_string();
+                if content.is_empty() {
+                    if empty_response_retries < 1 {
+                        empty_response_retries += 1;
+                        self.set_task_status(task_id, AgentStatus::Retrying)?;
+                        self.update_step(
+                            task_id,
+                            think_step_id,
+                            StepStatus::Failed,
+                            Some("模型返回了空响应，正在尝试重新引导执行工具调用...".to_string()),
+                        );
+                        messages.push(serde_json::json!({
+                            "role": "system",
+                            "content": "Your previous response was empty. You must either call an available tool or call task_complete with a non-empty summary. For server inspection tasks, prefer execute_command."
+                        }));
+                        self.emit_status(app, task_id);
+                        continue;
+                    }
+
+                    self.set_task_error(
+                        task_id,
+                        Some("模型返回了空响应，未生成工具调用或任务总结。请检查当前模型是否支持 tools/function calling。".to_string()),
+                    )?;
+                    return Err("模型返回了空响应，未生成工具调用或任务总结。请检查当前模型是否支持 tools/function calling。".to_string());
+                }
+                self.set_task_error(task_id, None)?;
                 self.update_step(task_id, think_step_id, StepStatus::Completed, Some(content.clone()));
-                self.add_step(task_id, StepKind::Result, content, None, None, StepStatus::Completed);
+                self.add_step(
+                    task_id,
+                    StepKind::Result,
+                    "任务完成".to_string(),
+                    None,
+                    Some(content),
+                    StepStatus::Completed,
+                );
                 self.set_task_status(task_id, AgentStatus::Completed)?;
                 self.emit_status(app, task_id);
                 return Ok(());
             }
 
+            self.set_task_status(task_id, AgentStatus::Running)?;
             step_count += 1;
         }
     }
@@ -490,7 +617,8 @@ Sandbox mode: {mode}"#,
                 {
                     let mut tasks = self.tasks.lock().map_err(|e| e.to_string())?;
                     if let Some(task) = tasks.get_mut(&task_id) {
-                        if task.status == AgentStatus::Cancelled {
+                        if task.status == AgentStatus::Cancelled || task.status == AgentStatus::Cancelling {
+                            task.status = AgentStatus::Cancelled;
                             return Ok("Cancelled".to_string());
                         }
                         task.status = AgentStatus::Running;
@@ -547,10 +675,16 @@ Sandbox mode: {mode}"#,
 
         match result {
             Ok(output) => {
+                if self.is_task_terminating(task_id) {
+                    return Ok("Command result ignored because the task was cancelled.".to_string());
+                }
                 self.update_step(task_id, step_id, StepStatus::Completed, Some(output.clone()));
                 Ok(output)
             }
             Err(e) => {
+                if self.is_task_terminating(task_id) {
+                    return Ok("Command failed after cancellation; result ignored.".to_string());
+                }
                 self.update_step(task_id, step_id, StepStatus::Failed, Some(e.clone()));
                 Ok(format!("Command failed: {}", e))
             }
@@ -645,6 +779,25 @@ Sandbox mode: {mode}"#,
             task.status = status;
         }
         Ok(())
+    }
+
+    fn set_task_error(&self, task_id: Uuid, error: Option<String>) -> Result<(), String> {
+        let mut tasks = self.tasks.lock().map_err(|e| e.to_string())?;
+        if let Some(task) = tasks.get_mut(&task_id) {
+            task.error = error;
+        }
+        Ok(())
+    }
+
+    fn is_task_terminating(&self, task_id: Uuid) -> bool {
+        let Ok(tasks) = self.tasks.lock() else {
+            return false;
+        };
+
+        tasks
+            .get(&task_id)
+            .map(|task| matches!(task.status, AgentStatus::Cancelling | AgentStatus::Cancelled))
+            .unwrap_or(false)
     }
 
     fn emit_status(&self, app: &AppHandle, task_id: Uuid) {

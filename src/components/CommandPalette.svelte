@@ -7,7 +7,6 @@
     showSettings, 
     connections, 
     editingConnection,
-    isSidebarCollapsed,
     isRightSidebarOpen,
     settings as appSettings
   } from '../lib/store';
@@ -51,16 +50,6 @@
         showConnectionForm.set(true);
       },
       shortcut: $appSettings.shortcuts.newConnection
-    },
-    {
-      id: 'toggle-sidebar',
-      title: '切换侧边栏',
-      description: '显示或隐藏侧边栏',
-      category: 'General',
-      action: () => {
-        isSidebarCollapsed.update(v => !v);
-      },
-      shortcut: $appSettings.shortcuts.toggleSidebar
     },
     {
       id: 'toggle-file-browser',
@@ -165,13 +154,6 @@
       e.preventDefault();
       e.stopPropagation();
       executeCommand(allCommands.find(c => c.id === 'open-settings'));
-      return;
-    }
-
-    if (matchShortcut(e, shortcuts.toggleSidebar)) {
-      e.preventDefault();
-      e.stopPropagation();
-      executeCommand(allCommands.find(c => c.id === 'toggle-sidebar'));
       return;
     }
 

@@ -1,10 +1,11 @@
 <script lang="ts">
   import { getCurrentWindow } from '@tauri-apps/api/window';
-  import { showSettings, activeTerminals, selectedTerminalIndex, broadcastInputEnabled, broadcastSessionIds, terminalSessionMap } from '../lib/store';
+  import { showSettings, activeTerminals, selectedTerminalIndex, broadcastInputEnabled, broadcastSessionIds, terminalSessionMap, showCommandPalette, showConnectionForm, editingConnection } from '../lib/store';
   import { disconnectTerminal } from '../lib/terminalService';
   import SettingsIcon from './icons/SettingsIcon.svelte';
   import BroadcastIcon from './icons/BroadcastIcon.svelte';
   import TerminalIcon from './icons/TerminalIcon.svelte';
+  import PlusIcon from './icons/PlusIcon.svelte';
   import XIcon from './icons/XIcon.svelte';
 
   const appWindow = getCurrentWindow();
@@ -121,6 +122,15 @@
       return next;
     });
   }
+
+  function openCommandPalette() {
+    showCommandPalette.set(true);
+  }
+
+  function openNewConnection() {
+    editingConnection.set(null);
+    showConnectionForm.set(true);
+  }
 </script>
 
 <div class="titlebar" on:mousedown={handleMouseDown} role="button" tabindex="-1">
@@ -174,6 +184,22 @@
   <div class="titlebar-drag-region" data-tauri-drag-region></div>
   
   <div class="titlebar-controls">
+    <button
+      class="quick-action-btn"
+      on:click={openCommandPalette}
+      title="命令面板"
+    >
+      <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M10.5 18a7.5 7.5 0 100-15 7.5 7.5 0 000 15z" />
+      </svg>
+    </button>
+    <button
+      class="quick-action-btn"
+      on:click={openNewConnection}
+      title="新建连接"
+    >
+      <PlusIcon class="w-4 h-4" />
+    </button>
     <button
       class="broadcast-btn {$broadcastInputEnabled ? 'text-primary-500' : ''}"
       on:click={toggleBroadcast}
@@ -313,6 +339,10 @@
     transition: all 0.15s ease;
     cursor: pointer;
     pointer-events: auto;
+  }
+
+  .titlebar-controls .quick-action-btn {
+    width: 34px;
   }
   
   .titlebar-controls button:hover {
