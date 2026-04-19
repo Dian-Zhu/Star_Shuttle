@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { getCurrentWindow } from '@tauri-apps/api/window';
   import { get } from 'svelte/store';
   import { confirm } from '@tauri-apps/plugin-dialog';
   import { sftpService } from '../../lib/sftpService';
@@ -15,6 +16,7 @@
   
   export let sessionId: string;
   export let initialPath: string = '.'; // Default to current directory
+  export let followTargetPath: string | null = null;
 
   let currentPath = initialPath;
   let files: FileEntry[] = [];
@@ -226,6 +228,11 @@
     if (!trimmedInput || trimmedInput === '.') {
       return normalizePath(currentPath);
     }
+    const normalizedInput = normalizePath(trimmedInput);
+    const normalizedCurrent = normalizePath(currentPath);
+    if (normalizedInput === normalizedCurrent) {
+      return normalizedCurrent;
+    }
     if (trimmedInput === '..') {
       return parentPath(currentPath);
     }
@@ -236,7 +243,6 @@
       return trimmedInput;
     }
 
-    const normalizedCurrent = normalizePath(currentPath);
     if (normalizedCurrent === '/' || normalizedCurrent.startsWith('~')) {
       return normalizePath(joinPath(normalizedCurrent, trimmedInput));
     }
@@ -244,6 +250,21 @@
       return normalizePath(trimmedInput);
     }
     return normalizePath(`${normalizedCurrent}/${trimmedInput}`);
+  }
+
+  function getLocalFileName(path: string): string {
+    const normalized = path.replace(/\\/g, '/').replace(/\/+$/g, '');
+    const lastSlash = normalized.lastIndexOf('/');
+    const name = lastSlash >= 0 ? normalized.slice(lastSlash + 1) : normalized;
+    if (!name) {
+      throw new Error(`无法从本地路径解析文件名: ${path}`);
+    }
+    return name;
+  }
+
+  function followTerminalDirectory() {
+    if (!followTargetPath) return;
+    void loadFiles(followTargetPath);
   }
 
   // 根据文件扩展名获取图标
@@ -325,6 +346,7 @@
   let lastRequestedPath: string | null = null;
   let lastSessionId = sessionId;
   let activeLoadAbortController: AbortController | null = null;
+  let nativeDragDropUnlisten: (() => void) | null = null;
 
   $: if (sessionId !== lastSessionId) {
     lastSessionId = sessionId;
@@ -812,6 +834,37 @@
     await uploadFiles(Array.from(items), targetSessionId, targetPath);
   }
 
+  async function handleNativeFileDrop(paths: string[]) {
+    if (paths.length === 0) return;
+
+    loading = true;
+    error = null;
+    const targetSessionId = sessionId;
+    const targetPath = currentPath;
+
+    try {
+      for (const localPath of paths) {
+        const grant = await localFsService.grantDroppedFileForRead(localPath);
+        await uploadLocalPath(
+          grant.path,
+          grant.accessToken,
+          grant.size,
+          targetSessionId,
+          targetPath
+        );
+      }
+      if (targetSessionId === sessionId) {
+        invalidateCache(targetPath);
+        await loadFiles(targetPath, { force: true });
+      }
+    } catch (e: any) {
+      error = e?.message ?? String(e);
+    } finally {
+      loading = false;
+      isDragging = false;
+    }
+  }
+
   async function handleFileUpload(e: Event) {
     const input = e.target as HTMLInputElement;
     if (!input.files || input.files.length === 0) return;
@@ -872,6 +925,128 @@
           const full = new Uint8Array(await file.arrayBuffer());
           ensureSessionUnchanged(targetSessionId);
           await sftpService.scpUpload(targetSessionId, tempPath, full);
+        }
+      });
+    });
+  }
+
+  async function uploadLocalPath(
+    localPath: string,
+    accessToken: string,
+    size: number,
+    targetSessionId: string,
+    targetPath: string
+  ): Promise<void> {
+    const fileName = getLocalFileName(localPath);
+    const path = targetPath === '/' ? `/${fileName}` : `${targetPath}/${fileName}`.replace('//', '/');
+
+    await withPathWriteLock('remote', path, async () => {
+      let handle: any = null;
+      try {
+        handle = await localFsService.openFile(localPath, accessToken);
+        await atomicReplaceRemoteFile(targetSessionId, path, async (tempPath) => {
+          if (size === 0) {
+            try {
+              ensureSessionUnchanged(targetSessionId);
+              await sftpService.writeFile(targetSessionId, tempPath, new Uint8Array(0), false);
+            } catch {
+              await sftpService.scpUpload(targetSessionId, tempPath, new Uint8Array(0));
+            }
+            return;
+          }
+
+          let append = false;
+          try {
+            for (;;) {
+              const chunk = await localFsService.readChunk(handle, FILE_TRANSFER_CHUNK_SIZE);
+              if (chunk.length === 0) break;
+              ensureSessionUnchanged(targetSessionId);
+              await sftpService.writeFile(targetSessionId, tempPath, chunk, append);
+              append = true;
+            }
+          } catch (e) {
+            if (size > MAX_IN_MEMORY_FALLBACK_BYTES) {
+              throw new Error(
+                `上传失败：为避免内存占用，已禁用超大文件整块回退（${formatSize(size)}）`
+              );
+            }
+            await localFsService.closeFile(handle);
+            handle = null;
+            const retryGrant = await localFsService.grantDroppedFileForRead(localPath);
+            const reopen = await localFsService.openFile(localPath, retryGrant.accessToken);
+            try {
+              const full = new Uint8Array(size);
+              let offset = 0;
+              for (;;) {
+                const chunk = await localFsService.readChunk(
+                  reopen,
+                  Math.min(FILE_TRANSFER_CHUNK_SIZE, size - offset)
+                );
+                if (chunk.length === 0) break;
+                full.set(chunk, offset);
+                offset += chunk.length;
+              }
+              ensureSessionUnchanged(targetSessionId);
+              await sftpService.scpUpload(targetSessionId, tempPath, full.slice(0, offset));
+            } finally {
+              await localFsService.closeFile(reopen);
+            }
+          }
+        });
+      } finally {
+        if (handle) {
+          await localFsService.closeFile(handle);
+        }
+      }
+    });
+  }
+
+  async function writeRemoteContentAtomically(
+    targetSessionId: string,
+    targetPath: string,
+    content: Uint8Array
+  ): Promise<void> {
+    await withPathWriteLock('remote', targetPath, async () => {
+      await atomicReplaceRemoteFile(targetSessionId, targetPath, async (tempPath) => {
+        if (content.length === 0) {
+          try {
+            ensureSessionUnchanged(targetSessionId);
+            await sftpService.writeFile(targetSessionId, tempPath, content, false);
+          } catch (e) {
+            await sftpService.scpUpload(targetSessionId, tempPath, content);
+          }
+          return;
+        }
+
+        if (content.length <= FILE_TRANSFER_CHUNK_SIZE) {
+          try {
+            ensureSessionUnchanged(targetSessionId);
+            await sftpService.writeFile(targetSessionId, tempPath, content, false);
+            return;
+          } catch (e) {
+            if (content.length > MAX_IN_MEMORY_FALLBACK_BYTES) {
+              throw e;
+            }
+            ensureSessionUnchanged(targetSessionId);
+            await sftpService.scpUpload(targetSessionId, tempPath, content);
+            return;
+          }
+        }
+
+        try {
+          for (let offset = 0; offset < content.length; offset += FILE_TRANSFER_CHUNK_SIZE) {
+            const chunk = content.slice(offset, offset + FILE_TRANSFER_CHUNK_SIZE);
+            ensureSessionUnchanged(targetSessionId);
+            await sftpService.writeFile(targetSessionId, tempPath, chunk, offset > 0);
+          }
+        } catch (e) {
+          if (content.length > MAX_IN_MEMORY_FALLBACK_BYTES) {
+            throw new Error(
+              `保存失败：为避免内存占用，已禁用超大文件整块回退（${formatSize(content.length)}）`
+            );
+          }
+          ensureSessionUnchanged(targetSessionId);
+          await sftpService.scpUpload(targetSessionId, tempPath, content);
         }
       });
     });
@@ -1143,9 +1318,29 @@
 
   onMount(() => {
     loadFiles(currentPath);
+    void getCurrentWindow()
+      .onDragDropEvent((event) => {
+        if (event.payload.type === 'enter' || event.payload.type === 'over') {
+          isDragging = true;
+          return;
+        }
+        if (event.payload.type === 'leave') {
+          isDragging = false;
+          return;
+        }
+        void handleNativeFileDrop(event.payload.paths);
+      })
+      .then((unlisten) => {
+        nativeDragDropUnlisten = unlisten;
+      })
+      .catch((e) => {
+        console.warn('Failed to attach native drag-drop listener:', e);
+      });
     // window.addEventListener('click', closeContextMenu);
     window.addEventListener('keydown', handleKeydown);
     return () => {
+      nativeDragDropUnlisten?.();
+      nativeDragDropUnlisten = null;
       // window.removeEventListener('click', closeContextMenu);
       window.removeEventListener('keydown', handleKeydown);
     };
@@ -1218,13 +1413,7 @@
     try {
       ensureSessionUnchanged(targetSessionId);
       const content = new TextEncoder().encode(editorContent);
-      await withPathWriteLock('remote', editorPath, async () => {
-        try {
-          await sftpService.writeFile(targetSessionId, editorPath, content, false);
-        } catch (e) {
-          await sftpService.scpUpload(targetSessionId, editorPath, content);
-        }
-      });
+      await writeRemoteContentAtomically(targetSessionId, editorPath, content);
       if (targetSessionId === sessionId) {
         invalidateCache(targetPath);
         await loadFiles(targetPath, { force: true });
@@ -1308,9 +1497,10 @@
   <!-- Toolbar -->
   <div class="flex items-center p-2 border-b border-app-border space-x-2">
     <button 
-        class="p-1 hover:bg-app-bg-hover rounded text-app-text-secondary" 
-        on:click={() => loadFiles('.')} 
-        title="Home"
+        class="p-1 hover:bg-app-bg-hover rounded text-app-text-secondary disabled:opacity-40 disabled:cursor-not-allowed" 
+        on:click={followTerminalDirectory}
+        title={followTargetPath ? `跟随目录: ${followTargetPath}` : '跟随目录'}
+        disabled={!followTargetPath}
     >
       <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
         <path d="M10.707 2.293a1 1 0 00-1.414 0l-7 7a1 1 0 001.414 1.414L4 10.414V17a1 1 0 001 1h2a1 1 0 001-1v-2a1 1 0 011-1h2a1 1 0 011 1v2a1 1 0 001 1h2a1 1 0 001-1v-6.586l.293.293a1 1 0 001.414-1.414l-7-7z" />
@@ -1323,6 +1513,16 @@
     >
       <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
         <path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v3.276a1 1 0 01-2 0V14.907a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clip-rule="evenodd" />
+      </svg>
+    </button>
+    <button 
+        class="p-1 hover:bg-app-bg-hover rounded text-app-text-secondary" 
+        on:click={() => loadFiles(parentPath(currentPath))}
+        title="Up"
+        disabled={currentPath === '/' || currentPath === '' || currentPath === '.'}
+    >
+      <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+        <path fill-rule="evenodd" d="M9.293 4.293a1 1 0 011.414 0l5 5a1 1 0 01-1.414 1.414L11 7.414V15a1 1 0 11-2 0V7.414l-3.293 3.293a1 1 0 01-1.414-1.414l5-5z" clip-rule="evenodd" />
       </svg>
     </button>
     <button 
@@ -1340,15 +1540,6 @@
     >
       <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
         <path fill-rule="evenodd" d="M3 4a1 1 0 011-1h4a1 1 0 010 2H6.414l2.293 2.293a1 1 0 11-1.414 1.414L5 6.414V8a1 1 0 01-2 0V4zm9 1a1 1 0 010-2h4a1 1 0 011 1v4a1 1 0 01-2 0V6.414l-2.293 2.293a1 1 0 11-1.414-1.414L13.586 5H12zm-9 7a1 1 0 011 1v1.586l2.293-2.293a1 1 0 111.414 1.414L5.414 15H7a1 1 0 010 2H3a1 1 0 01-1-1v-4a1 1 0 011-1zm13.414-1.414a1 1 0 011.414 0l2.293 2.293V12a1 1 0 012 0v4a1 1 0 01-1 1h-4a1 1 0 010-2h1.586l-2.293-2.293a1 1 0 010-1.414z" clip-rule="evenodd" />
-      </svg>
-    </button>
-    <button 
-        class="p-1 hover:bg-app-bg-hover rounded text-app-text-secondary" 
-        on:click={() => fileInput.click()} 
-        title="Upload File"
-    >
-      <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-        <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM6.293 6.707a1 1 0 010-1.414l3-3a1 1 0 011.414 0l3 3a1 1 0 01-1.414 1.414L11 5.414V13a1 1 0 11-2 0V5.414L7.707 6.707a1 1 0 01-1.414 0z" clip-rule="evenodd" />
       </svg>
     </button>
     <input 

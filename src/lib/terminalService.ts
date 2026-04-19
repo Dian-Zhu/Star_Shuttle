@@ -85,6 +85,7 @@ import {
   saveHostKeyPrompt,
 } from './hostKeyPrompt';
 import { sanitizeTerminalDisplayText } from './terminalDisplaySanitizer';
+import { extractTerminalWorkingDirectory } from './terminalCwd';
 
 const IS_DEV = import.meta.env.DEV;
 
@@ -129,6 +130,7 @@ function reportTerminalError(error: unknown, context: string, userMessage?: stri
 // Sessions that currently have a live backend terminal.
 const startedTerminalSessions = new Set<string>();
 const lastTerminalSizes = new Map<string, { width: number; height: number }>();
+const terminalCwdRemainders = new Map<string, string>();
 
 export function markTerminalStarted(sessionId: string) {
   startedTerminalSessions.add(sessionId);
@@ -278,6 +280,7 @@ function cleanupTerminalListeners(sessionId: string) {
 }
 
 function removeSessionReferences(sessionId: string) {
+  terminalCwdRemainders.delete(sessionId);
   broadcastSessionIds.update(ids => ids.filter(id => id !== sessionId));
   terminalSessionMap.update(map => {
     map.delete(sessionId);
@@ -1346,6 +1349,24 @@ export async function setupTerminalListeners(sessionId: string, term: Terminal) 
 
       if (event.payload && event.payload.data) {
         const data = String(event.payload.data);
+        const cwdState = extractTerminalWorkingDirectory(
+          data,
+          terminalCwdRemainders.get(sessionId) ?? ''
+        );
+        terminalCwdRemainders.set(sessionId, cwdState.remainder);
+        if (cwdState.cwd) {
+          activeTerminals.update(items => {
+            let changed = false;
+            const next = items.map(item => {
+              if (item.sessionId !== sessionId || item.currentDirectory === cwdState.cwd) {
+                return item;
+              }
+              changed = true;
+              return { ...item, currentDirectory: cwdState.cwd };
+            });
+            return changed ? next : items;
+          });
+        }
         enqueueTerminalOutput(sessionId, term, data, { logger: ioLogger, isDev: IS_DEV });
       }
     });
@@ -1594,7 +1615,7 @@ async function reconnectTerminalInternal(oldSessionId: string): Promise<boolean>
         const next = items.map(item => {
           if (item.sessionId === oldSessionId) {
             foundRoot = true;
-            return { ...item, sessionId: nextSessionId, terminal: term };
+            return { ...item, sessionId: nextSessionId, terminal: term, currentDirectory: undefined };
           }
           if (item.parentId === oldSessionId) {
             return { ...item, parentId: nextSessionId };

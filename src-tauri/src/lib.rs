@@ -263,6 +263,30 @@ pub(crate) mod commands {
     }
 
     #[command]
+    pub fn local_fs_grant_dropped_file_for_read(
+        db: State<Arc<Mutex<DatabaseManager>>>,
+        app_lock_state: State<Arc<Mutex<AppLockRuntimeState>>>,
+        local_fs_state: State<crate::modules::local_fs::LocalFsState>,
+        path: String,
+    ) -> Result<LocalFsDialogGrant, String> {
+        ensure_app_unlocked(&db, &app_lock_state)?;
+        let path = PathBuf::from(path);
+        if !path.is_absolute() {
+            return Err(format!("Dropped path must be absolute: {}", path.display()));
+        }
+
+        let metadata = std::fs::metadata(&path).map_err(|e| e.to_string())?;
+        if !metadata.is_file() {
+            return Err(format!(
+                "Dropped path is not a regular file: {}",
+                path.display()
+            ));
+        }
+
+        to_grant_response(&local_fs_state, path, "read", metadata.len())
+    }
+
+    #[command]
     pub fn local_fs_pick_file_for_write(
         app: AppHandle,
         db: State<Arc<Mutex<DatabaseManager>>>,
@@ -1067,6 +1091,7 @@ pub fn run() {
             commands::lock_app,
             commands::remove_app_lock,
             commands::local_fs_pick_file_for_read,
+            commands::local_fs_grant_dropped_file_for_read,
             commands::local_fs_pick_file_for_write,
             // Local filesystem commands
             crate::modules::local_fs::local_fs_open_read,

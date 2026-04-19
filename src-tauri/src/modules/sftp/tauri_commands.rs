@@ -74,6 +74,13 @@ fn header_string(request: &Request, key: &str) -> Result<String, String> {
         .ok_or_else(|| format!("Missing header: {}", key))
 }
 
+fn header_decoded_string(request: &Request, key: &str) -> Result<String, String> {
+    let raw = header_string(request, key)?;
+    urlencoding::decode(&raw)
+        .map(|value| value.into_owned())
+        .map_err(|e| format!("Invalid encoded header {}: {}", key, e))
+}
+
 fn header_uuid(request: &Request) -> Result<Uuid, String> {
     let value = header_string(request, "session-id")?;
     Uuid::parse_str(&value).map_err(|e| e.to_string())
@@ -151,7 +158,7 @@ pub async fn sftp_read(
 ) -> Result<Response, String> {
     ensure_app_unlocked_runtime(db.inner(), app_lock_state.inner())?;
     let session_id = header_uuid(&request)?;
-    let path = header_string(&request, "path")?;
+    let path = header_decoded_string(&request, "path")?;
     validate_remote_target_path(&path)?;
     let data = state.read_file(session_id, path).await?;
     Ok(Response::new(data))
@@ -166,7 +173,7 @@ pub async fn sftp_read_chunk(
 ) -> Result<Response, String> {
     ensure_app_unlocked_runtime(db.inner(), app_lock_state.inner())?;
     let session_id = header_uuid(&request)?;
-    let path = header_string(&request, "path")?;
+    let path = header_decoded_string(&request, "path")?;
     validate_remote_target_path(&path)?;
     let offset = header_u64(&request, "offset")?;
     let length = header_u64(&request, "length")?;
@@ -210,7 +217,7 @@ pub async fn sftp_write(
 ) -> Result<(), String> {
     ensure_app_unlocked_runtime(db.inner(), app_lock_state.inner())?;
     let session_id = header_uuid(&request)?;
-    let path = header_string(&request, "path")?;
+    let path = header_decoded_string(&request, "path")?;
     validate_remote_target_path(&path)?;
     let offset = request
         .headers()
@@ -299,7 +306,7 @@ pub async fn scp_upload(
 ) -> Result<(), String> {
     ensure_app_unlocked_runtime(db.inner(), app_lock_state.inner())?;
     let session_id = header_uuid(&request)?;
-    let remote_path = header_string(&request, "remote-path")?;
+    let remote_path = header_decoded_string(&request, "remote-path")?;
     validate_remote_target_path(&remote_path)?;
     let content = body_bytes(&request)?;
     ensure_scp_upload_size(content.len(), "SCP upload body")?;
@@ -315,7 +322,7 @@ pub async fn scp_download(
 ) -> Result<Response, String> {
     ensure_app_unlocked_runtime(db.inner(), app_lock_state.inner())?;
     let session_id = header_uuid(&request)?;
-    let remote_path = header_string(&request, "remote-path")?;
+    let remote_path = header_decoded_string(&request, "remote-path")?;
     validate_remote_target_path(&remote_path)?;
     let data = state.scp_download(session_id, remote_path).await?;
     Ok(Response::new(data))

@@ -64,7 +64,10 @@
   <!-- File Explorer -->
   <div class="flex-1 overflow-hidden">
     {#if activeSession}
-      <FileExplorer sessionId={activeSession.sessionId} />
+      <FileExplorer
+        sessionId={activeSession.sessionId}
+        followTargetPath={activeSession.currentDirectory ?? null}
+      />
     {:else}
       <div class="h-full flex items-center justify-center p-4 text-app-text-secondary text-sm text-center select-none">
         请选择或连接一个终端<br>以使用文件浏览器

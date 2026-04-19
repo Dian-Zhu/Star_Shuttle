@@ -10,6 +10,24 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
+const STARSHUTTLE_OSC7_PROMPT_COMMAND: &str =
+    r#"printf '\033]7;file://%s%s\007' "${HOSTNAME:-localhost}" "$PWD""#;
+
+async fn apply_terminal_cwd_shell_integration<S>(channel: &russh::Channel<S>)
+where
+    S: From<(russh::ChannelId, russh::ChannelMsg)> + Send + Sync + 'static,
+{
+    if let Err(err) = channel
+        .set_env(false, "PROMPT_COMMAND", STARSHUTTLE_OSC7_PROMPT_COMMAND)
+        .await
+    {
+        debug!(
+            "Failed to set PROMPT_COMMAND for OSC 7 integration: {}",
+            err
+        );
+    }
+}
+
 pub(crate) fn execute_prepared_terminal_start(
     app: &tauri::AppHandle,
     prepared: PreparedTerminalStart,
@@ -338,6 +356,8 @@ fn start_ssh_terminal(
                 .await
         })
         .map_err(|e| ConnectionError::ConnectionFailed(format!("Failed to request PTY: {}", e)))?;
+
+    runtime.block_on(async { apply_terminal_cwd_shell_integration(&channel).await });
 
     runtime
         .block_on(async { channel.request_shell(true).await })

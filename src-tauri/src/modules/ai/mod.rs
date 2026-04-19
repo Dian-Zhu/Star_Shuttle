@@ -75,8 +75,11 @@ pub async fn ai_get_provider_defaults(provider: String) -> Result<serde_json::Va
 }
 
 #[tauri::command]
-pub async fn ai_test_connection(chat_manager: State<'_, Arc<ChatManager>>) -> Result<(), String> {
-    chat_manager.test_connection().await
+pub async fn ai_test_connection(
+    chat_manager: State<'_, Arc<ChatManager>>,
+    config: Option<AiConfig>,
+) -> Result<(), String> {
+    chat_manager.test_connection(config).await
 }
 
 #[tauri::command]

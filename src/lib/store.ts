@@ -110,6 +110,7 @@ export interface ActiveTerminal {
   terminal: Terminal;
   fitAddon: FitAddon;
   searchAddon: SearchAddon;
+  currentDirectory?: string;
   fileExplorerPath?: string; // Add this line
   parentId?: string; // ID of the root session if this is a split pane
 }

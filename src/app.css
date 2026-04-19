@@ -111,13 +111,7 @@ body {
 }
 
 .xterm-screen {
-  width: 100% !important;
-  height: 100% !important;
   background-color: transparent !important;
-}
-
-.xterm-rows {
-  width: 100% !important;
 }
 
 /* Ensure terminal container is visible */

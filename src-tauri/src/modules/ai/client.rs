@@ -2,6 +2,7 @@ use crate::modules::ai::types::{AiConfig, ChatMessage, StreamEvent};
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::json;
+use serde_json::Value;
 use std::time::Duration;
 use tokio::sync::oneshot;
 use tokio_stream::StreamExt;
@@ -23,20 +24,75 @@ struct SseChunk {
     choices: Vec<SseChoice>,
 }
 
-/// 非流式响应
-#[derive(Deserialize)]
-struct NonStreamChoice {
-    message: NonStreamMessage,
+fn truncate_response_snippet(input: &str) -> String {
+    const MAX_CHARS: usize = 240;
+    let sanitized = input.split_whitespace().collect::<Vec<_>>().join(" ");
+    if sanitized.chars().count() <= MAX_CHARS {
+        sanitized
+    } else {
+        format!(
+            "{}...",
+            sanitized.chars().take(MAX_CHARS).collect::<String>()
+        )
+    }
 }
 
-#[derive(Deserialize)]
-struct NonStreamMessage {
-    content: String,
+fn body_looks_like_html(input: &str) -> bool {
+    let trimmed = input.trim_start();
+    let lower = trimmed.to_ascii_lowercase();
+    lower.starts_with("<!doctype html")
+        || lower.starts_with("<html")
+        || (lower.contains("<head") && lower.contains("<body"))
 }
 
-#[derive(Deserialize)]
-struct NonStreamResponse {
-    choices: Vec<NonStreamChoice>,
+fn html_response_error(status: Option<reqwest::StatusCode>, body: &str) -> String {
+    let prefix = match status {
+        Some(status) => format!("API 返回了 HTML 页面（HTTP {}）", status),
+        None => "API 返回了 HTML 页面".to_string(),
+    };
+
+    format!(
+        "{}，这通常表示 Base URL 填成了网站首页而不是 OpenAI 兼容接口地址。请将“API Base URL”改为实际接口根地址，通常需要以 `/v1` 结尾；当前响应片段: {}",
+        prefix,
+        truncate_response_snippet(body)
+    )
+}
+
+fn extract_text_content(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => Some(text.clone()),
+        Value::Array(parts) => {
+            let combined = parts
+                .iter()
+                .filter_map(|part| match part {
+                    Value::String(text) => Some(text.as_str()),
+                    Value::Object(_) => part
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .or_else(|| part.get("content").and_then(Value::as_str)),
+                    _ => None,
+                })
+                .collect::<String>();
+
+            (!combined.is_empty()).then_some(combined)
+        }
+        _ => None,
+    }
+}
+
+fn extract_non_stream_content(response: &Value) -> Option<String> {
+    response
+        .get("choices")
+        .and_then(Value::as_array)
+        .and_then(|choices| choices.first())
+        .and_then(|choice| {
+            choice
+                .get("message")
+                .and_then(|message| message.get("content"))
+                .and_then(extract_text_content)
+                .or_else(|| choice.get("text").and_then(extract_text_content))
+        })
+        .or_else(|| response.get("content").and_then(extract_text_content))
 }
 
 pub struct LlmClient {
@@ -189,15 +245,35 @@ impl LlmClient {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
+            if body_looks_like_html(&body) {
+                return Err(html_response_error(Some(status), &body));
+            }
             return Err(format!("API error {}: {}", status, body));
         }
 
-        let resp: NonStreamResponse = response.json().await.map_err(|e| e.to_string())?;
-        resp.choices
-            .into_iter()
-            .next()
-            .map(|c| c.message.content)
-            .ok_or_else(|| "Empty response from LLM".to_string())
+        let body = response
+            .text()
+            .await
+            .map_err(|e| format!("读取响应失败: {}", e))?;
+
+        if body_looks_like_html(&body) {
+            return Err(html_response_error(None, &body));
+        }
+
+        let resp: Value = serde_json::from_str(&body).map_err(|e| {
+            format!(
+                "响应解析失败: {}; 响应片段: {}",
+                e,
+                truncate_response_snippet(&body)
+            )
+        })?;
+
+        extract_non_stream_content(&resp).ok_or_else(|| {
+            format!(
+                "未从模型响应中提取到文本内容，响应片段: {}",
+                truncate_response_snippet(&body)
+            )
+        })
     }
 
     /// 测试连接是否可用
@@ -215,5 +291,78 @@ impl LlmClient {
 impl Default for LlmClient {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{body_looks_like_html, extract_non_stream_content, truncate_response_snippet};
+    use serde_json::json;
+
+    #[test]
+    fn extracts_string_content_from_chat_completions_response() {
+        let response = json!({
+            "choices": [
+                {
+                    "message": {
+                        "content": "pong"
+                    }
+                }
+            ]
+        });
+
+        assert_eq!(
+            extract_non_stream_content(&response).as_deref(),
+            Some("pong")
+        );
+    }
+
+    #[test]
+    fn extracts_array_content_from_compatible_response() {
+        let response = json!({
+            "choices": [
+                {
+                    "message": {
+                        "content": [
+                            { "type": "text", "text": "pon" },
+                            { "type": "text", "text": "g" }
+                        ]
+                    }
+                }
+            ]
+        });
+
+        assert_eq!(
+            extract_non_stream_content(&response).as_deref(),
+            Some("pong")
+        );
+    }
+
+    #[test]
+    fn extracts_top_level_content_when_choices_are_absent() {
+        let response = json!({
+            "content": [
+                { "type": "text", "text": "pong" }
+            ]
+        });
+
+        assert_eq!(
+            extract_non_stream_content(&response).as_deref(),
+            Some("pong")
+        );
+    }
+
+    #[test]
+    fn truncates_multiline_response_snippet_for_errors() {
+        let snippet = truncate_response_snippet("line1\nline2\r\nline3");
+        assert_eq!(snippet, "line1 line2 line3");
+    }
+
+    #[test]
+    fn detects_html_responses() {
+        assert!(body_looks_like_html(
+            "<!doctype html><html><head><title>Gateway</title></head><body></body></html>"
+        ));
+        assert!(!body_looks_like_html("{\"choices\":[]}"));
     }
 }

@@ -25,6 +25,10 @@ function buildRemoteChildPath(parentPath: string, name: string): string {
     : `${normalizedParent}/${name}`;
 }
 
+function encodeHeaderPath(path: string): string {
+  return encodeURIComponent(path);
+}
+
 export class SftpService {
   private decodeBinaryPayload(data: ArrayBuffer | number[]): Uint8Array {
     return data instanceof ArrayBuffer ? new Uint8Array(data) : Uint8Array.from(data);
@@ -61,7 +65,7 @@ export class SftpService {
     const data = await invoke<ArrayBuffer | number[]>('sftp_read', undefined, {
       headers: {
         'session-id': sessionId,
-        path
+        path: encodeHeaderPath(path)
       }
     });
     return this.decodeBinaryPayload(data);
@@ -71,7 +75,7 @@ export class SftpService {
     const data = await invoke<ArrayBuffer | number[]>('sftp_read_chunk', undefined, {
       headers: {
         'session-id': sessionId,
-        path,
+        path: encodeHeaderPath(path),
         offset: String(offset),
         length: String(length)
       }
@@ -89,7 +93,7 @@ export class SftpService {
     await invoke('sftp_write', content, {
       headers: {
         'session-id': sessionId,
-        path,
+        path: encodeHeaderPath(path),
         append: String(normalized.append),
         ...(normalized.offset !== undefined ? { offset: String(normalized.offset) } : {}),
         ...(normalized.truncate !== undefined ? { truncate: String(normalized.truncate) } : {}),
@@ -117,7 +121,7 @@ export class SftpService {
     await invoke('scp_upload', content, {
       headers: {
         'session-id': sessionId,
-        'remote-path': remotePath
+        'remote-path': encodeHeaderPath(remotePath)
       }
     });
   }
@@ -126,7 +130,7 @@ export class SftpService {
     const data = await invoke<ArrayBuffer | number[]>('scp_download', undefined, {
       headers: {
         'session-id': sessionId,
-        'remote-path': remotePath
+        'remote-path': encodeHeaderPath(remotePath)
       }
     });
     return this.decodeBinaryPayload(data);

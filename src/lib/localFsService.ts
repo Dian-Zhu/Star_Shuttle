@@ -100,6 +100,17 @@ export class LocalFsService {
     };
   }
 
+  async grantDroppedFileForRead(path: string): Promise<LocalFsDialogGrant> {
+    const grant = await invoke<BackendDialogGrant>('local_fs_grant_dropped_file_for_read', {
+      path: this.normalizePath(path),
+    });
+    return {
+      path: this.normalizePath(grant.path),
+      accessToken: grant.access_token,
+      size: grant.size,
+    };
+  }
+
   async pickFileForWrite(
     defaultFileName?: string,
     filters: LocalFsDialogFilter[] = [],

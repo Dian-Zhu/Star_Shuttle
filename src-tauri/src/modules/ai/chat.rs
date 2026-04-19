@@ -245,9 +245,12 @@ impl ChatManager {
         Ok(full_response)
     }
 
-    /// 测试当前配置的 AI 连接
-    pub async fn test_connection(&self) -> Result<(), String> {
-        let config = load_config(&self.db)?;
+    /// 测试当前或指定配置的 AI 连接
+    pub async fn test_connection(&self, config: Option<AiConfig>) -> Result<(), String> {
+        let config = match config {
+            Some(config) => config,
+            None => load_config(&self.db)?,
+        };
         self.client.test_connection(&config).await
     }
 }
