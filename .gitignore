@@ -45,3 +45,7 @@ Thumbs.db
 # Database files
 *.sqlite
 *.db
+
+.code/
+.trae/
+.claude/
