@@ -396,6 +396,7 @@ export interface AppSettings {
     closeTerminal: string;
     prevTab: string;
     nextTab: string;
+    screenshot: string;
     copy: string;
     paste: string;
     fileBrowserRefresh: string;
@@ -455,6 +456,7 @@ const defaultSettings: AppSettings = {
     closeTerminal: 'Ctrl+Shift+W',
     prevTab: 'Ctrl+Shift+[',
     nextTab: 'Ctrl+Shift+]',
+    screenshot: 'Ctrl+Shift+X',
     copy: 'Ctrl+Shift+C',
     paste: 'Ctrl+Shift+V',
     fileBrowserRefresh: 'F5',
@@ -521,6 +523,7 @@ const loadSettings = (): AppSettings => {
       'closeTerminal',
       'prevTab',
       'nextTab',
+      'screenshot',
       'copy',
       'paste',
       'fileBrowserRefresh',

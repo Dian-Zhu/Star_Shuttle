@@ -386,29 +386,34 @@
         />
       {/each}
     {/if}
-  </div>
 
-  <!-- Status Bar -->
-  <div class="flex items-center justify-between px-4 py-1.5 bg-app-bg border-t border-app-border text-xs text-app-text-secondary">
-    <div class="flex items-center gap-4">
-      <div class="flex items-center gap-1">
-        <svg class="w-3.5 h-3.5 text-primary-500 dark:text-primary-400" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">
-          <path fill-rule="evenodd" d="M12.293 5.293a1 1 0 011.414 0l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414-1.414L14.586 11H3a1 1 0 110-2h11.586l-2.293-2.293a1 1 0 010-1.414z" clip-rule="evenodd"></path>
-        </svg>
-        <span>实时流量:</span>
+    <!-- 悬浮状态窗（模糊透明玻璃拟态） -->
+    <div class="pointer-events-none absolute bottom-3 right-3 z-20 flex flex-col gap-1.5 rounded-xl border border-white/10 bg-app-surface/50 px-3.5 py-2.5 text-xs text-app-text-secondary shadow-lg backdrop-blur-md">
+      <div class="flex items-center justify-between gap-3">
+        <span class="flex items-center gap-1">
+          <svg class="w-3.5 h-3.5 text-primary-500 dark:text-primary-400" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">
+            <path fill-rule="evenodd" d="M12.293 5.293a1 1 0 011.414 0l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414-1.414L14.586 11H3a1 1 0 110-2h11.586l-2.293-2.293a1 1 0 010-1.414z" clip-rule="evenodd"></path>
+          </svg>
+          实时流量
+        </span>
         <span class="font-mono font-medium text-green-600 dark:text-green-300">{formatTransferRate(netSpeedBps)}</span>
-        <span class="ml-2 text-app-text-secondary">CPU</span>
+      </div>
+      <div class="flex items-center justify-between gap-3">
+        <span>CPU</span>
         <span class="font-mono font-medium text-app-text">{cpuUsage}%</span>
-        <span class="ml-2 text-app-text-secondary">MEM</span>
+      </div>
+      <div class="flex items-center justify-between gap-3">
+        <span>MEM</span>
         <span class="font-mono font-medium text-app-text">{memPercent}%</span>
       </div>
-      <div class="text-app-text-secondary">|</div>
-      <div class="text-app-text-secondary">
-        活动传输: <span class="text-app-text">{$activeTerminals.length}</span>
+      <div class="flex items-center justify-between gap-3">
+        <span>活动传输</span>
+        <span class="text-app-text">{$activeTerminals.length}</span>
       </div>
-    </div>
-    <div class="text-app-text-secondary text-xs">
-      {currentTime}
+      <div class="flex items-center justify-between gap-3">
+        <span>时间</span>
+        <span class="text-app-text">{currentTime}</span>
+      </div>
     </div>
   </div>
 </div>

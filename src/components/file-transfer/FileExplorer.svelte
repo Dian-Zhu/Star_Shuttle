@@ -6,6 +6,12 @@
   import { sftpService } from '../../lib/sftpService';
   import { localFsService } from '../../lib/localFsService';
   import { fileClipboard, settings } from '../../lib/store';
+  import {
+    addUploadTask,
+    updateUploadProgress,
+    completeUploadTask,
+    failUploadTask,
+  } from '../../lib/uploadManager';
   import { isEditableShortcutTarget, matchShortcut } from '../../lib/shortcuts';
   import { validateRemoteLeafName } from '../../lib/remotePathName';
   import ContextMenu from '../ui/ContextMenu.svelte';
@@ -831,37 +837,56 @@
     const items = e.dataTransfer?.files;
     if (!items || items.length === 0) return;
 
-    await uploadFiles(Array.from(items), targetSessionId, targetPath);
+    // 不再 await：上传转入后台
+    void uploadFiles(Array.from(items), targetSessionId, targetPath);
   }
 
   async function handleNativeFileDrop(paths: string[]) {
+    isDragging = false;
     if (paths.length === 0) return;
 
-    loading = true;
-    error = null;
     const targetSessionId = sessionId;
     const targetPath = currentPath;
 
-    try {
-      for (const localPath of paths) {
+    // 后台上传：逐个拖入文件转入后台任务，不锁死浏览器
+    for (const localPath of paths) {
+      const fileName = (() => {
+        try {
+          return getLocalFileName(localPath);
+        } catch {
+          return localPath;
+        }
+      })();
+      let taskId: string | null = null;
+      try {
         const grant = await localFsService.grantDroppedFileForRead(localPath);
+        taskId = addUploadTask({
+          fileName,
+          targetPath,
+          sessionId: targetSessionId,
+          total: grant.size,
+        });
         await uploadLocalPath(
           grant.path,
           grant.accessToken,
           grant.size,
           targetSessionId,
-          targetPath
+          targetPath,
+          taskId
         );
+        completeUploadTask(taskId);
+        if (targetSessionId === sessionId && targetPath === currentPath) {
+          invalidateCache(targetPath);
+          void loadFiles(targetPath, { force: true });
+        }
+      } catch (e: any) {
+        const message = e?.message ?? String(e);
+        if (taskId) {
+          failUploadTask(taskId, message);
+        } else {
+          error = message;
+        }
       }
-      if (targetSessionId === sessionId) {
-        invalidateCache(targetPath);
-        await loadFiles(targetPath, { force: true });
-      }
-    } catch (e: any) {
-      error = e?.message ?? String(e);
-    } finally {
-      loading = false;
-      isDragging = false;
     }
   }
 
@@ -869,28 +894,35 @@
     const input = e.target as HTMLInputElement;
     if (!input.files || input.files.length === 0) return;
 
-    await uploadFiles(Array.from(input.files), sessionId, currentPath);
+    // 不再 await：上传转入后台，文件浏览器立即可继续操作
+    void uploadFiles(Array.from(input.files), sessionId, currentPath);
     input.value = ''; // Reset input
   }
 
+  // 后台上传：不再占用 loading 遮罩锁住浏览器，进度通过 uploadManager 上报
   async function uploadFiles(filesToUpload: File[], targetSessionId: string = sessionId, targetPath: string = currentPath) {
-    loading = true;
-    try {
-      for (const file of filesToUpload) {
-        await uploadSingleFile(file, targetSessionId, targetPath);
+    for (const file of filesToUpload) {
+      const taskId = addUploadTask({
+        fileName: file.name,
+        targetPath,
+        sessionId: targetSessionId,
+        total: file.size,
+      });
+      try {
+        await uploadSingleFile(file, targetSessionId, targetPath, taskId);
+        completeUploadTask(taskId);
+        // 每个文件完成后刷新列表（仅当仍停留在同一会话/目录）
+        if (targetSessionId === sessionId && targetPath === currentPath) {
+          invalidateCache(targetPath);
+          void loadFiles(targetPath, { force: true });
+        }
+      } catch (e: any) {
+        failUploadTask(taskId, e?.message ?? String(e));
       }
-      if (targetSessionId === sessionId) {
-        invalidateCache(targetPath);
-        await loadFiles(targetPath, { force: true });
-      }
-    } catch (e: any) {
-      error = e.toString();
-    } finally {
-      loading = false;
     }
   }
 
-  async function uploadSingleFile(file: File, targetSessionId: string, targetPath: string): Promise<void> {
+  async function uploadSingleFile(file: File, targetSessionId: string, targetPath: string, taskId?: string): Promise<void> {
     const path = targetPath === '/' ? `/${file.name}` : `${targetPath}/${file.name}`.replace('//', '/');
 
     await withPathWriteLock('remote', path, async () => {
@@ -908,6 +940,7 @@
         }
 
         try {
+          let transferred = 0;
           for (let i = 0; i < totalChunks; i++) {
             const start = i * FILE_TRANSFER_CHUNK_SIZE;
             const end = Math.min(start + FILE_TRANSFER_CHUNK_SIZE, file.size);
@@ -915,6 +948,8 @@
             const content = new Uint8Array(await chunk.arrayBuffer());
             ensureSessionUnchanged(targetSessionId);
             await sftpService.writeFile(targetSessionId, tempPath, content, i > 0);
+            transferred = end;
+            if (taskId) updateUploadProgress(taskId, transferred);
           }
         } catch (e) {
           if (file.size > MAX_IN_MEMORY_FALLBACK_BYTES) {
@@ -925,6 +960,7 @@
           const full = new Uint8Array(await file.arrayBuffer());
           ensureSessionUnchanged(targetSessionId);
           await sftpService.scpUpload(targetSessionId, tempPath, full);
+          if (taskId) updateUploadProgress(taskId, file.size);
         }
       });
     });
@@ -935,7 +971,8 @@
     accessToken: string,
     size: number,
     targetSessionId: string,
-    targetPath: string
+    targetPath: string,
+    taskId?: string
   ): Promise<void> {
     const fileName = getLocalFileName(localPath);
     const path = targetPath === '/' ? `/${fileName}` : `${targetPath}/${fileName}`.replace('//', '/');
@@ -956,6 +993,7 @@
           }
 
           let append = false;
+          let transferred = 0;
           try {
             for (;;) {
               const chunk = await localFsService.readChunk(handle, FILE_TRANSFER_CHUNK_SIZE);
@@ -963,6 +1001,8 @@
               ensureSessionUnchanged(targetSessionId);
               await sftpService.writeFile(targetSessionId, tempPath, chunk, append);
               append = true;
+              transferred += chunk.length;
+              if (taskId) updateUploadProgress(taskId, transferred);
             }
           } catch (e) {
             if (size > MAX_IN_MEMORY_FALLBACK_BYTES) {
@@ -988,6 +1028,7 @@
               }
               ensureSessionUnchanged(targetSessionId);
               await sftpService.scpUpload(targetSessionId, tempPath, full.slice(0, offset));
+              if (taskId) updateUploadProgress(taskId, offset);
             } finally {
               await localFsService.closeFile(reopen);
             }
@@ -1542,12 +1583,21 @@
         <path fill-rule="evenodd" d="M3 4a1 1 0 011-1h4a1 1 0 010 2H6.414l2.293 2.293a1 1 0 11-1.414 1.414L5 6.414V8a1 1 0 01-2 0V4zm9 1a1 1 0 010-2h4a1 1 0 011 1v4a1 1 0 01-2 0V6.414l-2.293 2.293a1 1 0 11-1.414-1.414L13.586 5H12zm-9 7a1 1 0 011 1v1.586l2.293-2.293a1 1 0 111.414 1.414L5.414 15H7a1 1 0 010 2H3a1 1 0 01-1-1v-4a1 1 0 011-1zm13.414-1.414a1 1 0 011.414 0l2.293 2.293V12a1 1 0 012 0v4a1 1 0 01-1 1h-4a1 1 0 010-2h1.586l-2.293-2.293a1 1 0 010-1.414z" clip-rule="evenodd" />
       </svg>
     </button>
-    <input 
-      type="file" 
+    <button
+        class="p-1 hover:bg-app-bg-hover rounded text-app-text-secondary"
+        on:click={() => fileInput?.click()}
+        title="上传文件"
+    >
+      <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+        <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM6.293 6.707a1 1 0 010-1.414l3-3a1 1 0 011.414 0l3 3a1 1 0 01-1.414 1.414L11 5.414V13a1 1 0 11-2 0V5.414L7.707 6.707a1 1 0 01-1.414 0z" clip-rule="evenodd" />
+      </svg>
+    </button>
+    <input
+      type="file"
       multiple
-      bind:this={fileInput} 
-      on:change={handleFileUpload} 
-      style="display: none;" 
+      bind:this={fileInput}
+      on:change={handleFileUpload}
+      style="display: none;"
     />
     <input 
       class="flex-1 bg-app-surface border border-app-border rounded px-2 py-1 text-sm text-app-text"

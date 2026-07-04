@@ -972,6 +972,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .setup(move |app| {
             // Remove tauri_plugin_log to avoid logger initialization conflict
             // We use our custom structured logger instead
@@ -1063,6 +1064,7 @@ pub fn run() {
         .manage(sftp_manager)
         .manage(local_fs_state)
         .manage(host_key_challenge_state)
+        .manage(crate::modules::screenshot::ScreenshotState::default())
         .invoke_handler(tauri::generate_handler![
             // Connection management commands
             commands::connect,
@@ -1148,6 +1150,14 @@ pub fn run() {
             crate::modules::ai::ai_agent_get_task,
             crate::modules::ai::ai_agent_list_tasks,
             crate::modules::ai::ai_agent_get_task_events,
+            // Screenshot + pin commands
+            crate::modules::screenshot::screenshot_capture,
+            crate::modules::screenshot::screenshot_get_capture,
+            crate::modules::screenshot::screenshot_cancel,
+            crate::modules::screenshot::pin_create,
+            crate::modules::screenshot::pin_get_image,
+            crate::modules::screenshot::pin_copy,
+            crate::modules::screenshot::pin_close,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

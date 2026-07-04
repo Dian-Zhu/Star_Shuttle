@@ -52,6 +52,8 @@
   import { fade, fly } from 'svelte/transition';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import CloseActionModal from './CloseActionModal.svelte';
+  import UploadProgressCard from './file-transfer/UploadProgressCard.svelte';
+  import { startScreenshot } from '../lib/screenshotService';
 
   let isCheckingLock = true;
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -560,6 +562,10 @@
     await aiPanelRef?.startFreshChat?.();
   }
 
+  function handleAiOpenHistory() {
+    aiPanelRef?.openHistory?.();
+  }
+
   function handleKeydown(event: KeyboardEvent) {
     if (isEditableShortcutTarget(event.target, { allowTerminalTextarea: true })) {
       return;
@@ -606,6 +612,13 @@
       event.preventDefault();
       if (!isAiPanelOpen) void ensureAiChatPanelLoaded();
       isAiPanelOpen = !isAiPanelOpen;
+      return;
+    }
+
+    // Screenshot
+    if (matchShortcut(event, shortcuts.screenshot)) {
+      event.preventDefault();
+      void startScreenshot();
       return;
     }
 
@@ -773,6 +786,17 @@
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
                   </svg>
                 </button>
+                {#if aiPanelActiveTab === 'chat'}
+                  <button
+                    class="p-1 rounded hover:bg-app-bg-hover text-app-text-secondary hover:text-app-text transition-colors"
+                    on:click={handleAiOpenHistory}
+                    title="对话历史"
+                  >
+                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                  </button>
+                {/if}
                 {#if aiPanelActiveTab === 'agent'}
                   <button
                     class="p-1 rounded transition-colors {aiPanelShowThinking ? 'bg-primary-600/10 text-primary-400 hover:bg-primary-600/15' : 'text-app-text-secondary hover:bg-app-bg-hover hover:text-app-text'}"
@@ -816,6 +840,9 @@
       </main>
     </div>
   </div>
+
+  <!-- 全局上传进度悬浮卡片（后台上传，不阻塞文件浏览器） -->
+  <UploadProgressCard />
 {/if}
 
 {#if showCloseModal}

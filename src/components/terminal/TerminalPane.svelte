@@ -1,9 +1,11 @@
 <script lang="ts">
   import { onMount, onDestroy, createEventDispatcher } from 'svelte'
+  import { get } from 'svelte/store'
   import { Terminal } from '@xterm/xterm'
   import { FitAddon } from '@xterm/addon-fit'
   import { SearchAddon } from '@xterm/addon-search'
   import { settings, getXtermTheme, getBaseXtermTheme, type Connection } from '../../lib/store'
+  import { matchShortcut } from '../../lib/shortcuts'
   import { terminalPool } from '../../lib/terminalPool'
   import type { TerminalProxy } from '../../lib/terminalProxy'
   import ContextMenu from '../ui/ContextMenu.svelte'
@@ -83,6 +85,29 @@
     return e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'c'
   }
 
+  // 是否匹配 Layout.svelte 注册的应用级全局快捷键。匹配则放行冒泡到 window 处理器执行，
+  // 不发送到 PTY，避免焦点在终端里时全局快捷键失效。
+  function isGlobalShortcut(e: KeyboardEvent): boolean {
+    const shortcuts = get(settings).shortcuts
+    // 复制/粘贴已在上方单独处理，这里不重复
+    const globalKeys: Array<keyof typeof shortcuts> = [
+      'commandPalette',
+      'toggleFileBrowser',
+      'newConnection',
+      'settings',
+      'closeTerminal',
+      'prevTab',
+      'nextTab',
+      'screenshot',
+    ]
+    for (const key of globalKeys) {
+      if (matchShortcut(e, shortcuts[key])) return true
+    }
+    // AI 面板切换在 Layout 中硬编码为 Ctrl+Shift+A
+    if (e.ctrlKey && e.shiftKey && (e.key === 'A' || e.key === 'a')) return true
+    return false
+  }
+
   function copyTerminalSelection(term: Terminal): boolean {
     const selection = term.getSelection() ?? ''
     if (!selection) return false
@@ -146,6 +171,11 @@
         } else {
           term.focus()
         }
+        return false
+      }
+      // 放行全局快捷键：匹配到应用级快捷键时不发送到 PTY，
+      // 让事件冒泡到 window 处理器（Layout.svelte）去执行。
+      if (e.type === 'keydown' && isGlobalShortcut(e)) {
         return false
       }
       return true

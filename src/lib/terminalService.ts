@@ -1355,14 +1355,15 @@ export async function setupTerminalListeners(sessionId: string, term: Terminal) 
         );
         terminalCwdRemainders.set(sessionId, cwdState.remainder);
         if (cwdState.cwd) {
+          const nextCwd = cwdState.cwd;
           activeTerminals.update(items => {
             let changed = false;
             const next = items.map(item => {
-              if (item.sessionId !== sessionId || item.currentDirectory === cwdState.cwd) {
+              if (item.sessionId !== sessionId || item.currentDirectory === nextCwd) {
                 return item;
               }
               changed = true;
-              return { ...item, currentDirectory: cwdState.cwd };
+              return { ...item, currentDirectory: nextCwd };
             });
             return changed ? next : items;
           });

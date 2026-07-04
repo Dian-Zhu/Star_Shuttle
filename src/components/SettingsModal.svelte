@@ -118,6 +118,7 @@
     closeTerminal: '关闭终端',
     prevTab: '上一个标签页',
     nextTab: '下一个标签页',
+    screenshot: '截图',
     copy: '复制',
     paste: '粘贴',
     fileBrowserRefresh: '文件浏览器：刷新',
@@ -1234,6 +1235,27 @@
                   {#if shortcutErrors.closeTerminal}
                     <div class="text-xs text-red-500 dark:text-red-400">
                       {shortcutErrors.closeTerminal}
+                    </div>
+                  {/if}
+                </div>
+              </div>
+
+              <div class="grid grid-cols-2 gap-4 items-center border-b border-app-border pb-4">
+                <div>
+                  <span class="block text-sm font-medium text-app-text-secondary">截图</span>
+                  <span class="text-xs text-app-text-secondary">框选屏幕区域并钉在屏幕上</span>
+                </div>
+                <div class="space-y-1">
+                  <input
+                    type="text"
+                    readonly
+                    value={shortcutDrafts.screenshot}
+                    on:keydown={(e) => handleShortcutKeydown('screenshot', e)}
+                    class="bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text text-sm font-mono focus:border-primary-500 outline-none w-full"
+                  />
+                  {#if shortcutErrors.screenshot}
+                    <div class="text-xs text-red-500 dark:text-red-400">
+                      {shortcutErrors.screenshot}
                     </div>
                   {/if}
                 </div>

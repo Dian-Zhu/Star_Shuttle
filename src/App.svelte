@@ -1,42 +1,28 @@
 <script lang="ts">
-  import Layout from './components/Layout.svelte';
-  import { settings } from './lib/store';
-  import { onMount } from 'svelte';
-  import { applyScrollbarColor } from './lib/terminalService';
+  import { getCurrentWindow } from '@tauri-apps/api/window';
 
-  let systemPrefersDark = true; // Default to dark
-
-  onMount(() => {
-    const media = window.matchMedia('(prefers-color-scheme: dark)');
-    systemPrefersDark = media.matches;
-
-    const listener = (e: MediaQueryListEvent) => {
-      systemPrefersDark = e.matches;
-    };
-
-    media.addEventListener('change', listener);
-    return () => media.removeEventListener('change', listener);
-  });
-
-  // Initialize scrollbar colors when settings change
-  $: if ($settings) {
-    applyScrollbarColor($settings);
-  }
-
-  $: effectiveTheme = $settings.theme === 'system' 
-    ? (systemPrefersDark ? 'dark' : 'light') 
-    : $settings.theme;
-
-  $: {
-    if (typeof document !== 'undefined') {
-      document.documentElement.setAttribute('data-theme', effectiveTheme);
-      if (effectiveTheme === 'dark') {
-        document.documentElement.classList.add('dark');
-      } else {
-        document.documentElement.classList.remove('dark');
-      }
-    }
-  }
+  // Route by window label:
+  //   "main"                -> the full application (Layout)
+  //   "screenshot-overlay"  -> the region-selection overlay
+  //   "pin-*"               -> a pinned screenshot window
+  // Overlay/pin windows lazy-load their tiny components so they never pull in
+  // the terminal/xterm bundle that the main window needs.
+  const label = getCurrentWindow().label;
+  const isOverlay = label === 'screenshot-overlay';
+  const isPin = label.startsWith('pin-');
+  const isMain = !isOverlay && !isPin;
 </script>
 
-<Layout />
+{#if isOverlay}
+  {#await import('./components/screenshot/ScreenshotOverlay.svelte') then module}
+    <svelte:component this={module.default} />
+  {/await}
+{:else if isPin}
+  {#await import('./components/screenshot/PinWindow.svelte') then module}
+    <svelte:component this={module.default} />
+  {/await}
+{:else if isMain}
+  {#await import('./MainApp.svelte') then module}
+    <svelte:component this={module.default} />
+  {/await}
+{/if}
