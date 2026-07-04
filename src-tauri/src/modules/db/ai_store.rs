@@ -207,6 +207,21 @@ pub fn delete_conversation(conn: &Connection, id: &Uuid) -> Result<()> {
     Ok(())
 }
 
+/// 只保留最近 `keep` 条对话，删除更旧的（按 updated_at 排序）。
+/// 关联消息会通过 ON DELETE CASCADE 一并删除。
+pub fn prune_conversations(conn: &Connection, keep: usize) -> Result<()> {
+    conn.execute(
+        "DELETE FROM ai_conversations
+         WHERE id NOT IN (
+             SELECT id FROM ai_conversations
+             ORDER BY updated_at DESC
+             LIMIT ?
+         )",
+        params![keep as i64],
+    )?;
+    Ok(())
+}
+
 // ── Message CRUD ──────────────────────────────────────────────────────────────
 
 pub fn save_message(
@@ -495,4 +510,91 @@ pub fn delete_sandbox_rule(conn: &Connection, id: &Uuid) -> Result<()> {
         params![id.to_string()],
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::modules::db::DatabaseManager;
+
+    /// 创建一条对话并显式设定 updated_at，方便控制排序
+    fn insert_conv(conn: &Connection, id: &Uuid, updated_at: &str) {
+        create_conversation(conn, id, "chat", None).unwrap();
+        conn.execute(
+            "UPDATE ai_conversations SET updated_at = ? WHERE id = ?",
+            params![updated_at, id.to_string()],
+        )
+        .unwrap();
+    }
+
+    fn conv_count(conn: &Connection) -> i64 {
+        conn.query_row("SELECT COUNT(*) FROM ai_conversations", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    fn msg_count(conn: &Connection) -> i64 {
+        conn.query_row("SELECT COUNT(*) FROM ai_messages", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    #[test]
+    fn prune_keeps_only_most_recent() {
+        let db = DatabaseManager::new(":memory:").unwrap();
+        let conn = db.conn();
+
+        // 5 条对话，updated_at 递增（conv5 最新）
+        let mut ids = Vec::new();
+        for i in 1..=5 {
+            let id = Uuid::new_v4();
+            insert_conv(conn, &id, &format!("2026-01-0{i} 00:00:00"));
+            ids.push(id);
+        }
+
+        prune_conversations(conn, 3).unwrap();
+
+        assert_eq!(conv_count(conn), 3);
+        // 最旧的两条被删，最新的三条保留
+        let remaining = get_all_conversations(conn).unwrap();
+        let remaining_ids: Vec<String> = remaining.iter().map(|r| r.0.clone()).collect();
+        assert!(remaining_ids.contains(&ids[4].to_string()));
+        assert!(remaining_ids.contains(&ids[3].to_string()));
+        assert!(remaining_ids.contains(&ids[2].to_string()));
+        assert!(!remaining_ids.contains(&ids[0].to_string()));
+        assert!(!remaining_ids.contains(&ids[1].to_string()));
+    }
+
+    #[test]
+    fn prune_cascades_to_messages() {
+        let db = DatabaseManager::new(":memory:").unwrap();
+        let conn = db.conn();
+
+        let old = Uuid::new_v4();
+        let keep = Uuid::new_v4();
+        insert_conv(conn, &old, "2026-01-01 00:00:00");
+        insert_conv(conn, &keep, "2026-01-02 00:00:00");
+
+        // 给两条对话各存一条消息
+        save_message(conn, &Uuid::new_v4(), &old, "user", "old msg", None, None).unwrap();
+        save_message(conn, &Uuid::new_v4(), &keep, "user", "keep msg", None, None).unwrap();
+        assert_eq!(msg_count(conn), 2);
+
+        prune_conversations(conn, 1).unwrap();
+
+        // 旧对话及其消息应随 CASCADE 一并删除
+        assert_eq!(conv_count(conn), 1);
+        assert_eq!(msg_count(conn), 1);
+    }
+
+    #[test]
+    fn prune_noop_when_under_limit() {
+        let db = DatabaseManager::new(":memory:").unwrap();
+        let conn = db.conn();
+
+        insert_conv(conn, &Uuid::new_v4(), "2026-01-01 00:00:00");
+        insert_conv(conn, &Uuid::new_v4(), "2026-01-02 00:00:00");
+
+        prune_conversations(conn, 15).unwrap();
+
+        assert_eq!(conv_count(conn), 2);
+    }
 }

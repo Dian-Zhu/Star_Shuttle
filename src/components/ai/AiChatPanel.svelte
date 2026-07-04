@@ -155,6 +155,11 @@
     activeTab = 'chat';
     await handleNewChat();
   }
+
+  export function openHistory() {
+    activeTab = 'chat';
+    showHistory = true;
+  }
 </script>
 
 <div class="flex flex-col h-full bg-app-bg overflow-hidden">

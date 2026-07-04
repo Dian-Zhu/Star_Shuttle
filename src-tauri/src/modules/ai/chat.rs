@@ -15,6 +15,9 @@ struct InflightRequest {
     cancel_tx: tokio::sync::oneshot::Sender<()>,
 }
 
+/// 对话历史保留上限，超出后自动清理最旧的对话
+const MAX_CONVERSATIONS: usize = 15;
+
 const SYSTEM_PROMPT_BASE: &str = r#"You are an expert DevOps and system administration assistant embedded in Star Shuttle, an SSH remote management tool.
 
 You help users:
@@ -74,6 +77,9 @@ impl ChatManager {
             session_id.as_ref(),
         )
         .map_err(|e| e.to_string())?;
+        // 仅保留最近 MAX_CONVERSATIONS 条对话，裁剪更旧的（消息随 CASCADE 一并清理）
+        crate::modules::db::ai_store::prune_conversations(db.conn(), MAX_CONVERSATIONS)
+            .map_err(|e| e.to_string())?;
         Ok(id)
     }
 

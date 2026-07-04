@@ -13,6 +13,8 @@ pub struct DatabaseManager {
 impl DatabaseManager {
     pub fn new(db_path: &str) -> Result<Self> {
         let conn = Connection::open(db_path)?;
+        // 开启外键约束，使 ON DELETE CASCADE 生效（删除对话时级联清理其消息）
+        conn.execute_batch("PRAGMA foreign_keys = ON;")?;
         Self::create_tables(&conn)?;
         Ok(Self { conn })
     }
