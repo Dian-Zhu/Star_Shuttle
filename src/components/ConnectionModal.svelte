@@ -660,8 +660,10 @@
   }
 </script>
 
-<div class="fixed inset-0 z-50 flex items-center justify-center bg-app-backdrop backdrop-blur-sm p-4" role="button" tabindex="0" on:click|self={handleClose} on:keydown={(e) => e.key === 'Escape' && handleClose()}>
-  <div class="relative bg-app-surface border border-app-border rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden">
+<svelte:window on:keydown={(e) => e.key === 'Escape' && handleClose()} />
+
+<div class="absolute inset-0 z-30 flex flex-col bg-app-bg">
+  <div class="relative flex-1 flex flex-col overflow-hidden">
     <!-- Host Key Verification Overlay -->
     {#if hostKeyVerification}
       <div class="absolute inset-0 z-50 bg-app-surface flex flex-col items-center justify-center p-8 text-center" transition:fade={{ duration: 200 }}>
@@ -700,53 +702,56 @@
     {/if}
 
     <!-- Header -->
-    <div class="flex items-center justify-between px-6 py-4 border-b border-app-border bg-app-bg">
-      <div class="flex items-center gap-4">
-        <div class="flex items-center gap-3">
-          {#if !$editingConnection && modalView === 'form'}
-            <button
-              type="button"
-              class="inline-flex items-center justify-center rounded-md p-1.5 text-app-text-secondary transition-colors hover:bg-app-bg-hover hover:text-app-text"
-              on:click={goBackToChooser}
-              title="返回新建页"
-            >
-              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
-              </svg>
-            </button>
-          {/if}
-          <h2 class="text-lg font-semibold text-app-text">
-            {$editingConnection ? '编辑连接' : modalView === 'chooser' ? '新建页' : '新建连接'}
-          </h2>
-        </div>
-        {#if modalView === 'form'}
-          <div class="flex bg-app-bg rounded-lg p-1 border border-app-border">
-            <button 
-              class="px-3 py-1 text-xs font-medium rounded-md transition-all {activeTab === 'basic' ? 'bg-app-surface text-primary-600 dark:text-primary-400 shadow-sm' : 'text-app-text-secondary hover:text-app-text'}"
-              on:click={() => activeTab = 'basic'}
-            >
-              基本信息
-            </button>
-            <button 
-              class="px-3 py-1 text-xs font-medium rounded-md transition-all {formData.protocol !== 'Ssh' ? 'opacity-40 cursor-not-allowed' : ''} {activeTab === 'advanced' ? 'bg-app-surface text-primary-600 dark:text-primary-400 shadow-sm' : 'text-app-text-secondary hover:text-app-text'}"
-              disabled={formData.protocol !== 'Ssh'}
-              on:click={() => activeTab = 'advanced'}
-            >
-              高级 & 隧道
-            </button>
+    <div class="flex-none border-b border-app-border bg-app-bg px-6 py-4">
+      <div class="mx-auto w-full max-w-3xl flex items-center justify-between gap-4">
+        <div class="flex items-center gap-4">
+          <div class="flex items-center gap-3">
+            {#if !$editingConnection && modalView === 'form'}
+              <button
+                type="button"
+                class="inline-flex items-center justify-center rounded-md p-1.5 text-app-text-secondary transition-colors hover:bg-app-bg-hover hover:text-app-text"
+                on:click={goBackToChooser}
+                title="返回新建页"
+              >
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
+                </svg>
+              </button>
+            {/if}
+            <h2 class="text-lg font-semibold text-app-text">
+              {$editingConnection ? '编辑连接' : modalView === 'chooser' ? '新建页' : '新建连接'}
+            </h2>
           </div>
-        {/if}
+          {#if modalView === 'form'}
+            <div class="flex bg-app-bg rounded-lg p-1 border border-app-border">
+              <button
+                class="px-3 py-1 text-xs font-medium rounded-md transition-all {activeTab === 'basic' ? 'bg-app-surface text-primary-600 dark:text-primary-400 shadow-sm' : 'text-app-text-secondary hover:text-app-text'}"
+                on:click={() => activeTab = 'basic'}
+              >
+                基本信息
+              </button>
+              <button
+                class="px-3 py-1 text-xs font-medium rounded-md transition-all {formData.protocol !== 'Ssh' ? 'opacity-40 cursor-not-allowed' : ''} {activeTab === 'advanced' ? 'bg-app-surface text-primary-600 dark:text-primary-400 shadow-sm' : 'text-app-text-secondary hover:text-app-text'}"
+                disabled={formData.protocol !== 'Ssh'}
+                on:click={() => activeTab = 'advanced'}
+              >
+                高级 & 隧道
+              </button>
+            </div>
+          {/if}
+        </div>
+        <button
+          class="text-app-text-secondary hover:text-app-text transition-colors p-1 rounded-md hover:bg-app-bg-hover"
+          on:click={handleClose}
+        >
+          <XIcon class="w-5 h-5" />
+        </button>
       </div>
-      <button 
-        class="text-app-text-secondary hover:text-app-text transition-colors p-1 rounded-md hover:bg-app-bg-hover"
-        on:click={handleClose}
-      >
-        <XIcon class="w-5 h-5" />
-      </button>
     </div>
 
     <!-- Scrollable Content -->
     <div class="flex-1 overflow-y-auto p-6 custom-scrollbar">
+      <div class="mx-auto w-full max-w-3xl">
       {#if !$editingConnection && modalView === 'chooser'}
         <div class="space-y-6" in:fade={{ duration: 150 }}>
           <div class="border-b border-app-border pb-5">
@@ -1557,11 +1562,13 @@
         {/if}
       </form>
       {/if}
+      </div>
     </div>
 
     <!-- Footer -->
     {#if modalView === 'form' || $editingConnection}
-    <div class="px-6 py-4 border-t border-app-border bg-app-surface space-y-3">
+    <div class="flex-none px-6 py-4 border-t border-app-border bg-app-surface">
+      <div class="mx-auto w-full max-w-3xl space-y-3">
       {#if testConnectionFeedback}
         <div
           class="flex items-start gap-2 rounded-lg border px-3 py-2 text-sm {testConnectionFeedback.type === 'success'
@@ -1614,6 +1621,7 @@
             <span>{$editingConnection ? '保存' : '保存并连接'}</span>
           {/if}
         </button>
+      </div>
       </div>
     </div>
     {/if}

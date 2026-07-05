@@ -2,10 +2,9 @@
   import { createEventDispatcher, onDestroy, onMount } from 'svelte';
   import { tick } from 'svelte';
   import { slide, fade } from 'svelte/transition';
-  import { marked } from 'marked';
+  import { renderMarkdownSafe } from '../../lib/safeMarkdown';
   import {
     activeTask,
-    activeTaskEvents,
     sandboxMode,
     pendingConfirm,
     taskHistory,
@@ -16,11 +15,6 @@
     openTask,
     cleanup,
   } from '../../lib/aiAgentService';
-  import {
-    formatAgentEventLabel,
-    formatAgentEventSummary,
-    formatAgentEventTone,
-  } from '../../lib/agentEventFormatter';
   import {
     filterSkillsByMode,
     getSkillById,
@@ -328,24 +322,13 @@
     cancelled: 'bg-app-surface border-app-border',
   };
 
-  const EVENT_CARD_STYLES: Record<string, string> = {
-    neutral: 'bg-app-bg border-app-border',
-    success: 'bg-green-500/10 border-green-500/20',
-    warning: 'bg-yellow-500/10 border-yellow-500/20',
-    danger: 'bg-red-500/10 border-red-500/20',
-  };
-
   const HISTORY_CAUSE_STYLES: Record<string, string> = {
     rejected: 'bg-red-500/10 text-red-400 border-red-500/20',
     timed_out: 'bg-yellow-500/10 text-yellow-300 border-yellow-500/20',
   };
 
   function renderMarkdown(content: string): string {
-    try {
-      return marked.parse(content, { async: false, gfm: true, breaks: true }) as string;
-    } catch {
-      return content;
-    }
+    return renderMarkdownSafe(content);
   }
 
   $: finalResultStep = [...($activeTask?.steps ?? [])]
@@ -360,7 +343,8 @@
   $: doneCardStyle = $activeTask ? DONE_CARD_STYLES[$activeTask.status] ?? 'bg-app-surface border-app-border' : 'bg-app-surface border-app-border';
   $: visibleSteps = ($activeTask?.steps ?? []).filter((step) => showThinking || step.kind !== 'planning');
   $: hasStructuredOutcome = !!summaryText || !!$activeTask?.error_message;
-  $: recentEvents = [...$activeTaskEvents].slice(-6).reverse();
+  // 若已有 result step 渲染了摘要，结果卡不再重复展示同一段内容
+  $: summaryShownInSteps = !!finalResultStep && (finalResultStep.output?.trim() ?? '') === summaryText;
   $: showSkillMenu =
     !!activeSkillCommand &&
     activeCommandKey !== dismissedCommandKey &&
@@ -409,30 +393,58 @@
         {/if}
       </div>
     {:else}
-      <div class="px-3 py-2 mx-3 mb-1 bg-primary-600/10 border border-primary-500/20 rounded-lg">
-        <div class="flex items-center justify-between gap-3">
+      <div class="px-3 py-2.5 mx-3 mb-2 bg-primary-600/10 border border-primary-500/20 rounded-lg">
+        <div class="flex items-start justify-between gap-3">
           <div class="min-w-0">
-            <p class="text-xs text-primary-400 font-medium">任务</p>
-            <div class="mt-0.5 flex items-center gap-2 min-w-0">
-              <p class="text-sm text-app-text truncate">{$activeTask.instruction}</p>
+            <div class="flex items-center gap-2">
+              <p class="text-xs text-primary-400 font-medium">任务</p>
               {#if activeTaskSkillLabel}
                 <span class="shrink-0 rounded-full border border-primary-500/20 bg-primary-600/10 px-2 py-0.5 text-[11px] text-primary-400">
                   {activeTaskSkillLabel}
                 </span>
               {/if}
             </div>
+            <p class="mt-1 text-sm text-app-text break-words">{$activeTask.instruction}</p>
           </div>
-          <div class="text-right">
-            <p class="text-xs text-app-text-secondary">事件</p>
-            <p class="text-sm text-app-text">{$activeTaskEvents.length}</p>
-          </div>
+          <span
+            class="shrink-0 inline-flex items-center gap-1.5 rounded-full border border-app-border bg-app-bg px-2.5 py-1 text-[11px] font-medium {STATUS_COLORS[$activeTask.status]}"
+          >
+            {#if isRunning}
+              <span class="w-1.5 h-1.5 rounded-full bg-current animate-pulse"></span>
+            {/if}
+            {STATUS_LABELS[$activeTask.status]}
+          </span>
         </div>
       </div>
 
       <div class="px-1">
-        {#each visibleSteps as step (step.id)}
-          <AgentToolCallStep {step} />
+        {#each visibleSteps as step, i (step.id)}
+          <AgentToolCallStep {step} isLast={i === visibleSteps.length - 1 && !isRunning && !isDone} />
         {/each}
+
+        {#if isRunning && !isWaiting}
+          <!-- 运行中的活动节点，与步骤时间线对齐 -->
+          <div class="flex gap-3 px-3">
+            <div class="flex-shrink-0 flex flex-col items-center">
+              <div class="w-5 h-5 mt-1.5 flex items-center justify-center rounded-full border border-blue-400/40 bg-blue-400/10">
+                <div class="w-2.5 h-2.5 rounded-full border-2 border-blue-400 border-t-transparent animate-spin"></div>
+              </div>
+            </div>
+            <div class="flex-1 min-w-0 pt-1.5 pb-3">
+              <p class="text-xs text-blue-400">
+                {#if $activeTask?.status === 'retrying'}
+                  AI 正在重试...
+                {:else if $activeTask?.status === 'cancelling'}
+                  正在停止当前任务...
+                {:else if $activeTask?.status === 'planning'}
+                  AI 正在规划...
+                {:else}
+                  AI 正在执行...
+                {/if}
+              </p>
+            </div>
+          </div>
+        {/if}
 
         {#if isDone}
           <div class="px-2 py-2">
@@ -444,8 +456,8 @@
                     {STATUS_LABELS[$activeTask.status]}
                   </p>
                 </div>
-                {#if summaryText}
-                  <span class="text-xs text-app-text-secondary">已生成最终摘要</span>
+                {#if summaryShownInSteps}
+                  <span class="text-xs text-app-text-secondary">见上方任务结果</span>
                 {:else if $activeTask.status === 'failed'}
                   <span class="text-xs text-red-400">未生成最终结果</span>
                 {:else if $activeTask.status === 'cancelled'}
@@ -453,7 +465,7 @@
                 {/if}
               </div>
 
-              {#if summaryText}
+              {#if summaryText && !summaryShownInSteps}
                 <div
                   class="agent-summary-markdown mt-2 prose prose-sm dark:prose-invert max-w-none text-app-text
                          prose-code:before:content-none prose-code:after:content-none
@@ -478,21 +490,6 @@
             </div>
           </div>
         {/if}
-
-        {#if isRunning && !isWaiting}
-          <div class="flex items-center gap-2 px-3 py-2 text-xs text-blue-400">
-            <div class="w-3 h-3 rounded-full border-2 border-blue-400 border-t-transparent animate-spin"></div>
-            {#if $activeTask?.status === 'retrying'}
-              AI 正在重试...
-            {:else if $activeTask?.status === 'cancelling'}
-              正在停止当前任务...
-            {:else if $activeTask?.status === 'planning'}
-              AI 正在规划...
-            {:else}
-              AI 正在执行...
-            {/if}
-          </div>
-        {/if}
       </div>
 
       {#if $activeTask.error_message && !isDone}
@@ -501,34 +498,6 @@
           transition:fade={{ duration: 200 }}
         >
           {$activeTask.error_message}
-        </div>
-      {/if}
-
-      {#if recentEvents.length}
-        <div class="mx-3 mt-2 rounded-lg border border-app-border bg-app-surface/40 p-3">
-          <div class="flex items-center justify-between gap-3 mb-2">
-            <p class="text-xs font-medium text-app-text-secondary">最近事件</p>
-            <p class="text-[11px] text-app-text-secondary">共 {$activeTaskEvents.length} 条</p>
-          </div>
-              <div class="space-y-1.5">
-            {#each recentEvents as event (event.id)}
-              <div class="rounded-md border px-2.5 py-2 {EVENT_CARD_STYLES[formatAgentEventTone(event.event_type)]}">
-                <div class="flex items-center justify-between gap-3">
-                  <p class="text-xs text-app-text">{formatAgentEventLabel(event.event_type)}</p>
-                  <p class="text-[11px] text-app-text-secondary">#{event.seq}</p>
-                </div>
-                <p class="mt-1 text-[11px] text-app-text-secondary whitespace-pre-wrap break-all leading-relaxed">
-                  {formatAgentEventSummary(event)}
-                </p>
-                <details class="mt-1">
-                  <summary class="cursor-pointer text-[11px] text-app-text-secondary hover:text-app-text">
-                    查看原始数据
-                  </summary>
-                  <pre class="mt-1 text-[11px] text-app-text-secondary whitespace-pre-wrap break-all leading-relaxed">{JSON.stringify(event.payload_json, null, 2)}</pre>
-                </details>
-              </div>
-            {/each}
-          </div>
         </div>
       {/if}
     {/if}

@@ -735,7 +735,15 @@
       <main class="flex-1 flex overflow-hidden relative">
         <div class="flex-1 flex flex-col min-w-0 relative">
           <TerminalManager />
-          
+
+          {#if $showConnectionForm}
+            <div class="absolute inset-0 z-30" transition:fade={{ duration: 200 }}>
+              {#if ConnectionModalComponent}
+                <svelte:component this={ConnectionModalComponent} />
+              {/if}
+            </div>
+          {/if}
+
           <!-- Toast Messages -->
           <div class="fixed top-12 right-4 z-[1000] flex flex-col gap-2 pointer-events-none">
             {#if $successMessage}
@@ -851,14 +859,6 @@
     on:minimize={handleMinimizeApp}
     on:quit={handleQuitApp}
   />
-{/if}
-
-{#if $showConnectionForm}
-  <div transition:fade={{ duration: 200 }}>
-    {#if ConnectionModalComponent}
-      <svelte:component this={ConnectionModalComponent} />
-    {/if}
-  </div>
 {/if}
 
 {#if $showSettings}
