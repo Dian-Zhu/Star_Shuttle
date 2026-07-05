@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick } from 'svelte';
-  import { marked } from 'marked';
+  import { renderMarkdownSafe } from '../../lib/safeMarkdown';
   import type { StoredMessage } from '../../lib/aiChatService';
   import { getSkillLabel } from '../../lib/aiSkillService';
 
@@ -10,13 +10,9 @@
   const isUser = message.role === 'user';
   $: skillLabel = getSkillLabel(message.skill_id);
 
-  // Render markdown for assistant messages
+  // Render markdown for assistant messages (经 DOMPurify 净化后再注入)
   function renderMarkdown(content: string): string {
-    try {
-      return marked.parse(content, { async: false, gfm: true, breaks: true }) as string;
-    } catch {
-      return content;
-    }
+    return renderMarkdownSafe(content);
   }
 
   // Copy code block content to clipboard

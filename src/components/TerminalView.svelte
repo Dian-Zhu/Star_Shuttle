@@ -1,8 +1,9 @@
 <script lang="ts">
 import { onDestroy } from 'svelte';
 import { get } from 'svelte/store';
-import { activeTerminals, broadcastSessionIds, type ActiveTerminal, terminalSessionMap, closeSplitRequest } from '../lib/store';
+import { activeTerminals, broadcastSessionIds, selectedTerminalIndex, type ActiveTerminal, terminalSessionMap, closeSplitRequest } from '../lib/store';
 import { createTerminalSession, closeSplitSession, disconnectTerminal } from '../lib/terminalService';
+import { computeSelectedIndexAfterBatchRemoval } from '../lib/terminalStateUtils';
 import type { LayoutNode, TerminalPaneNode, SplitNode } from '../lib/layout';
 import { generateId, findNode, replaceNode, removeNode, findNodeBySessionId } from '../lib/layout';
 import type { TerminalProxy } from '../lib/terminalProxy';
@@ -210,8 +211,15 @@ import SplitPane from './terminal/SplitPane.svelte';
           console.warn('Failed to close split session', error);
           return;
         }
-         // Remove from activeTerminals
-         activeTerminals.update(terms => terms.filter(t => t.sessionId !== targetNode.sessionId));
+         // Remove from activeTerminals，并同步收敛选中下标，避免下标越界导致
+         // selectedTerminal 派生为 null。
+         const before = get(activeTerminals);
+         const currentIndex = get(selectedTerminalIndex);
+         const removed = new Set([targetNode.sessionId]);
+         activeTerminals.update(terms => terms.filter(t => !removed.has(t.sessionId)));
+         selectedTerminalIndex.set(
+           computeSelectedIndexAfterBatchRemoval(before, currentIndex, removed)
+         );
          broadcastSessionIds.update(ids => ids.filter(id => id !== targetNode.sessionId));
     }
     

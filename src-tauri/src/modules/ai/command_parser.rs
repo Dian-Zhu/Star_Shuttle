@@ -28,7 +28,12 @@ pub fn parse_statement(input: &str) -> ParsedStatement {
     ParsedStatement { commands, raw }
 }
 
-/// 按照 | && || ; 分割命令链（保留每段）
+/// 按照命令分隔符分割命令链（保留每段）
+///
+/// 分隔符包括：管道 `|` `||`、逻辑与 `&&`、后台符 `&`、分号 `;`、
+/// 换行 `\n`，以及重定向 `>` `>>` `<`。重定向被视为分隔符，
+/// 以便其目标（如 `> /etc/cron.d/x`）作为独立命令段参与白名单判定，
+/// 避免 `echo x > /path` 这类写文件操作被首词 `echo` 蒙混过关。
 fn split_commands(input: &str) -> Vec<&str> {
     let mut segments = Vec::new();
     let mut start = 0;
@@ -50,14 +55,28 @@ fn split_commands(input: &str) -> Vec<&str> {
                 }
                 start = i + 1;
             }
+            // 单个 `&`（后台符）与 `&&`（逻辑与）都作为分隔符
             '&' if !in_single && !in_double => {
+                segments.push(&input[start..i]);
                 if i + 1 < len && chars[i + 1] == '&' {
-                    segments.push(&input[start..i]);
                     i += 1;
-                    start = i + 1;
                 }
+                start = i + 1;
             }
-            ';' if !in_single && !in_double => {
+            // 重定向 `>` `>>` `<`：目标应作为独立段被检查
+            '>' if !in_single && !in_double => {
+                segments.push(&input[start..i]);
+                if i + 1 < len && chars[i + 1] == '>' {
+                    i += 1;
+                }
+                start = i + 1;
+            }
+            '<' if !in_single && !in_double => {
+                segments.push(&input[start..i]);
+                start = i + 1;
+            }
+            // 分号与换行都终止一条命令
+            ';' | '\n' | '\r' if !in_single && !in_double => {
                 segments.push(&input[start..i]);
                 start = i + 1;
             }
@@ -158,6 +177,11 @@ pub fn detect_injection(input: &str) -> bool {
     if input.contains("\\\n") {
         return true;
     }
+    // 检测裸换行：一行命令内不应出现换行，出现即视为多命令拼接的绕过尝试。
+    // split_commands 已按换行拆分，此处作为纵深防御，拦在授权判定之前。
+    if input.contains('\n') || input.contains('\r') {
+        return true;
+    }
     false
 }
 
@@ -199,5 +223,51 @@ mod tests {
         assert!(detect_injection("ls $(cat /etc/passwd)"));
         assert!(detect_injection("ls `whoami`"));
         assert!(!detect_injection("ls -la /tmp"));
+    }
+
+    #[test]
+    fn test_background_single_ampersand_splits() {
+        // 单个 `&` 后台符必须切分，否则 `rm -rf /tmp` 会沦为 `ls` 的参数
+        let stmt = parse_statement("ls & rm -rf /tmp");
+        assert_eq!(stmt.commands.len(), 2);
+        assert_eq!(stmt.commands[0].name, "ls");
+        assert_eq!(stmt.commands[1].name, "rm");
+    }
+
+    #[test]
+    fn test_newline_splits() {
+        let stmt = parse_statement("ls\nrm -rf /tmp");
+        assert_eq!(stmt.commands.len(), 2);
+        assert_eq!(stmt.commands[0].name, "ls");
+        assert_eq!(stmt.commands[1].name, "rm");
+    }
+
+    #[test]
+    fn test_redirect_target_is_separate_segment() {
+        // `echo x > /etc/cron.d/x` 的重定向目标应作为独立段，不被首词 echo 蒙混
+        let stmt = parse_statement("echo x > /etc/cron.d/x");
+        assert_eq!(stmt.commands.len(), 2);
+        assert_eq!(stmt.commands[0].name, "echo");
+        assert_eq!(stmt.commands[1].name, "/etc/cron.d/x");
+    }
+
+    #[test]
+    fn test_append_redirect_splits() {
+        let stmt = parse_statement("echo KEY >> /root/.ssh/authorized_keys");
+        assert_eq!(stmt.commands.len(), 2);
+        assert_eq!(stmt.commands[1].name, "/root/.ssh/authorized_keys");
+    }
+
+    #[test]
+    fn test_ampersand_not_split_inside_quotes() {
+        let stmt = parse_statement("echo 'a & b'");
+        assert_eq!(stmt.commands.len(), 1);
+        assert_eq!(stmt.commands[0].name, "echo");
+    }
+
+    #[test]
+    fn test_injection_detects_bare_newline() {
+        assert!(detect_injection("ls\nrm -rf /"));
+        assert!(detect_injection("ls\r\nrm -rf /"));
     }
 }

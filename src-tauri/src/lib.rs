@@ -348,23 +348,28 @@ pub(crate) mod commands {
         current_password: String,
         new_password: String,
     ) -> Result<(), String> {
-        let db = db.lock().map_err(|e| e.to_string())?;
-        let hash = db
-            .get_setting("app_lock_hash")
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| "App lock is not enabled".to_string())?;
+        let hash = {
+            let db = db.lock().map_err(|e| e.to_string())?;
+            db.get_setting("app_lock_hash")
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| "App lock is not enabled".to_string())?
+        };
 
+        enforce_app_lock_verify_throttle()?;
         let is_valid = bcrypt::verify(current_password, &hash).map_err(|e| e.to_string())?;
+        update_app_lock_verify_throttle(is_valid);
         if !is_valid {
             return Err("Current password is incorrect".to_string());
         }
 
         validate_app_lock_password_strength(&new_password)?;
         let new_hash =
-            bcrypt::hash(new_password, bcrypt::DEFAULT_COST).map_err(|e| e.to_string())?;
-        db.save_setting("app_lock_hash", &new_hash)
-            .map_err(|e| e.to_string())?;
-        drop(db);
+            bcrypt::hash(new_password, APP_LOCK_BCRYPT_COST).map_err(|e| e.to_string())?;
+        {
+            let db = db.lock().map_err(|e| e.to_string())?;
+            db.save_setting("app_lock_hash", &new_hash)
+                .map_err(|e| e.to_string())?;
+        }
         set_unlock_state(&app_lock_state, true)
     }
 
@@ -425,20 +430,25 @@ pub(crate) mod commands {
         app_lock_state: State<Arc<Mutex<AppLockRuntimeState>>>,
         current_password: String,
     ) -> Result<(), String> {
-        let db = db.lock().map_err(|e| e.to_string())?;
-        let hash = db
-            .get_setting("app_lock_hash")
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| "App lock is not enabled".to_string())?;
+        let hash = {
+            let db = db.lock().map_err(|e| e.to_string())?;
+            db.get_setting("app_lock_hash")
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| "App lock is not enabled".to_string())?
+        };
 
+        enforce_app_lock_verify_throttle()?;
         let is_valid = bcrypt::verify(current_password, &hash).map_err(|e| e.to_string())?;
+        update_app_lock_verify_throttle(is_valid);
         if !is_valid {
             return Err("Current password is incorrect".to_string());
         }
 
-        db.delete_setting("app_lock_hash")
-            .map_err(|e| e.to_string())?;
-        drop(db);
+        {
+            let db = db.lock().map_err(|e| e.to_string())?;
+            db.delete_setting("app_lock_hash")
+                .map_err(|e| e.to_string())?;
+        }
         set_unlock_state(&app_lock_state, true)
     }
 

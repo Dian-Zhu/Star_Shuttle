@@ -174,7 +174,30 @@ pub async fn get_session(
 
         let (pending_notify, pending_generation) = match action {
             AcquireAction::Wait(notify) => {
-                notify.notified().await;
+                // 关键：先登记等待者，再在锁内复查状态，最后 await。
+                //
+                // `Notify::notify_waiters()` 不保存许可，只唤醒调用时已登记的等待者。
+                // 若在「释放 sessions 锁」到「注册 notified」之间创建方完成初始化并
+                // 通知，朴素的 `notify.notified().await` 会永久错过唤醒而挂起。
+                //
+                // 通过 `enable()` 先把当前 future 登记为等待者，然后重新持锁复查：
+                // - 若已非 Pending（创建方已完成/失败），直接重试循环，不 await；
+                // - 若仍是 Pending，创建方此刻被 sessions 锁挡住，其后续的
+                //   `notify_waiters()` 必然命中已登记的本等待者，不会丢唤醒。
+                let notified = notify.notified();
+                tokio::pin!(notified);
+                notified.as_mut().enable();
+
+                let still_pending = {
+                    let sessions = sessions.lock().await;
+                    matches!(
+                        sessions.get(&session_id),
+                        Some(CachedSftpSession::Pending { .. })
+                    )
+                };
+                if still_pending {
+                    notified.await;
+                }
                 continue;
             }
             AcquireAction::Retry => continue,

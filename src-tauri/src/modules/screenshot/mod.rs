@@ -15,10 +15,12 @@
 // Large image payloads are kept in Rust state and pulled by id; they are never
 // broadcast through events.
 
+use crate::modules::db::DatabaseManager;
+use crate::{ensure_app_unlocked_runtime, AppLockRuntimeState};
 use base64::Engine;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::{command, AppHandle, LogicalPosition, LogicalSize, Manager, State, WebviewUrl};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
@@ -60,8 +62,11 @@ fn encode_png(image: &image::RgbaImage) -> Result<Vec<u8>, String> {
 #[command]
 pub async fn screenshot_capture(
     app: AppHandle,
+    db: State<'_, Arc<Mutex<DatabaseManager>>>,
+    app_lock_state: State<'_, Arc<Mutex<AppLockRuntimeState>>>,
     state: State<'_, ScreenshotState>,
 ) -> Result<CaptureInfo, String> {
+    ensure_app_unlocked_runtime(db.inner(), app_lock_state.inner())?;
     use xcap::Monitor;
 
     let monitors = Monitor::all().map_err(|e| format!("enumerate monitors failed: {e}"))?;

@@ -34,7 +34,10 @@ import {
 } from './store';
 import { terminalPool } from './terminalPool';
 import { TerminalInstance } from './terminalInstance';
-import { computeNextSelectedIndexAfterRemoval } from './terminalStateUtils';
+import {
+  computeNextSelectedIndexAfterRemoval,
+  computeSelectedIndexAfterBatchRemoval,
+} from './terminalStateUtils';
 import {
   attachTerminalInputListener as attachTerminalInputListenerRegistry,
   armTerminalKeyListener,
@@ -76,6 +79,7 @@ import {
   canAttemptSessionReconnect,
   canContinueSessionReconnectFlow,
   interpretBackendSession,
+  isTerminalSessionInteractive,
   type BackendSessionInfo,
   type TerminalSessionReconnectContext,
 } from './terminalSessionModel';
@@ -1060,7 +1064,14 @@ export function handleTerminalInput(sessionId: string, data: string, connection?
     }
   }
   
-  const targets = Array.from(expandedTargets).filter(id => activeSessionIds.has(id));
+  // 广播目标必须处于可交互态：重连中 / 关闭中的会话不接受广播输入，
+  // 否则输入会在 sendTerminalData 里被后端「Session not found」静默吞掉，
+  // 用户无感知。来源会话（用户正在键入的这个）不受此过滤，始终尝试发送。
+  const sessionStates = get(terminalSessionStates);
+  const isBroadcastable = (id: string) =>
+    activeSessionIds.has(id) && isTerminalSessionInteractive(sessionStates.get(id));
+
+  const targets = Array.from(expandedTargets).filter(isBroadcastable);
   if (activeSessionIds.has(sessionId) && !targets.includes(sessionId)) {
     targets.push(sessionId);
   }
@@ -1180,7 +1191,14 @@ export async function disconnectTerminal(sessionId: string) {
 
     // Ensure UI does not keep stale child sessions/broadcast targets.
     if (closedChildren.size > 0) {
+      const before = get(activeTerminals);
+      const currentIndex = get(selectedTerminalIndex);
       activeTerminals.update(items => items.filter(t => !closedChildren.has(t.sessionId)));
+      // 批量移除子会话后必须同步收敛选中下标，否则后续 finalizeTerminalClosure
+      // 会基于过时/越界的下标计算，导致 selectedTerminal 派生为 null。
+      selectedTerminalIndex.set(
+        computeSelectedIndexAfterBatchRemoval(before, currentIndex, closedChildren)
+      );
       for (const childId of closedChildren) {
         removeSessionReferences(childId);
       }

@@ -139,7 +139,13 @@ struct ParsedSkillManifest {
     name: Option<String>,
     description: Option<String>,
     trigger_regex: Option<String>,
+    /// manifest 声明的工具范围；None 表示未声明（安装时按最小权限处理）。
+    allowed_tools: Option<Vec<String>>,
 }
+
+/// agent 可调用的已知工具名。manifest 声明的工具会按此集合过滤，
+/// 未知工具名一律丢弃，避免拼写错误或伪造导致越权。
+const KNOWN_AGENT_TOOLS: &[&str] = &["execute_command", "get_system_info"];
 
 fn builtin_skills() -> Vec<SkillDefinition> {
     vec![
@@ -473,10 +479,9 @@ pub fn install_skill_from_dir(
             &[],
         ))
         .map_err(|e| e.to_string())?,
-        allowed_tools_json: serde_json::to_string(&vec![
-            "execute_command".to_string(),
-            "get_system_info".to_string(),
-        ])
+        allowed_tools_json: serde_json::to_string(&resolve_installed_allowed_tools(
+            &parsed.allowed_tools,
+        ))
         .map_err(|e| e.to_string())?,
         starter_examples_json: "[]".to_string(),
         recommended_sandbox: Some("standard".to_string()),
@@ -735,7 +740,48 @@ fn apply_manifest_key_value(parsed: &mut ParsedSkillManifest, key: &str, value: 
         "name" => parsed.name = Some(normalized),
         "description" => parsed.description = Some(normalized),
         "trigger_regex" => parsed.trigger_regex = Some(normalized),
+        "allowed_tools" | "allowed-tools" | "tools" => {
+            parsed.allowed_tools = Some(parse_allowed_tools_value(&normalized));
+        }
         _ => {}
+    }
+}
+
+/// 解析 manifest 中的 allowed_tools 值。支持逗号分隔（`a, b`）与
+/// 简单 JSON 数组（`["a", "b"]`）两种写法，逐项做括号/引号清洗。
+fn parse_allowed_tools_value(value: &str) -> Vec<String> {
+    value
+        .trim_matches(|c| c == '[' || c == ']')
+        .split(',')
+        .map(|item| item.trim().trim_matches(|c| c == '"' || c == '\'').trim())
+        .filter(|item| !item.is_empty())
+        .map(|item| item.to_string())
+        .collect()
+}
+
+/// 依据 manifest 声明解析安装时落地的工具范围。
+///
+/// - 未声明（None）：默认最小权限，仅授予只读的 `get_system_info`，
+///   不默认授予可执行远程命令的 `execute_command`。
+/// - 已声明：按 KNOWN_AGENT_TOOLS 过滤，丢弃未知工具名并去重；
+///   若过滤后为空，则回退到最小权限集合。
+fn resolve_installed_allowed_tools(declared: &Option<Vec<String>>) -> Vec<String> {
+    let min_privilege = || vec!["get_system_info".to_string()];
+    match declared {
+        None => min_privilege(),
+        Some(items) => {
+            let mut resolved: Vec<String> = Vec::new();
+            for item in items {
+                if KNOWN_AGENT_TOOLS.contains(&item.as_str()) && !resolved.contains(item) {
+                    resolved.push(item.clone());
+                }
+            }
+            if resolved.is_empty() {
+                min_privilege()
+            } else {
+                resolved
+            }
+        }
     }
 }
 
@@ -782,6 +828,11 @@ fn calculate_content_hash(input: &str) -> String {
 }
 
 fn installed_skill_root() -> Result<PathBuf, String> {
+    // 测试可通过 STAR_SHUTTLE_SKILL_ROOT 覆盖，使各用例写入独立临时目录，
+    // 避免污染真实数据目录、以及并发用例间互相干扰。
+    if let Some(root) = std::env::var_os("STAR_SHUTTLE_SKILL_ROOT") {
+        return Ok(PathBuf::from(root));
+    }
     let mut root = dirs::data_local_dir()
         .or_else(dirs::home_dir)
         .ok_or_else(|| "无法确定本地 skill 存储目录".to_string())?;
@@ -902,8 +953,15 @@ mod tests {
     #[test]
     fn installs_and_enables_external_skill() {
         let db = in_memory_db();
+        let unique = uuid::Uuid::new_v4();
+        // 将安装目录重定向到独立临时目录，避免污染真实的用户 skill 目录、
+        // 也避免上一次运行的残留导致「已存在」而失败（测试隔离）。
+        let install_root =
+            std::env::temp_dir().join(format!("star-shuttle-skill-root-{}", unique));
+        std::env::set_var("STAR_SHUTTLE_SKILL_ROOT", &install_root);
+
         let temp_dir =
-            std::env::temp_dir().join(format!("star-shuttle-skill-test-{}", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("star-shuttle-skill-test-{}", unique));
         fs::create_dir_all(&temp_dir).expect("create temp dir");
         fs::write(
             temp_dir.join("SKILL.md"),
@@ -928,6 +986,46 @@ mod tests {
         let reloaded = reload_skills(&db, None).expect("reload");
         assert!(reloaded.iter().any(|skill| skill.id == "test_ir"));
 
-        let _ = fs::remove_dir_all(temp_dir);
+        let _ = fs::remove_dir_all(&temp_dir);
+        let _ = fs::remove_dir_all(&install_root);
+        std::env::remove_var("STAR_SHUTTLE_SKILL_ROOT");
+    }
+
+    #[test]
+    fn undeclared_allowed_tools_defaults_to_min_privilege() {
+        // 未声明 allowed_tools 时不应默认授予可执行远程命令的 execute_command，
+        // 仅授予只读的 get_system_info。
+        let resolved = super::resolve_installed_allowed_tools(&None);
+        assert_eq!(resolved, vec!["get_system_info".to_string()]);
+    }
+
+    #[test]
+    fn declared_allowed_tools_filters_unknown_and_dedups() {
+        let declared = Some(vec![
+            "execute_command".to_string(),
+            "execute_command".to_string(),
+            "totally_made_up_tool".to_string(),
+        ]);
+        let resolved = super::resolve_installed_allowed_tools(&declared);
+        assert_eq!(resolved, vec!["execute_command".to_string()]);
+    }
+
+    #[test]
+    fn declared_all_unknown_falls_back_to_min_privilege() {
+        let declared = Some(vec!["nope".to_string(), "nah".to_string()]);
+        let resolved = super::resolve_installed_allowed_tools(&declared);
+        assert_eq!(resolved, vec!["get_system_info".to_string()]);
+    }
+
+    #[test]
+    fn parse_allowed_tools_supports_comma_and_array_forms() {
+        assert_eq!(
+            super::parse_allowed_tools_value("execute_command, get_system_info"),
+            vec!["execute_command".to_string(), "get_system_info".to_string()]
+        );
+        assert_eq!(
+            super::parse_allowed_tools_value("[\"execute_command\", \"get_system_info\"]"),
+            vec!["execute_command".to_string(), "get_system_info".to_string()]
+        );
     }
 }

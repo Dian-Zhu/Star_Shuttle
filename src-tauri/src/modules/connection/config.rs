@@ -20,7 +20,7 @@ pub enum ConnectionStatus {
     Error,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub enum AuthMethod {
     Password {
         password: String,
@@ -43,7 +43,7 @@ pub enum AuthMethod {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize, Default)]
 pub enum ProxyType {
     #[default]
     None,
@@ -69,6 +69,97 @@ pub enum ProxyType {
         username: String,
         auth_method: AuthMethod,
     },
+}
+
+// 手写 Debug，对口令/密码等秘密字段脱敏。
+//
+// 这些结构会随连接流程在多处被 `{:?}` 记入日志（tauri-plugin-log 落盘）。
+// 派生 Debug 会把明文密码、私钥口令、证书口令、代理密码原样打印到日志，
+// 造成凭证泄露。此处只输出「是否存在」而非内容。
+impl std::fmt::Debug for AuthMethod {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AuthMethod::Password { save_password, .. } => f
+                .debug_struct("Password")
+                .field("password", &"***")
+                .field("save_password", save_password)
+                .finish(),
+            AuthMethod::KeyboardInteractive {} => f.debug_struct("KeyboardInteractive").finish(),
+            AuthMethod::PrivateKey {
+                key_path,
+                passphrase,
+                save_passphrase,
+            } => f
+                .debug_struct("PrivateKey")
+                .field("key_path", key_path)
+                .field("passphrase", &passphrase.as_ref().map(|_| "***"))
+                .field("save_passphrase", save_passphrase)
+                .finish(),
+            AuthMethod::Agent { agent_path } => {
+                f.debug_struct("Agent").field("agent_path", agent_path).finish()
+            }
+            AuthMethod::Certificate {
+                certificate_path,
+                private_key_path,
+                passphrase,
+                save_passphrase,
+            } => f
+                .debug_struct("Certificate")
+                .field("certificate_path", certificate_path)
+                .field("private_key_path", private_key_path)
+                .field("passphrase", &passphrase.as_ref().map(|_| "***"))
+                .field("save_passphrase", save_passphrase)
+                .finish(),
+        }
+    }
+}
+
+impl std::fmt::Debug for ProxyType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ProxyType::None => f.write_str("None"),
+            ProxyType::Socks5 {
+                host,
+                port,
+                username,
+                password,
+                has_password,
+            } => f
+                .debug_struct("Socks5")
+                .field("host", host)
+                .field("port", port)
+                .field("username", username)
+                .field("password", &password.as_ref().map(|_| "***"))
+                .field("has_password", has_password)
+                .finish(),
+            ProxyType::Http {
+                host,
+                port,
+                username,
+                password,
+                has_password,
+            } => f
+                .debug_struct("Http")
+                .field("host", host)
+                .field("port", port)
+                .field("username", username)
+                .field("password", &password.as_ref().map(|_| "***"))
+                .field("has_password", has_password)
+                .finish(),
+            ProxyType::JumpHost {
+                host,
+                port,
+                username,
+                auth_method,
+            } => f
+                .debug_struct("JumpHost")
+                .field("host", host)
+                .field("port", port)
+                .field("username", username)
+                .field("auth_method", auth_method)
+                .finish(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -321,5 +412,86 @@ impl ConnectionConfig {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod redaction_tests {
+    use super::*;
+
+    #[test]
+    fn auth_method_debug_redacts_password() {
+        let auth = AuthMethod::Password {
+            password: "s3cr3t-pw".to_string(),
+            save_password: true,
+        };
+        let dbg = format!("{:?}", auth);
+        assert!(!dbg.contains("s3cr3t-pw"), "password leaked: {dbg}");
+        assert!(dbg.contains("***"));
+        assert!(dbg.contains("save_password: true"));
+    }
+
+    #[test]
+    fn auth_method_debug_redacts_private_key_and_cert_passphrase() {
+        let key = AuthMethod::PrivateKey {
+            key_path: "/home/u/.ssh/id_ed25519".to_string(),
+            passphrase: Some("key-pass".to_string()),
+            save_passphrase: true,
+        };
+        let dbg = format!("{:?}", key);
+        assert!(!dbg.contains("key-pass"), "passphrase leaked: {dbg}");
+        assert!(dbg.contains("/home/u/.ssh/id_ed25519"), "key_path should remain");
+
+        let cert = AuthMethod::Certificate {
+            certificate_path: "/c/cert.pub".to_string(),
+            private_key_path: "/c/key".to_string(),
+            passphrase: Some("cert-pass".to_string()),
+            save_passphrase: false,
+        };
+        let dbg = format!("{:?}", cert);
+        assert!(!dbg.contains("cert-pass"), "cert passphrase leaked: {dbg}");
+    }
+
+    #[test]
+    fn proxy_type_debug_redacts_password_but_keeps_host() {
+        let proxy = ProxyType::Socks5 {
+            host: "proxy.example".to_string(),
+            port: 1080,
+            username: Some("user".to_string()),
+            password: Some("proxy-pw".to_string()),
+            has_password: true,
+        };
+        let dbg = format!("{:?}", proxy);
+        assert!(!dbg.contains("proxy-pw"), "proxy password leaked: {dbg}");
+        assert!(dbg.contains("proxy.example"));
+        assert!(dbg.contains("has_password: true"));
+    }
+
+    #[test]
+    fn connection_config_debug_redacts_nested_secrets() {
+        let config = ConnectionConfig {
+            id: Uuid::nil(),
+            name: "test".to_string(),
+            protocol: ConnectionProtocol::Ssh,
+            host: "host".to_string(),
+            port: 22,
+            username: "root".to_string(),
+            auth_method: AuthMethod::Password {
+                password: "top-secret".to_string(),
+                save_password: true,
+            },
+            description: None,
+            tags: vec![],
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            group_id: None,
+            local_forwards: vec![],
+            remote_forwards: vec![],
+            proxy_type: ProxyType::None,
+            socks_proxy_port: None,
+            auto_reconnect: None,
+        };
+        let dbg = format!("{:?}", config);
+        assert!(!dbg.contains("top-secret"), "nested password leaked: {dbg}");
     }
 }
