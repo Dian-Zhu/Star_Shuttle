@@ -8,6 +8,7 @@ pub mod db;
 pub mod error;
 pub mod local_fs;
 pub mod logging;
+pub mod recording;
 pub mod screenshot;
 pub mod session;
 pub mod sftp;

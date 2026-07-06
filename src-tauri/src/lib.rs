@@ -1075,6 +1075,7 @@ pub fn run() {
         .manage(local_fs_state)
         .manage(host_key_challenge_state)
         .manage(crate::modules::screenshot::ScreenshotState::default())
+        .manage(crate::modules::recording::RecordingState::default())
         .invoke_handler(tauri::generate_handler![
             // Connection management commands
             commands::connect,
@@ -1168,6 +1169,10 @@ pub fn run() {
             crate::modules::screenshot::pin_get_image,
             crate::modules::screenshot::pin_copy,
             crate::modules::screenshot::pin_close,
+            // Screen recording commands
+            crate::modules::recording::recording_start,
+            crate::modules::recording::recording_is_active,
+            crate::modules::recording::recording_stop,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

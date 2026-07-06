@@ -47,13 +47,14 @@
   import { showConnectionForm, editingConnection, showSettings, successMessage, errorMessage, settings, isRightSidebarOpen, activeTerminals, selectedTerminalIndex, showCommandPalette, isLocked, showAdvancedModal, passwordPromptRequest } from '../lib/store';
   import { closeAllTerminals, disconnectTerminal, restoreActiveSessions, sendTerminalData } from '../lib/terminalService';
   import { loadConnections } from '../lib/connectionService';
-  import { themeColors, type ThemeColorKey } from '../lib/themeColors';
+  import { themeColors, generateAccentShades, isCustomAccent, type ThemeColorKey } from '../lib/themeColors';
   import { isEditableShortcutTarget, matchShortcut } from '../lib/shortcuts';
   import { fade, fly } from 'svelte/transition';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import CloseActionModal from './CloseActionModal.svelte';
   import UploadProgressCard from './file-transfer/UploadProgressCard.svelte';
   import { startScreenshot } from '../lib/screenshotService';
+  import { toggleRecording } from '../lib/recordingService';
 
   let isCheckingLock = true;
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -392,9 +393,12 @@
   }
 
   function updateAccentColor() {
-    const colorKey = ($settings.appearance.accentColor || 'blue') as ThemeColorKey;
-    const colors = themeColors[colorKey] || themeColors.blue;
-    
+    const accent = $settings.appearance.accentColor || 'blue';
+    // A custom accent is stored as a hex string; presets are stored by key.
+    const colors = isCustomAccent(accent)
+      ? generateAccentShades(accent)
+      : themeColors[accent as ThemeColorKey] || themeColors.blue;
+
     const root = document.documentElement;
     Object.entries(colors).forEach(([shade, value]) => {
       root.style.setProperty(`--color-primary-${shade}`, value);
@@ -619,6 +623,13 @@
     if (matchShortcut(event, shortcuts.screenshot)) {
       event.preventDefault();
       void startScreenshot();
+      return;
+    }
+
+    // Screen recording (toggle start/stop)
+    if (matchShortcut(event, shortcuts.recordScreen)) {
+      event.preventDefault();
+      void toggleRecording();
       return;
     }
 

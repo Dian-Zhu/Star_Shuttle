@@ -1,16 +1,24 @@
 <script lang="ts">
   import { getCurrentWindow } from '@tauri-apps/api/window';
-  import { showSettings, activeTerminals, selectedTerminalIndex, broadcastInputEnabled, broadcastSessionIds, terminalSessionMap, showCommandPalette, showConnectionForm, editingConnection } from '../lib/store';
+  import { showSettings, activeTerminals, selectedTerminalIndex, broadcastInputEnabled, broadcastSessionIds, terminalSessionMap, showCommandPalette, showConnectionForm, editingConnection, isRightSidebarOpen } from '../lib/store';
   import { disconnectTerminal } from '../lib/terminalService';
   import { startScreenshot } from '../lib/screenshotService';
+  import { toggleRecording, isRecording, refreshRecordingState } from '../lib/recordingService';
+  import { onMount } from 'svelte';
   import SettingsIcon from './icons/SettingsIcon.svelte';
+  import FileBrowserIcon from './icons/FileBrowserIcon.svelte';
   import BroadcastIcon from './icons/BroadcastIcon.svelte';
   import TerminalIcon from './icons/TerminalIcon.svelte';
   import PlusIcon from './icons/PlusIcon.svelte';
   import XIcon from './icons/XIcon.svelte';
 
   const appWindow = getCurrentWindow();
-  
+
+  // Sync the recording indicator with the backend on load (e.g. after reload).
+  onMount(() => {
+    void refreshRecordingState();
+  });
+
   $: selectedBroadcastSet = new Set($broadcastSessionIds);
   $: rootSessions = $activeTerminals.filter(t => $terminalSessionMap.has(t.sessionId));
 
@@ -228,6 +236,21 @@
           d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
       </svg>
     </button>
+    <!-- 录屏按钮 -->
+    <button
+      class="quick-action-btn {$isRecording ? 'recording-active' : ''}"
+      on:click={() => toggleRecording()}
+      title={$isRecording ? '停止录屏并保存' : '录屏（录制本窗口）'}
+    >
+      {#if $isRecording}
+        <span class="rec-dot"></span>
+      {:else}
+        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <circle cx="12" cy="12" r="7" stroke-width="2" />
+          <circle cx="12" cy="12" r="3" fill="currentColor" stroke="none" />
+        </svg>
+      {/if}
+    </button>
     <!-- AI 助手按钮 -->
     <button
       class="ai-btn"
@@ -238,6 +261,13 @@
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
           d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
       </svg>
+    </button>
+    <button
+      class="file-browser-btn {$isRightSidebarOpen ? 'active' : ''}"
+      on:click={() => isRightSidebarOpen.update((v) => !v)}
+      title="文件浏览器"
+    >
+      <FileBrowserIcon class="w-4 h-4" />
     </button>
     <button on:click={() => showSettings.set(true)} title="设置" class="settings-btn">
       <SettingsIcon class="w-4 h-4" />
@@ -358,6 +388,11 @@
   .titlebar-controls .quick-action-btn {
     width: 34px;
   }
+
+  /* File browser button reflects the right-sidebar open state. */
+  .titlebar-controls .file-browser-btn.active {
+    color: var(--color-primary, #3b82f6);
+  }
   
   .titlebar-controls button:hover {
     background: var(--color-surface-light);
@@ -367,5 +402,24 @@
   .close-btn:hover {
     background: #ef4444 !important;
     color: white !important;
+  }
+
+  /* Recording state: red tint on the button + pulsing stop indicator. */
+  .titlebar-controls .quick-action-btn.recording-active {
+    color: #ef4444;
+  }
+
+  .rec-dot {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+    background: #ef4444;
+    animation: rec-pulse 1.2s ease-in-out infinite;
+  }
+
+  @keyframes rec-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
   }
 </style>

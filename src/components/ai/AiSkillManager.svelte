@@ -1,6 +1,7 @@
 <script lang="ts">
   import { confirm, open } from '@tauri-apps/plugin-dialog';
   import { onMount } from 'svelte';
+  import { slide } from 'svelte/transition';
   import {
     installedSkillCatalog,
     installSkillFromDir,
@@ -14,6 +15,7 @@
   let busySkillId = '';
   let message = '';
   let error = '';
+  let collapsed = true;
 
   onMount(() => {
     void refresh();
@@ -104,14 +106,36 @@
 
 <div class="space-y-4 border border-app-border rounded-lg p-4 bg-app-surface">
   <div class="flex items-start justify-between gap-3">
-    <div>
-      <h4 class="font-medium text-app-text">Skills</h4>
-      <p class="mt-1 text-sm text-app-text-secondary">
-        管理内置与本地导入的 Skills。外部 Skill 需先启用并设为信任，才会参与自动匹配。
-      </p>
-    </div>
     <button
-      class="px-3 py-2 rounded-lg bg-primary-600 hover:bg-primary-500 text-white text-sm font-medium transition-colors"
+      type="button"
+      class="flex min-w-0 flex-1 items-start gap-2 text-left"
+      on:click={() => (collapsed = !collapsed)}
+      aria-expanded={!collapsed}
+    >
+      <svg
+        class="mt-0.5 w-4 h-4 text-app-text-secondary shrink-0 transition-transform {collapsed
+          ? ''
+          : 'rotate-180'}"
+        viewBox="0 0 20 20"
+        fill="none"
+      >
+        <path
+          d="m5 7.5 5 5 5-5"
+          stroke="currentColor"
+          stroke-width="1.8"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        ></path>
+      </svg>
+      <div class="min-w-0">
+        <h4 class="font-medium text-app-text">Skills</h4>
+        <p class="mt-1 text-sm text-app-text-secondary">
+          管理内置与本地导入的 Skills。外部 Skill 需先启用并设为信任，才会参与自动匹配。
+        </p>
+      </div>
+    </button>
+    <button
+      class="shrink-0 px-3 py-2 rounded-lg bg-primary-600 hover:bg-primary-500 text-white text-sm font-medium transition-colors"
       on:click={handleImportDirectory}
       type="button"
     >
@@ -119,6 +143,8 @@
     </button>
   </div>
 
+  {#if !collapsed}
+  <div class="space-y-4" in:slide={{ duration: 200 }}>
   {#if message}
     <div class="rounded-lg border border-green-500/20 bg-green-500/10 px-3 py-2 text-sm text-green-400">
       {message}
@@ -198,5 +224,7 @@
         </div>
       {/each}
     </div>
+  {/if}
+  </div>
   {/if}
 </div>

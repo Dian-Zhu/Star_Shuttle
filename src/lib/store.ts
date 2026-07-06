@@ -397,6 +397,7 @@ export interface AppSettings {
     prevTab: string;
     nextTab: string;
     screenshot: string;
+    recordScreen: string;
     copy: string;
     paste: string;
     fileBrowserRefresh: string;
@@ -457,6 +458,7 @@ const defaultSettings: AppSettings = {
     prevTab: 'Ctrl+Shift+[',
     nextTab: 'Ctrl+Shift+]',
     screenshot: 'Ctrl+Shift+X',
+    recordScreen: 'Ctrl+Shift+R',
     copy: 'Ctrl+Shift+C',
     paste: 'Ctrl+Shift+V',
     fileBrowserRefresh: 'F5',
@@ -524,6 +526,7 @@ const loadSettings = (): AppSettings => {
       'prevTab',
       'nextTab',
       'screenshot',
+      'recordScreen',
       'copy',
       'paste',
       'fileBrowserRefresh',

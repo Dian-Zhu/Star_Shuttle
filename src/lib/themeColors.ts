@@ -93,3 +93,69 @@ export const themeColors = {
 } as const;
 
 export type ThemeColorKey = keyof typeof themeColors;
+
+/** Shade keys of a palette, matching the `--color-primary-{shade}` CSS variables. */
+export type ThemeShade = keyof typeof themeColors.blue;
+
+/**
+ * How far each shade is mixed away from the base (shade 500):
+ * positive = mix toward white (lighter), negative = mix toward black (darker).
+ */
+const SHADE_MIX: Record<ThemeShade, number> = {
+  50: 0.95,
+  100: 0.9,
+  200: 0.75,
+  300: 0.6,
+  400: 0.3,
+  500: 0,
+  600: -0.1,
+  700: -0.25,
+  800: -0.4,
+  900: -0.55,
+  950: -0.7,
+};
+
+function clampChannel(value: number): number {
+  return Math.max(0, Math.min(255, Math.round(value)));
+}
+
+function parseHex(hex: string): [number, number, number] | null {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return null;
+  const int = parseInt(m[1], 16);
+  return [(int >> 16) & 255, (int >> 8) & 255, int & 255];
+}
+
+function toHex(r: number, g: number, b: number): string {
+  const h = (n: number) => clampChannel(n).toString(16).padStart(2, '0');
+  return `#${h(r)}${h(g)}${h(b)}`;
+}
+
+/**
+ * Build a full 50–950 shade palette from a single base hex color, so a
+ * user-picked accent color can drive the same `--color-primary-*` variables as
+ * the named presets. Lighter shades mix toward white, darker toward black.
+ * Returns the `blue` palette as a fallback for an unparseable hex.
+ */
+export function generateAccentShades(hex: string): Record<ThemeShade, string> {
+  const rgb = parseHex(hex);
+  if (!rgb) return { ...themeColors.blue };
+  const [r, g, b] = rgb;
+
+  const shades = {} as Record<ThemeShade, string>;
+  for (const [shade, ratio] of Object.entries(SHADE_MIX) as unknown as [ThemeShade, number][]) {
+    const target = ratio >= 0 ? 255 : 0;
+    const t = Math.abs(ratio);
+    shades[shade] = toHex(
+      r + (target - r) * t,
+      g + (target - g) * t,
+      b + (target - b) * t
+    );
+  }
+  return shades;
+}
+
+/** True when the stored accent value is a custom hex color rather than a preset key. */
+export function isCustomAccent(color: string | undefined): boolean {
+  return typeof color === 'string' && parseHex(color) !== null;
+}

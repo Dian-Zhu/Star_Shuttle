@@ -1,7 +1,7 @@
 <script lang="ts">
   // Force rebuild.
   import { showSettings, settings, isLocked, type AppSettings } from '../lib/store'
-  import { themeColors } from '../lib/themeColors'
+  import { themeColors, isCustomAccent } from '../lib/themeColors'
   import { confirm } from '@tauri-apps/plugin-dialog'
   import XIcon from './icons/XIcon.svelte'
   import EyeDropperIcon from './icons/EyeDropperIcon.svelte'
@@ -29,6 +29,14 @@
   let aiSaveMessage = ''
   let aiError = ''
   let aiTesting = false
+  // Collapsed state for the AI settings cards
+  let aiProviderCollapsed = true
+  let aiParamsCollapsed = true
+
+  // Collapsed state for the security settings cards
+  let secSetupCollapsed = true
+  let secAutoLockCollapsed = true
+  let secManageCollapsed = true
 
   async function loadAiConfig() {
     try {
@@ -76,8 +84,6 @@
   const tabs = [
     { id: 'general', label: '通用' },
     { id: 'shortcuts', label: '快捷键' },
-    { id: 'terminal', label: '终端' },
-    { id: 'connection', label: '连接' },
     { id: 'appearance', label: '外观' },
     { id: 'security', label: '安全' },
     { id: 'ai', label: 'AI 助手' },
@@ -119,6 +125,7 @@
     prevTab: '上一个标签页',
     nextTab: '下一个标签页',
     screenshot: '截图',
+    recordScreen: '录屏',
     copy: '复制',
     paste: '粘贴',
     fileBrowserRefresh: '文件浏览器：刷新',
@@ -252,6 +259,12 @@
       },
     }))
   }
+
+  // Custom accent color picker state (derived from the stored accent value).
+  $: customAccentActive = isCustomAccent($settings.appearance.accentColor)
+  $: customAccentValue = customAccentActive
+    ? ($settings.appearance.accentColor as string)
+    : '#3b82f6'
 
   function updateAppearanceSetting<K extends keyof AppSettings['appearance']>(
     key: K,
@@ -1115,6 +1128,189 @@
               <p class="mt-2 text-xs text-app-text-secondary">语言设置暂未开放</p>
             </div>
 
+            <!-- Terminal Settings -->
+            <div class="pt-6 border-t border-app-border space-y-6">
+              <h4 class="text-sm font-medium text-app-text">终端</h4>
+
+              <!-- Font Size -->
+              <div>
+                <label class="block text-sm font-medium text-app-text-secondary mb-2" for="fontSize">
+                  字体大小 ({$settings.terminal.fontSize}px)
+                </label>
+                <div class="flex items-center gap-4">
+                  <input
+                    type="range"
+                    id="fontSize"
+                    min="10"
+                    max="24"
+                    step="1"
+                    value={$settings.terminal.fontSize}
+                    on:input={(e) =>
+                      updateTerminalSetting('fontSize', Number((e.target as HTMLInputElement).value))}
+                    class="flex-1 h-2 bg-app-border rounded-lg appearance-none cursor-pointer accent-primary-600"
+                  />
+                  <input
+                    type="number"
+                    value={$settings.terminal.fontSize}
+                    min="10"
+                    max="24"
+                    step="1"
+                    on:input={(e) =>
+                      updateTerminalSetting('fontSize', Number((e.target as HTMLInputElement).value))}
+                    class="w-16 bg-app-bg border border-app-border rounded-lg px-2 py-1 text-center text-app-text focus:border-primary-500 outline-none"
+                  />
+                </div>
+              </div>
+
+              <!-- Font Family -->
+              <div>
+                <label
+                  class="block text-sm font-medium text-app-text-secondary mb-2"
+                  for="fontFamily"
+                >
+                  字体
+                </label>
+                <select
+                  id="fontFamily"
+                  value={getSelectedFontFamilyOption($settings.terminal.fontFamily)}
+                  on:change={(e) => {
+                    const value = (e.target as HTMLSelectElement).value
+                    if (value !== '__custom__') {
+                      updateTerminalSetting('fontFamily', value)
+                    }
+                  }}
+                  class="settings-select w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text focus:border-primary-500 outline-none"
+                >
+                  {#each fontFamilies as font}
+                    <option value={font.value}>{font.label}</option>
+                  {/each}
+                  <option value="__custom__">自定义字体</option>
+                </select>
+                <div class="mt-3">
+                  <label class="block text-xs text-app-text-secondary mb-1.5" for="customFontFamily">
+                    自定义字体
+                  </label>
+                  <input
+                    id="customFontFamily"
+                    type="text"
+                    value={$settings.terminal.fontFamily}
+                    placeholder={'例如: "Maple Mono", monospace'}
+                    on:input={(e) =>
+                      updateTerminalSetting('fontFamily', (e.target as HTMLInputElement).value)}
+                    class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-sm text-app-text font-mono focus:border-primary-500 outline-none"
+                  />
+                  <p class="mt-1.5 text-xs text-app-text-secondary">
+                    可输入系统已安装的字体名，支持字体回退写法，例如 `"Maple Mono", "Microsoft YaHei",
+                    monospace`
+                  </p>
+                </div>
+                <p class="mt-2 text-xs text-app-text-secondary">
+                  当前字体预览: <span style="font-family: {$settings.terminal.fontFamily}"
+                    >The quick brown fox jumps over the lazy dog 0123456789</span
+                  >
+                </p>
+              </div>
+
+              <div class="flex items-center justify-between">
+                <div>
+                  <label class="block text-sm font-medium text-app-text-secondary" for="scrollback">
+                    滚动行数
+                  </label>
+                  <p class="text-xs text-app-text-secondary mt-0.5">保留的历史输出行数</p>
+                </div>
+                <input
+                  type="number"
+                  id="scrollback"
+                  min={MIN_TERMINAL_SCROLLBACK}
+                  max={MAX_TERMINAL_SCROLLBACK}
+                  step="500"
+                  value={$settings.terminal.scrollback}
+                  on:input={(e) => updateTerminalScrollback((e.target as HTMLInputElement).value)}
+                  class="w-24 bg-app-bg border border-app-border rounded-lg px-2 py-1 text-center text-app-text focus:border-primary-500 outline-none"
+                />
+              </div>
+
+              <div class="flex items-center justify-between">
+                <div>
+                  <label class="block text-sm font-medium text-app-text-secondary" for="cursorStyle">
+                    光标样式
+                  </label>
+                  <p class="text-xs text-app-text-secondary mt-0.5">设置光标的形状</p>
+                </div>
+                <select
+                  id="cursorStyle"
+                  value={$settings.terminal.cursorStyle}
+                  on:change={(e) =>
+                    updateTerminalSetting(
+                      'cursorStyle',
+                      (e.target as HTMLSelectElement).value as 'block' | 'underline' | 'bar'
+                    )}
+                  class="settings-select bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text focus:border-primary-500 outline-none"
+                >
+                  <option value="block">方块</option>
+                  <option value="underline">下划线</option>
+                  <option value="bar">竖线</option>
+                </select>
+              </div>
+
+              <!-- Cursor Blink -->
+              <div class="flex items-center justify-between">
+                <div>
+                  <label class="block text-sm font-medium text-app-text-secondary" for="cursorBlink">
+                    光标闪烁
+                  </label>
+                  <p class="text-xs text-app-text-secondary mt-0.5">启用后光标将闪烁</p>
+                </div>
+                <label class="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    id="cursorBlink"
+                    checked={$settings.terminal.cursorBlink}
+                    on:change={(e) =>
+                      updateTerminalSetting('cursorBlink', (e.target as HTMLInputElement).checked)}
+                    class="sr-only peer"
+                  />
+                  <div
+                    class="w-11 h-6 bg-app-border peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-600"
+                  ></div>
+                </label>
+              </div>
+            </div>
+
+            <!-- Connection Settings -->
+            <div class="pt-6 border-t border-app-border space-y-6">
+              <h4 class="text-sm font-medium text-app-text">连接</h4>
+
+              <!-- Auto Reconnect -->
+              <div class="flex items-center justify-between">
+                <div>
+                  <label
+                    class="block text-sm font-medium text-app-text-secondary"
+                    for="autoReconnect"
+                  >
+                    自动重连
+                  </label>
+                  <p class="text-xs text-app-text-secondary mt-0.5">意外断开连接时尝试自动重新连接</p>
+                </div>
+                <label class="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    id="autoReconnect"
+                    checked={$settings.connection.autoReconnect}
+                    on:change={(e) =>
+                      updateConnectionSetting(
+                        'autoReconnect',
+                        (e.target as HTMLInputElement).checked
+                      )}
+                    class="sr-only peer"
+                  />
+                  <div
+                    class="w-11 h-6 bg-app-border peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-600"
+                  ></div>
+                </label>
+              </div>
+            </div>
+
             <!-- App Info -->
             <div class="pt-6 border-t border-app-border">
               <div class="flex justify-between items-center">
@@ -1256,6 +1452,27 @@
                   {#if shortcutErrors.screenshot}
                     <div class="text-xs text-red-500 dark:text-red-400">
                       {shortcutErrors.screenshot}
+                    </div>
+                  {/if}
+                </div>
+              </div>
+
+              <div class="grid grid-cols-2 gap-4 items-center border-b border-app-border pb-4">
+                <div>
+                  <span class="block text-sm font-medium text-app-text-secondary">录屏</span>
+                  <span class="text-xs text-app-text-secondary">录制本窗口为 MP4，再次触发停止并保存（仅 Windows）</span>
+                </div>
+                <div class="space-y-1">
+                  <input
+                    type="text"
+                    readonly
+                    value={shortcutDrafts.recordScreen}
+                    on:keydown={(e) => handleShortcutKeydown('recordScreen', e)}
+                    class="bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text text-sm font-mono focus:border-primary-500 outline-none w-full"
+                  />
+                  {#if shortcutErrors.recordScreen}
+                    <div class="text-xs text-red-500 dark:text-red-400">
+                      {shortcutErrors.recordScreen}
                     </div>
                   {/if}
                 </div>
@@ -1537,183 +1754,6 @@
               </p>
             </div>
           </div>
-        {:else if activeTab === 'terminal'}
-          <div class="space-y-6" in:slide={{ duration: 200 }}>
-            <!-- Font Size -->
-            <div>
-              <label class="block text-sm font-medium text-app-text-secondary mb-2" for="fontSize">
-                字体大小 ({$settings.terminal.fontSize}px)
-              </label>
-              <div class="flex items-center gap-4">
-                <input
-                  type="range"
-                  id="fontSize"
-                  min="10"
-                  max="24"
-                  step="1"
-                  value={$settings.terminal.fontSize}
-                  on:input={(e) =>
-                    updateTerminalSetting('fontSize', Number((e.target as HTMLInputElement).value))}
-                  class="flex-1 h-2 bg-app-border rounded-lg appearance-none cursor-pointer accent-primary-600"
-                />
-                <input
-                  type="number"
-                  value={$settings.terminal.fontSize}
-                  min="10"
-                  max="24"
-                  step="1"
-                  on:input={(e) =>
-                    updateTerminalSetting('fontSize', Number((e.target as HTMLInputElement).value))}
-                  class="w-16 bg-app-bg border border-app-border rounded-lg px-2 py-1 text-center text-app-text focus:border-primary-500 outline-none"
-                />
-              </div>
-            </div>
-
-            <!-- Font Family -->
-            <div>
-              <label
-                class="block text-sm font-medium text-app-text-secondary mb-2"
-                for="fontFamily"
-              >
-                字体
-              </label>
-              <select
-                id="fontFamily"
-                value={getSelectedFontFamilyOption($settings.terminal.fontFamily)}
-                on:change={(e) => {
-                  const value = (e.target as HTMLSelectElement).value
-                  if (value !== '__custom__') {
-                    updateTerminalSetting('fontFamily', value)
-                  }
-                }}
-                class="settings-select w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text focus:border-primary-500 outline-none"
-              >
-                {#each fontFamilies as font}
-                  <option value={font.value}>{font.label}</option>
-                {/each}
-                <option value="__custom__">自定义字体</option>
-              </select>
-              <div class="mt-3">
-                <label class="block text-xs text-app-text-secondary mb-1.5" for="customFontFamily">
-                  自定义字体
-                </label>
-                <input
-                  id="customFontFamily"
-                  type="text"
-                  value={$settings.terminal.fontFamily}
-                  placeholder={'例如: "Maple Mono", monospace'}
-                  on:input={(e) =>
-                    updateTerminalSetting('fontFamily', (e.target as HTMLInputElement).value)}
-                  class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-sm text-app-text font-mono focus:border-primary-500 outline-none"
-                />
-                <p class="mt-1.5 text-xs text-app-text-secondary">
-                  可输入系统已安装的字体名，支持字体回退写法，例如 `"Maple Mono", "Microsoft YaHei",
-                  monospace`
-                </p>
-              </div>
-              <p class="mt-2 text-xs text-app-text-secondary">
-                当前字体预览: <span style="font-family: {$settings.terminal.fontFamily}"
-                  >The quick brown fox jumps over the lazy dog 0123456789</span
-                >
-              </p>
-            </div>
-
-            <div class="flex items-center justify-between">
-              <div>
-                <label class="block text-sm font-medium text-app-text-secondary" for="scrollback">
-                  滚动行数
-                </label>
-                <p class="text-xs text-app-text-secondary mt-0.5">保留的历史输出行数</p>
-              </div>
-              <input
-                type="number"
-                id="scrollback"
-                min={MIN_TERMINAL_SCROLLBACK}
-                max={MAX_TERMINAL_SCROLLBACK}
-                step="500"
-                value={$settings.terminal.scrollback}
-                on:input={(e) => updateTerminalScrollback((e.target as HTMLInputElement).value)}
-                class="w-24 bg-app-bg border border-app-border rounded-lg px-2 py-1 text-center text-app-text focus:border-primary-500 outline-none"
-              />
-            </div>
-
-            <div class="flex items-center justify-between">
-              <div>
-                <label class="block text-sm font-medium text-app-text-secondary" for="cursorStyle">
-                  光标样式
-                </label>
-                <p class="text-xs text-app-text-secondary mt-0.5">设置光标的形状</p>
-              </div>
-              <select
-                id="cursorStyle"
-                value={$settings.terminal.cursorStyle}
-                on:change={(e) =>
-                  updateTerminalSetting(
-                    'cursorStyle',
-                    (e.target as HTMLSelectElement).value as 'block' | 'underline' | 'bar'
-                  )}
-                class="settings-select bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text focus:border-primary-500 outline-none"
-              >
-                <option value="block">方块</option>
-                <option value="underline">下划线</option>
-                <option value="bar">竖线</option>
-              </select>
-            </div>
-
-            <!-- Cursor Blink -->
-            <div class="flex items-center justify-between">
-              <div>
-                <label class="block text-sm font-medium text-app-text-secondary" for="cursorBlink">
-                  光标闪烁
-                </label>
-                <p class="text-xs text-app-text-secondary mt-0.5">启用后光标将闪烁</p>
-              </div>
-              <label class="relative inline-flex items-center cursor-pointer">
-                <input
-                  type="checkbox"
-                  id="cursorBlink"
-                  checked={$settings.terminal.cursorBlink}
-                  on:change={(e) =>
-                    updateTerminalSetting('cursorBlink', (e.target as HTMLInputElement).checked)}
-                  class="sr-only peer"
-                />
-                <div
-                  class="w-11 h-6 bg-app-border peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-600"
-                ></div>
-              </label>
-            </div>
-          </div>
-        {:else if activeTab === 'connection'}
-          <div class="space-y-6" in:slide={{ duration: 200 }}>
-            <!-- Auto Reconnect -->
-            <div class="flex items-center justify-between">
-              <div>
-                <label
-                  class="block text-sm font-medium text-app-text-secondary"
-                  for="autoReconnect"
-                >
-                  自动重连
-                </label>
-                <p class="text-xs text-app-text-secondary mt-0.5">意外断开连接时尝试自动重新连接</p>
-              </div>
-              <label class="relative inline-flex items-center cursor-pointer">
-                <input
-                  type="checkbox"
-                  id="autoReconnect"
-                  checked={$settings.connection.autoReconnect}
-                  on:change={(e) =>
-                    updateConnectionSetting(
-                      'autoReconnect',
-                      (e.target as HTMLInputElement).checked
-                    )}
-                  class="sr-only peer"
-                />
-                <div
-                  class="w-11 h-6 bg-app-border peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-600"
-                ></div>
-              </label>
-            </div>
-          </div>
         {:else if activeTab === 'appearance'}
           <div class="space-y-6" in:slide={{ duration: 200 }}>
             {#if $settings.theme === 'custom'}
@@ -1775,7 +1815,7 @@
               <span class="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-3"
                 >主题色</span
               >
-              <div class="flex flex-wrap gap-3">
+              <div class="flex flex-wrap items-center gap-3">
                 {#each Object.entries(themeColors) as [key, colors]}
                   <button
                     class="w-8 h-8 rounded-full border-2 transition-all {($settings.appearance
@@ -1789,6 +1829,24 @@
                   >
                   </button>
                 {/each}
+
+                <label
+                  class="relative w-8 h-8 rounded-full border-2 cursor-pointer transition-all overflow-hidden {customAccentActive
+                    ? 'border-slate-900 dark:border-white scale-110'
+                    : 'border-transparent hover:scale-105'}"
+                  style="background: {customAccentActive
+                    ? customAccentValue
+                    : 'conic-gradient(from 0deg, #ef4444, #f97316, #eab308, #22c55e, #06b6d4, #3b82f6, #a855f7, #ec4899, #ef4444)'}"
+                  title="自选颜色"
+                >
+                  <input
+                    type="color"
+                    value={customAccentValue}
+                    on:input={(e) => updateAccentColorSetting((e.target as HTMLInputElement).value)}
+                    class="absolute inset-0 opacity-0 cursor-pointer"
+                    aria-label="自选主题色"
+                  />
+                </label>
               </div>
             </div>
 
@@ -1910,60 +1968,6 @@
                   </div>
                 {/if}
               </div>
-
-              {#if selectedAnsiPreset}
-                <div
-                  class="mt-3 p-3 border border-slate-200 dark:border-slate-700 rounded-lg bg-slate-50 dark:bg-slate-900/50"
-                >
-                  <div class="flex items-center justify-between gap-4">
-                    <div class="min-w-0">
-                      <div class="text-sm font-medium text-slate-700 dark:text-slate-300 truncate">
-                        {selectedAnsiPreset.name}
-                      </div>
-                      <div class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                        {selectedAnsiPreset.description}
-                      </div>
-                    </div>
-
-                    <div class="shrink-0">
-                      {#if selectedAnsiPreset.id === 'custom'}
-                        <div
-                          class="w-48 h-8 rounded shadow-sm border border-slate-300 dark:border-slate-600 bg-slate-100 dark:bg-slate-800 flex items-center justify-center"
-                        >
-                          <svg
-                            class="w-5 h-5 text-slate-400"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <path
-                              stroke-linecap="round"
-                              stroke-linejoin="round"
-                              stroke-width="2"
-                              d="M12 6v6m0 0v6m0-6h6m-6 0H6"
-                            ></path>
-                          </svg>
-                        </div>
-                      {:else}
-                        <div
-                          class="flex gap-1 p-1 rounded border border-slate-300 dark:border-slate-600"
-                          style="background-color: {isLightAnsiPreset(selectedAnsiPreset.id)
-                            ? '#f8fafc'
-                            : '#1a1a1a'}"
-                        >
-                          {#each Object.entries(selectedAnsiPreset.previewColors) as [name, color]}
-                            <div
-                              class="w-5 h-6 rounded-sm"
-                              style="background-color: {color}"
-                              title={name}
-                            ></div>
-                          {/each}
-                        </div>
-                      {/if}
-                    </div>
-                  </div>
-                </div>
-              {/if}
 
               {#if $settings.appearance.ansiColorPreset === 'custom'}
                 <div
@@ -2109,23 +2113,6 @@
                 {/if}
               </div>
 
-              {#if selectedTerminalTheme}
-                <div
-                  class="mt-3 p-3 border border-slate-200 dark:border-slate-700 rounded-lg bg-slate-50 dark:bg-slate-900/50"
-                >
-                  <div
-                    class="w-full h-12 rounded shadow-sm"
-                    style="background-color: {selectedTerminalTheme.preview.background}"
-                  >
-                    <div
-                      class="p-2 text-xs font-mono"
-                      style="color: {selectedTerminalTheme.preview.foreground}"
-                    >
-                      The quick brown fox
-                    </div>
-                  </div>
-                </div>
-              {/if}
             </div>
 
             <!-- Custom Theme Editor -->
@@ -2396,44 +2383,54 @@
               </div>
             {/if}
 
-            <div class="space-y-4 border border-app-border rounded-lg p-4 bg-app-surface">
+            <div class="flex items-center justify-between border border-app-border rounded-lg p-4 bg-app-surface">
               <h4 class="font-medium text-app-text">调试工具</h4>
-
-              <div class="flex items-center justify-between">
-                <div>
-                  <label
-                    class="block text-sm font-medium text-app-text-secondary"
-                    for="disableDevToolsShortcuts"
-                  >
-                    禁用调试工具快捷键
-                  </label>
-                  <p class="text-xs text-app-text-secondary mt-0.5">
-                    阻止 `F12`、`Ctrl+Shift+I/J/C` 打开 WebView 调试工具
-                  </p>
-                </div>
-                <label class="relative inline-flex items-center cursor-pointer">
-                  <input
-                    type="checkbox"
-                    id="disableDevToolsShortcuts"
-                    checked={$settings.security.disableDevToolsShortcuts}
-                    on:change={(e) =>
-                      updateSecuritySetting(
-                        'disableDevToolsShortcuts',
-                        (e.target as HTMLInputElement).checked
-                      )}
-                    class="sr-only peer"
-                  />
-                  <div
-                    class="w-11 h-6 bg-app-border peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-600"
-                  ></div>
-                </label>
-              </div>
+              <label class="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  id="enableDevToolsShortcuts"
+                  checked={!$settings.security.disableDevToolsShortcuts}
+                  on:change={(e) =>
+                    updateSecuritySetting(
+                      'disableDevToolsShortcuts',
+                      !(e.target as HTMLInputElement).checked
+                    )}
+                  class="sr-only peer"
+                />
+                <div
+                  class="w-11 h-6 bg-app-border peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-600"
+                ></div>
+              </label>
             </div>
 
             {#if !hasLock}
               <!-- Setup Lock -->
               <div class="space-y-4 border border-app-border rounded-lg p-4 bg-app-surface">
-                <h4 class="font-medium text-app-text">设置新密码</h4>
+                <button
+                  type="button"
+                  class="flex w-full items-center justify-between text-left"
+                  on:click={() => (secSetupCollapsed = !secSetupCollapsed)}
+                  aria-expanded={!secSetupCollapsed}
+                >
+                  <h4 class="font-medium text-app-text">设置新密码</h4>
+                  <svg
+                    class="w-4 h-4 text-app-text-secondary shrink-0 transition-transform {secSetupCollapsed
+                      ? ''
+                      : 'rotate-180'}"
+                    viewBox="0 0 20 20"
+                    fill="none"
+                  >
+                    <path
+                      d="m5 7.5 5 5 5-5"
+                      stroke="currentColor"
+                      stroke-width="1.8"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    ></path>
+                  </svg>
+                </button>
+                {#if !secSetupCollapsed}
+                <div class="space-y-4" in:slide={{ duration: 200 }}>
                 <div>
                   <label
                     class="block text-sm font-medium text-app-text-secondary mb-1"
@@ -2464,12 +2461,37 @@
                 >
                   启用应用锁
                 </button>
+                </div>
+                {/if}
               </div>
             {:else}
               <!-- Auto Lock Settings -->
               <div class="space-y-4 border border-app-border rounded-lg p-4 bg-app-surface">
-                <h4 class="font-medium text-app-text">自动锁定</h4>
-
+                <button
+                  type="button"
+                  class="flex w-full items-center justify-between text-left"
+                  on:click={() => (secAutoLockCollapsed = !secAutoLockCollapsed)}
+                  aria-expanded={!secAutoLockCollapsed}
+                >
+                  <h4 class="font-medium text-app-text">自动锁定</h4>
+                  <svg
+                    class="w-4 h-4 text-app-text-secondary shrink-0 transition-transform {secAutoLockCollapsed
+                      ? ''
+                      : 'rotate-180'}"
+                    viewBox="0 0 20 20"
+                    fill="none"
+                  >
+                    <path
+                      d="m5 7.5 5 5 5-5"
+                      stroke="currentColor"
+                      stroke-width="1.8"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    ></path>
+                  </svg>
+                </button>
+                {#if !secAutoLockCollapsed}
+                <div class="space-y-4" in:slide={{ duration: 200 }}>
                 <div class="flex items-center justify-between">
                   <div>
                     <label
@@ -2526,11 +2548,37 @@
                     ></div>
                   </label>
                 </div>
+                </div>
+                {/if}
               </div>
 
               <!-- Change/Remove Lock -->
               <div class="space-y-4 border border-app-border rounded-lg p-4 bg-app-surface">
-                <h4 class="font-medium text-app-text">管理密码</h4>
+                <button
+                  type="button"
+                  class="flex w-full items-center justify-between text-left"
+                  on:click={() => (secManageCollapsed = !secManageCollapsed)}
+                  aria-expanded={!secManageCollapsed}
+                >
+                  <h4 class="font-medium text-app-text">管理密码</h4>
+                  <svg
+                    class="w-4 h-4 text-app-text-secondary shrink-0 transition-transform {secManageCollapsed
+                      ? ''
+                      : 'rotate-180'}"
+                    viewBox="0 0 20 20"
+                    fill="none"
+                  >
+                    <path
+                      d="m5 7.5 5 5 5-5"
+                      stroke="currentColor"
+                      stroke-width="1.8"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    ></path>
+                  </svg>
+                </button>
+                {#if !secManageCollapsed}
+                <div class="space-y-4" in:slide={{ duration: 200 }}>
                 <div>
                   <label
                     class="block text-sm font-medium text-app-text-secondary mb-1"
@@ -2587,16 +2635,35 @@
                     </div>
                   </div>
                 </div>
+                </div>
+                {/if}
               </div>
             {/if}
           </div>
         {:else if activeTab === 'ai'}
           <div class="space-y-6" in:slide={{ duration: 200 }}>
-            <div>
-              <h3 class="text-lg font-medium text-app-text">AI 助手配置</h3>
-              <p class="text-sm text-app-text-secondary mt-1">
-                配置 AI 服务商以启用 Chat 和 Agent 模式。
-              </p>
+            <div class="flex items-start justify-between gap-4">
+              <div>
+                <h3 class="text-lg font-medium text-app-text">AI 助手配置</h3>
+                <p class="text-sm text-app-text-secondary mt-1">
+                  配置 AI 服务商以启用 Chat 和 Agent 模式。
+                </p>
+              </div>
+              <div class="flex shrink-0 gap-3">
+                <button
+                  class="px-4 py-2 bg-app-surface-light hover:bg-app-border text-app-text rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+                  on:click={testAiConnectionHandler}
+                  disabled={aiTesting}
+                >
+                  {aiTesting ? '测试中...' : '测试连接'}
+                </button>
+                <button
+                  class="px-4 py-2 bg-primary-600 hover:bg-primary-500 text-white rounded-lg text-sm font-medium transition-colors"
+                  on:click={saveAiConfigHandler}
+                >
+                  保存配置
+                </button>
+              </div>
             </div>
 
             {#if aiSaveMessage}
@@ -2616,24 +2683,63 @@
 
             <!-- Provider Selection -->
             <div class="space-y-4 border border-app-border rounded-lg p-4 bg-app-surface">
-              <h4 class="font-medium text-app-text">服务商</h4>
-              <div>
-                <label
-                  class="block text-sm font-medium text-app-text-secondary mb-1"
-                  for="ai-provider">AI 服务商</label
+              <button
+                type="button"
+                class="flex w-full items-center justify-between text-left"
+                on:click={() => (aiProviderCollapsed = !aiProviderCollapsed)}
+                aria-expanded={!aiProviderCollapsed}
+              >
+                <h4 class="font-medium text-app-text">服务商</h4>
+                <svg
+                  class="w-4 h-4 text-app-text-secondary shrink-0 transition-transform {aiProviderCollapsed
+                    ? ''
+                    : 'rotate-180'}"
+                  viewBox="0 0 20 20"
+                  fill="none"
                 >
-                <select
-                  id="ai-provider"
-                  class="settings-select w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text focus:border-primary-500 outline-none"
-                  bind:value={aiConfig.provider}
-                  on:change={onAiProviderChange}
-                >
-                  <option value="openai">OpenAI</option>
-                  <option value="claude">Anthropic Claude</option>
-                  <option value="deepseek">DeepSeek</option>
-                  <option value="ollama">Ollama (本地)</option>
-                  <option value="custom">自定义</option>
-                </select>
+                  <path
+                    d="m5 7.5 5 5 5-5"
+                    stroke="currentColor"
+                    stroke-width="1.8"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  ></path>
+                </svg>
+              </button>
+              {#if !aiProviderCollapsed}
+              <div class="space-y-4" in:slide={{ duration: 200 }}>
+              <div class="grid grid-cols-2 gap-4">
+                <div>
+                  <label
+                    class="block text-sm font-medium text-app-text-secondary mb-1"
+                    for="ai-provider">AI 服务商</label
+                  >
+                  <select
+                    id="ai-provider"
+                    class="settings-select w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text focus:border-primary-500 outline-none"
+                    bind:value={aiConfig.provider}
+                    on:change={onAiProviderChange}
+                  >
+                    <option value="openai">OpenAI</option>
+                    <option value="claude">Anthropic Claude</option>
+                    <option value="deepseek">DeepSeek</option>
+                    <option value="ollama">Ollama (本地)</option>
+                    <option value="custom">自定义</option>
+                  </select>
+                </div>
+                <div>
+                  <label
+                    class="block text-sm font-medium text-app-text-secondary mb-1"
+                    for="ai-model">模型</label
+                  >
+                  <input
+                    type="text"
+                    id="ai-model"
+                    bind:value={aiConfig.model}
+                    class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text focus:border-primary-500 outline-none"
+                    placeholder="gpt-4o"
+                  />
+                </div>
               </div>
               <div>
                 <label
@@ -2664,23 +2770,37 @@
                   placeholder="sk-..."
                 />
               </div>
-              <div>
-                <label class="block text-sm font-medium text-app-text-secondary mb-1" for="ai-model"
-                  >模型</label
-                >
-                <input
-                  type="text"
-                  id="ai-model"
-                  bind:value={aiConfig.model}
-                  class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text focus:border-primary-500 outline-none"
-                  placeholder="gpt-4o"
-                />
               </div>
+              {/if}
             </div>
 
             <!-- Parameters -->
             <div class="space-y-4 border border-app-border rounded-lg p-4 bg-app-surface">
-              <h4 class="font-medium text-app-text">参数</h4>
+              <button
+                type="button"
+                class="flex w-full items-center justify-between text-left"
+                on:click={() => (aiParamsCollapsed = !aiParamsCollapsed)}
+                aria-expanded={!aiParamsCollapsed}
+              >
+                <h4 class="font-medium text-app-text">参数</h4>
+                <svg
+                  class="w-4 h-4 text-app-text-secondary shrink-0 transition-transform {aiParamsCollapsed
+                    ? ''
+                    : 'rotate-180'}"
+                  viewBox="0 0 20 20"
+                  fill="none"
+                >
+                  <path
+                    d="m5 7.5 5 5 5-5"
+                    stroke="currentColor"
+                    stroke-width="1.8"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  ></path>
+                </svg>
+              </button>
+              {#if !aiParamsCollapsed}
+              <div class="space-y-4" in:slide={{ duration: 200 }}>
               <div class="grid grid-cols-2 gap-4">
                 <div>
                   <label
@@ -2736,23 +2856,8 @@
                   class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text focus:border-primary-500 outline-none"
                 />
               </div>
-            </div>
-
-            <!-- Actions -->
-            <div class="flex gap-3">
-              <button
-                class="px-4 py-2 bg-primary-600 hover:bg-primary-500 text-white rounded-lg text-sm font-medium transition-colors"
-                on:click={saveAiConfigHandler}
-              >
-                保存配置
-              </button>
-              <button
-                class="px-4 py-2 bg-app-surface-light hover:bg-app-border text-app-text rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
-                on:click={testAiConnectionHandler}
-                disabled={aiTesting}
-              >
-                {aiTesting ? '测试中...' : '测试连接'}
-              </button>
+              </div>
+              {/if}
             </div>
 
             <AiSkillManager />
