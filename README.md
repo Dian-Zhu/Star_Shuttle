@@ -10,11 +10,15 @@ Star Shuttle 是一个基于 Tauri 2、Svelte 5 和 Rust 的跨平台 SSH 远程
 
 - SSH 连接管理：创建、编辑、删除和组织远程主机配置。
 - 多会话终端：基于 xterm.js 的远程终端体验，支持标签、分屏和会话恢复相关能力。
-- 文件传输：通过 SFTP/SCP 浏览、上传、下载和管理远程文件。
+- 文件传输：通过 SFTP/SCP 浏览、上传、下载和管理远程文件，标题栏内置文件浏览器入口。
 - 凭证与主机信任：包含认证、已知主机、凭证同步和连接探测等后端模块。
 - 本地配置与持久化：使用 SQLite 和本地配置模块保存应用状态。
 - 命令片段与快捷操作：提供常用命令管理和前端快捷入口。
-- AI 辅助模块：包含聊天、Agent、技能管理、上下文收集和命令执行工具等实验性能力。
+- 截图与钉图：支持区域截图并将截图钉在桌面独立窗口。
+- 窗口录屏：录制当前应用窗口的操作过程。
+- 外观定制：内置主题、终端配色预设、ANSI 颜色与主题色自选色盘，支持终端背景图。
+- 应用安全锁：可设置启动密码、自动锁定与失焦锁定。
+- AI 辅助模块：包含 Chat 与 Agent 两种模式、技能管理、上下文收集和命令执行工具等实验性能力，输入框支持方向键翻阅历史输入。
 
 ## 技术栈
 
@@ -96,18 +100,6 @@ doc/                         架构、需求、部署、测试和评审文档
 - [API 文档](doc/api_documentation.md)
 - [部署指南](doc/deployment_guide.md)
 - [测试报告](doc/test_report.md)
-
-## 安全说明
-
-Star Shuttle 涉及 SSH 凭证、主机密钥、本地文件系统访问和远程命令执行。修改以下区域时需要额外谨慎：
-
-- `src-tauri/capabilities/default.json`
-- `src-tauri/src/modules/connection/`
-- `src-tauri/src/modules/credential/`
-- `src-tauri/src/modules/sftp/`
-- `src-tauri/src/modules/ai/tools/execute_command.rs`
-
-建议在提交涉及连接生命周期、凭证存储、known_hosts、SFTP 缓冲或 Tauri 权限的变更前，补充对应测试并进行安全复查。
 
 ## 贡献
 
