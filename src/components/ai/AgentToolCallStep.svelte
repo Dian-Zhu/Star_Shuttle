@@ -87,7 +87,7 @@
   <!-- 内容 -->
   <div class="flex-1 min-w-0 pb-3 {isResultStep ? '' : 'pt-0.5'}">
     <div class="flex items-center gap-2 flex-wrap">
-      <span class="text-xs font-medium {isResultStep ? 'text-primary-400' : 'text-app-text-secondary'}">
+      <span class="text-[10px] font-semibold uppercase tracking-wider {isResultStep ? 'text-primary-400' : 'text-app-text-secondary/70'}">
         {KIND_LABELS[step.kind] ?? step.kind}
       </span>
 
@@ -107,13 +107,13 @@
     </div>
 
     <!-- 标题 -->
-    <p class="text-sm {isResultStep ? 'text-app-text font-medium' : 'text-app-text'} mt-0.5 leading-snug break-words">
+    <p class="{isResultStep ? 'text-sm text-app-text font-semibold' : 'text-[13px] text-app-text'} mt-1 leading-snug break-words">
       {step.title}
     </p>
 
     <!-- 命令块 -->
     {#if step.command}
-      <div class="mt-1.5 rounded-lg border border-app-border bg-app-bg overflow-hidden">
+      <div class="mt-1.5 rounded-lg border border-app-border/50 bg-app-bg overflow-hidden">
         <div class="flex items-center gap-2 px-2.5 py-1.5">
           <span class="select-none text-app-text-secondary/60 font-mono text-xs">$</span>
           <pre class="flex-1 overflow-x-auto text-xs font-mono text-app-text leading-relaxed">{step.command}</pre>
@@ -133,7 +133,7 @@
     <!-- 结果步骤：markdown 输出，恒展开 -->
     {#if isResultStep && hasOutput}
       <div
-        class="mt-1.5 bg-app-bg/70 border border-app-border rounded-lg p-2.5 max-h-60 overflow-y-auto
+        class="mt-1.5 bg-app-bg/70 border border-app-border/50 rounded-lg p-2.5 max-h-60 overflow-y-auto
                prose prose-sm dark:prose-invert max-w-none text-app-text
                prose-code:before:content-none prose-code:after:content-none
                prose-pre:bg-app-bg prose-pre:border prose-pre:border-app-border prose-pre:rounded-lg prose-pre:text-xs
@@ -144,13 +144,13 @@
     {:else if hasOutput && !step.command}
       <!-- 无命令的纯文本输出（如无法结构化的中间结果） -->
       <pre
-        class="mt-1.5 bg-app-bg border border-app-border rounded-lg p-2.5 max-h-60 overflow-auto
+        class="mt-1.5 bg-app-bg border border-app-border/50 rounded-lg p-2.5 max-h-60 overflow-auto
                text-xs font-mono text-app-text-secondary whitespace-pre-wrap break-all leading-relaxed"
       >{step.output}</pre>
     {:else if hasOutput && isExpanded}
       <!-- 命令输出（可折叠）：纯文本，不走 markdown 注入 -->
       <pre
-        class="mt-1.5 bg-app-bg border border-app-border rounded-lg p-2.5 max-h-60 overflow-auto
+        class="mt-1.5 bg-app-bg border border-app-border/50 rounded-lg p-2.5 max-h-60 overflow-auto
                text-xs font-mono {isFailed ? 'text-red-300' : 'text-app-text-secondary'}
                whitespace-pre-wrap break-all leading-relaxed"
         transition:slide={{ duration: 150 }}

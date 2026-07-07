@@ -16,6 +16,7 @@
     type Conversation,
   } from '../../lib/aiChatService';
   import { filterSkillsByMode, loadSkillCatalog, skillCatalog } from '../../lib/aiSkillService';
+  import { startNewTask } from '../../lib/aiAgentService';
   import ChatMessage from './ChatMessage.svelte';
   import ChatInput from './ChatInput.svelte';
   import AiAgentPanel from './AiAgentPanel.svelte';
@@ -152,7 +153,12 @@
   }
 
   export async function startFreshChat() {
-    activeTab = 'chat';
+    // 按当前模式各自新建：agent 模式只重置 agent 任务，chat 模式只新建对话，
+    // 两者互不影响。
+    if (activeTab === 'agent') {
+      startNewTask();
+      return;
+    }
     await handleNewChat();
   }
 

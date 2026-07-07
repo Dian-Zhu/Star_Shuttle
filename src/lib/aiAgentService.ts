@@ -231,3 +231,17 @@ export function cleanup() {
   activeTaskEvents.set([]);
   pendingConfirm.set(null);
 }
+
+/**
+ * 开始一个新的 agent 任务：断开当前任务的事件订阅并清空活动任务，
+ * 让面板回到可输入的空状态（保留 currentSessionId 以便继续加载历史）。
+ */
+export function startNewTask() {
+  taskUnsub?.();
+  eventUnsub?.();
+  taskUnsub = null;
+  eventUnsub = null;
+  activeTask.set(null);
+  activeTaskEvents.set([]);
+  pendingConfirm.set(null);
+}

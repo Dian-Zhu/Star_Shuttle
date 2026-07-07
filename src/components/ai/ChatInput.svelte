@@ -37,6 +37,13 @@
   let matchTimer: ReturnType<typeof setTimeout> | null = null;
   let lastMatchedInput = '';
 
+  // 已提交输入的历史（最新在末尾），用于方向键上/下翻阅，方便二次输入。
+  let inputHistory: string[] = [];
+  // 当前翻阅位置：null 表示未处于翻阅态；否则为 inputHistory 的索引。
+  let historyIndex: number | null = null;
+  // 进入翻阅前的草稿，翻到底时可回到它。
+  let historyDraft = '';
+
   const dispatch = createEventDispatcher<{
     send: { content: string; includeContext: boolean; skillId: string | null };
     cancel: void;
@@ -143,13 +150,79 @@
       }
     }
 
+    // 方向键翻阅历史输入：仅在光标位于文本起点/终点时触发，避免打断多行编辑。
+    if (e.key === 'ArrowUp' && !e.shiftKey && caretAtStart()) {
+      if (inputHistory.length > 0) {
+        e.preventDefault();
+        recallHistory(-1);
+        return;
+      }
+    }
+
+    if (e.key === 'ArrowDown' && !e.shiftKey && historyIndex !== null && caretAtEnd()) {
+      e.preventDefault();
+      recallHistory(1);
+      return;
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       submit();
     }
   }
 
+  function caretAtStart(): boolean {
+    if (!textareaEl) return true;
+    return textareaEl.selectionStart === 0 && textareaEl.selectionEnd === 0;
+  }
+
+  function caretAtEnd(): boolean {
+    if (!textareaEl) return true;
+    return (
+      textareaEl.selectionStart === value.length && textareaEl.selectionEnd === value.length
+    );
+  }
+
+  // step=-1 往更早翻，step=+1 往更新翻；翻到最新之后回到草稿空态。
+  function recallHistory(step: number) {
+    if (inputHistory.length === 0) return;
+
+    let nextIndex: number;
+    if (historyIndex === null) {
+      // 从空态进入：-1 定位到最后一条（最新），其余方向忽略。
+      if (step > 0) return;
+      // 记住进入翻阅前的草稿，翻回最新之后可还原。
+      historyDraft = value;
+      nextIndex = inputHistory.length - 1;
+    } else {
+      nextIndex = historyIndex + step;
+    }
+
+    if (nextIndex >= inputHistory.length) {
+      // 翻过最新一条：退出翻阅态，还原进入前的草稿。
+      historyIndex = null;
+      value = historyDraft;
+      historyDraft = '';
+    } else if (nextIndex < 0) {
+      // 已在最早一条，保持不动。
+      return;
+    } else {
+      historyIndex = nextIndex;
+      value = inputHistory[nextIndex];
+    }
+
+    requestAnimationFrame(() => {
+      autoResize();
+      textareaEl?.focus();
+      const pos = value.length;
+      textareaEl?.setSelectionRange(pos, pos);
+      syncSkillCommand();
+    });
+  }
+
   function handleInput() {
+    // 一旦用户手动编辑，脱离历史翻阅态。
+    historyIndex = null;
     autoResize();
     syncSkillCommand(true);
     queueSkillMatch();
@@ -162,6 +235,12 @@
   function submit() {
     const content = value.trim();
     if (!content || disabled || isSending) return;
+    // 记录到输入历史（去掉与上一条重复的连续项），供方向键翻阅。
+    if (inputHistory[inputHistory.length - 1] !== content) {
+      inputHistory = [...inputHistory, content];
+    }
+    historyIndex = null;
+    historyDraft = '';
     dispatch('send', {
       content,
       includeContext,

@@ -63,6 +63,13 @@
   let autoMatchDismissedInput = '';
   let matchTimer: ReturnType<typeof setTimeout> | null = null;
 
+  // 已提交指令的历史（最新在末尾），用于方向键上/下翻阅，方便二次输入。
+  let inputHistory: string[] = [];
+  // 当前翻阅位置：null 表示未处于翻阅态；否则为 inputHistory 的索引。
+  let historyIndex: number | null = null;
+  // 进入翻阅前的草稿，翻到最新之后回到它。
+  let historyDraft = '';
+
   onMount(() => {
     void loadSkillCatalog();
     void loadTaskHistory(sessionId);
@@ -105,6 +112,12 @@
 
     try {
       await startAgent(sessionId, text, $sandboxMode, selectedSkillId || autoMatchedSkillId || null);
+      // 记录到输入历史（去掉与上一条重复的连续项），供方向键翻阅。
+      if (inputHistory[inputHistory.length - 1] !== text) {
+        inputHistory = [...inputHistory, text];
+      }
+      historyIndex = null;
+      historyDraft = '';
       instruction = '';
       selectedSkillId = '';
       autoMatchedSkillId = '';
@@ -173,10 +186,71 @@
       }
     }
 
+    // 方向键翻阅历史指令：仅在光标位于文本起点/终点时触发，避免打断多行编辑。
+    if (e.key === 'ArrowUp' && !e.shiftKey && caretAtStart()) {
+      if (inputHistory.length > 0) {
+        e.preventDefault();
+        recallHistory(-1);
+        return;
+      }
+    }
+
+    if (e.key === 'ArrowDown' && !e.shiftKey && historyIndex !== null && caretAtEnd()) {
+      e.preventDefault();
+      recallHistory(1);
+      return;
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleStart();
     }
+  }
+
+  function caretAtStart(): boolean {
+    if (!instructionEl) return true;
+    return instructionEl.selectionStart === 0 && instructionEl.selectionEnd === 0;
+  }
+
+  function caretAtEnd(): boolean {
+    if (!instructionEl) return true;
+    return (
+      instructionEl.selectionStart === instruction.length &&
+      instructionEl.selectionEnd === instruction.length
+    );
+  }
+
+  // step=-1 往更早翻，step=+1 往更新翻；翻过最新一条后回到进入翻阅前的草稿。
+  function recallHistory(step: number) {
+    if (inputHistory.length === 0) return;
+
+    let nextIndex: number;
+    if (historyIndex === null) {
+      if (step > 0) return;
+      historyDraft = instruction;
+      nextIndex = inputHistory.length - 1;
+    } else {
+      nextIndex = historyIndex + step;
+    }
+
+    if (nextIndex >= inputHistory.length) {
+      // 翻过最新一条：退出翻阅态，恢复草稿。
+      historyIndex = null;
+      instruction = historyDraft;
+    } else if (nextIndex < 0) {
+      // 已在最早一条，保持不动。
+      return;
+    } else {
+      historyIndex = nextIndex;
+      instruction = inputHistory[nextIndex];
+    }
+
+    requestAnimationFrame(() => {
+      instructionEl?.focus();
+      const pos = instruction.length;
+      instructionEl?.setSelectionRange(pos, pos);
+      syncSkillCommand();
+    });
   }
 
   function commandKey(match: SkillCommandMatch | null): string {
@@ -216,6 +290,8 @@
   }
 
   function handleInstructionInput() {
+    // 一旦用户手动编辑，脱离历史翻阅态。
+    historyIndex = null;
     syncSkillCommand(true);
     queueSkillMatch();
   }
@@ -319,7 +395,7 @@
   const DONE_CARD_STYLES: Record<string, string> = {
     completed: 'bg-green-500/10 border-green-500/20',
     failed: 'bg-red-500/10 border-red-500/20',
-    cancelled: 'bg-app-surface border-app-border',
+    cancelled: 'bg-app-surface border-app-border/60',
   };
 
   const HISTORY_CAUSE_STYLES: Record<string, string> = {
@@ -340,7 +416,7 @@
   $: activeTaskSkillLabel = getSkillLabel($activeTask?.skill_id);
   $: summaryText = $activeTask?.summary?.trim() || $activeTask?.final_result?.summary?.trim() || finalResultStep?.output?.trim() || '';
   $: summaryHtml = summaryText ? renderMarkdown(summaryText) : '';
-  $: doneCardStyle = $activeTask ? DONE_CARD_STYLES[$activeTask.status] ?? 'bg-app-surface border-app-border' : 'bg-app-surface border-app-border';
+  $: doneCardStyle = $activeTask ? DONE_CARD_STYLES[$activeTask.status] ?? 'bg-app-surface border-app-border/50' : 'bg-app-surface border-app-border/50';
   $: visibleSteps = ($activeTask?.steps ?? []).filter((step) => showThinking || step.kind !== 'planning');
   $: hasStructuredOutcome = !!summaryText || !!$activeTask?.error_message;
   // 若已有 result step 渲染了摘要，结果卡不再重复展示同一段内容
@@ -380,7 +456,7 @@
         <div class="mt-4 space-y-1.5 text-left w-full max-w-xs">
           {#each ['查看 nginx 日志中的错误', '检查磁盘使用情况并找出大文件', '查看所有运行中的 docker 容器'] as example}
             <button
-              class="w-full text-left text-xs px-3 py-2 rounded-lg bg-app-surface border border-app-border text-app-text-secondary hover:text-app-text hover:border-primary-500/30 transition-colors"
+              class="w-full text-left text-xs px-3 py-2 rounded-lg bg-app-surface border border-app-border/50 text-app-text-secondary hover:text-app-text hover:border-primary-500/30 transition-colors"
               on:click={() => { instruction = example; }}
             >
               {example}
@@ -393,21 +469,21 @@
         {/if}
       </div>
     {:else}
-      <div class="px-3 py-2.5 mx-3 mb-2 bg-primary-600/10 border border-primary-500/20 rounded-lg">
+      <div class="px-3 py-3 mx-3 mb-2.5 bg-primary-600/[0.07] border border-primary-500/10 rounded-xl">
         <div class="flex items-start justify-between gap-3">
           <div class="min-w-0">
             <div class="flex items-center gap-2">
-              <p class="text-xs text-primary-400 font-medium">任务</p>
+              <p class="text-[10px] font-semibold uppercase tracking-wider text-primary-400/70">任务</p>
               {#if activeTaskSkillLabel}
-                <span class="shrink-0 rounded-full border border-primary-500/20 bg-primary-600/10 px-2 py-0.5 text-[11px] text-primary-400">
+                <span class="shrink-0 rounded-full border border-primary-500/15 bg-primary-600/10 px-2 py-0.5 text-[11px] text-primary-400">
                   {activeTaskSkillLabel}
                 </span>
               {/if}
             </div>
-            <p class="mt-1 text-sm text-app-text break-words">{$activeTask.instruction}</p>
+            <p class="mt-1.5 text-sm font-medium text-app-text leading-relaxed break-words">{$activeTask.instruction}</p>
           </div>
           <span
-            class="shrink-0 inline-flex items-center gap-1.5 rounded-full border border-app-border bg-app-bg px-2.5 py-1 text-[11px] font-medium {STATUS_COLORS[$activeTask.status]}"
+            class="shrink-0 inline-flex items-center gap-1.5 rounded-full border border-app-border/50 bg-app-bg px-2.5 py-1 text-[11px] font-medium {STATUS_COLORS[$activeTask.status]}"
           >
             {#if isRunning}
               <span class="w-1.5 h-1.5 rounded-full bg-current animate-pulse"></span>
@@ -521,7 +597,7 @@
             class="w-full text-left rounded-lg border px-3 py-2 transition-colors
               {$activeTask?.id === item.id
                 ? 'bg-primary-600/10 border-primary-500/20'
-                : 'bg-app-bg border-app-border hover:border-app-border/80'}"
+                : 'bg-app-bg border-app-border/50 hover:border-app-border/80'}"
             on:click={() => handleOpenHistory(item.id)}
             type="button"
           >
