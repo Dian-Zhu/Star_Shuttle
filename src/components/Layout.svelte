@@ -14,6 +14,7 @@
   let ConnectionModalComponent: Component<any> | null = null;
   let SettingsModalComponent: Component<any> | null = null;
   let CommandPaletteComponent: Component<any> | null = null;
+  let CommandHistoryPanelComponent: Component<any> | null = null;
   let AdvancedModalComponent: Component<any> | null = null;
   let PasswordPromptModalComponent: Component<any> | null = null;
 
@@ -44,7 +45,7 @@
   import TitleBar from './TitleBar.svelte';
   import TerminalManager from './TerminalManager.svelte';
   import AppLockOverlay from './AppLockOverlay.svelte';
-  import { showConnectionForm, editingConnection, showSettings, successMessage, errorMessage, settings, isRightSidebarOpen, activeTerminals, selectedTerminalIndex, showCommandPalette, isLocked, showAdvancedModal, passwordPromptRequest } from '../lib/store';
+  import { showConnectionForm, editingConnection, showSettings, successMessage, errorMessage, settings, isRightSidebarOpen, activeTerminals, selectedTerminalIndex, showCommandPalette, showCommandHistory, isLocked, showAdvancedModal, passwordPromptRequest } from '../lib/store';
   import { closeAllTerminals, disconnectTerminal, restoreActiveSessions, sendTerminalData } from '../lib/terminalService';
   import { loadConnections } from '../lib/connectionService';
   import { themeColors, generateAccentShades, isCustomAccent, type ThemeColorKey } from '../lib/themeColors';
@@ -136,6 +137,13 @@
     if (!CommandPaletteComponent) {
       const module = await import('./CommandPalette.svelte');
       CommandPaletteComponent = module.default;
+    }
+  }
+
+  async function ensureCommandHistoryPanelLoaded() {
+    if (!CommandHistoryPanelComponent) {
+      const module = await import('./CommandHistoryPanel.svelte');
+      CommandHistoryPanelComponent = module.default;
     }
   }
 
@@ -603,6 +611,14 @@
       return;
     }
 
+    // Command History
+    if (matchShortcut(event, shortcuts.commandHistory)) {
+      event.preventDefault();
+      if (!$showCommandHistory) void ensureCommandHistoryPanelLoaded();
+      showCommandHistory.update(v => !v);
+      return;
+    }
+
     // Toggle File Browser
     if (matchShortcut(event, shortcuts.toggleFileBrowser)) {
       event.preventDefault();
@@ -701,6 +717,10 @@
 
   $: if ($showCommandPalette) {
     void ensureCommandPaletteLoaded();
+  }
+
+  $: if ($showCommandHistory) {
+    void ensureCommandHistoryPanelLoaded();
   }
 
   $: if ($showAdvancedModal) {
@@ -895,6 +915,12 @@
 {#if $showCommandPalette}
   {#if CommandPaletteComponent}
     <svelte:component this={CommandPaletteComponent} />
+  {/if}
+{/if}
+
+{#if $showCommandHistory}
+  {#if CommandHistoryPanelComponent}
+    <svelte:component this={CommandHistoryPanelComponent} />
   {/if}
 {/if}
 

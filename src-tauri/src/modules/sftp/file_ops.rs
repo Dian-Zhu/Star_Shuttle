@@ -1,6 +1,5 @@
 use russh_sftp::protocol::OpenFlags;
 use std::{
-    collections::HashSet,
     io::SeekFrom,
     sync::{Arc, RwLock},
 };
@@ -11,14 +10,13 @@ use super::common::{
     ensure_max_bytes, ensure_sftp_write_size, MAX_SFTP_READ_BYTES, STREAM_READ_CHUNK_SIZE,
 };
 use super::generation::SftpSessionLease;
-use super::ssh_bridge::resolve_owner_group_maps;
 use super::FileEntry;
 use crate::modules::connection::DefaultConnectionManager;
 
 pub async fn list_directory(
     session_lease: SftpSessionLease,
-    connection_manager: &Arc<RwLock<DefaultConnectionManager>>,
-    session_id: Uuid,
+    _connection_manager: &Arc<RwLock<DefaultConnectionManager>>,
+    _session_id: Uuid,
     path: String,
 ) -> Result<Vec<FileEntry>, String> {
     session_lease.ensure_valid()?;
@@ -29,40 +27,20 @@ pub async fn list_directory(
 
     let files = session_lease.finish_io(session.read_dir(path).await.map_err(|e| e.to_string()))?;
 
-    let mut uids = HashSet::new();
-    let mut gids = HashSet::new();
-    let mut raw_entries = Vec::new();
-
-    for f in files {
-        let meta = f.metadata();
-        let uid = meta.uid;
-        let gid = meta.gid;
-        if let Some(u) = uid {
-            uids.insert(u);
-        }
-        if let Some(g) = gid {
-            gids.insert(g);
-        }
-        raw_entries.push((f, uid, gid));
-    }
-
     drop(session);
 
-    let (uid_map, gid_map) =
-        resolve_owner_group_maps(connection_manager, session_id, &uids, &gids).await;
-
-    let entries = raw_entries
+    // owner/group 先以数字 uid/gid 填充，立即返回目录列表。
+    // 过去这里会同步等待 `getent` 通过额外 SSH 通道把 uid/gid 翻译成名字，
+    // 每次 list 目录都串行阻塞最多 2 次 SSH 往返，是初始加载慢的主因；
+    // 而前端列表并不展示 owner/group，因此改为不阻塞、按需再解析（见 ssh_bridge::resolve_owner_group_maps）。
+    let entries = files
         .into_iter()
-        .map(|(f, uid, gid)| {
+        .map(|f| {
             let attrs = f.file_type();
             let meta = f.metadata();
 
-            let owner = uid
-                .and_then(|u| uid_map.get(&u).cloned().or(Some(u.to_string())))
-                .unwrap_or_default();
-            let group = gid
-                .and_then(|g| gid_map.get(&g).cloned().or(Some(g.to_string())))
-                .unwrap_or_default();
+            let owner = meta.uid.map(|u| u.to_string()).unwrap_or_default();
+            let group = meta.gid.map(|g| g.to_string()).unwrap_or_default();
 
             FileEntry {
                 name: f.file_name(),

@@ -21,6 +21,15 @@ export interface CommandSnippet {
   usage_count: number;
 }
 
+export interface CommandHistoryEntry {
+  id: string;
+  command: string;
+  connection_id?: string | null;
+  connection_name?: string | null;
+  cwd?: string | null;
+  executed_at: number;
+}
+
 export type TransferState = 'pending' | 'transferring' | 'paused' | 'completed' | 'failed' | 'canceled';
 
 export interface TransferStatus {

@@ -22,7 +22,7 @@
   } from '../lib/aiConfigService'
   import AiSkillManager from './ai/AiSkillManager.svelte'
 
-  let activeTab = 'terminal'
+  let activeTab = 'general'
 
   // AI Config State
   let aiConfig: AiConfig = { ...DEFAULT_CONFIG }
@@ -136,6 +136,7 @@
     fileBrowserSelectAll: '文件浏览器：全选',
     fileBrowserOpen: '文件浏览器：打开/进入',
     fileBrowserBack: '文件浏览器：返回上一级',
+    commandHistory: '历史命令',
   }
 
   onMount(() => {
@@ -1345,6 +1346,27 @@
                   {#if shortcutErrors.commandPalette}
                     <div class="text-xs text-red-500 dark:text-red-400">
                       {shortcutErrors.commandPalette}
+                    </div>
+                  {/if}
+                </div>
+              </div>
+
+              <div class="grid grid-cols-2 gap-4 items-center border-b border-app-border pb-4">
+                <div>
+                  <span class="block text-sm font-medium text-app-text-secondary">历史命令</span>
+                  <span class="text-xs text-app-text-secondary">打开历史命令面板，查看并复用已执行的命令</span>
+                </div>
+                <div class="space-y-1">
+                  <input
+                    type="text"
+                    readonly
+                    value={shortcutDrafts.commandHistory}
+                    on:keydown={(e) => handleShortcutKeydown('commandHistory', e)}
+                    class="bg-app-bg border border-app-border rounded-lg px-3 py-2 text-app-text text-sm font-mono focus:border-primary-500 outline-none w-full"
+                  />
+                  {#if shortcutErrors.commandHistory}
+                    <div class="text-xs text-red-500 dark:text-red-400">
+                      {shortcutErrors.commandHistory}
                     </div>
                   {/if}
                 </div>

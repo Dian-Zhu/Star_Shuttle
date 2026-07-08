@@ -963,6 +963,51 @@ pub(crate) mod commands {
         let db = db.lock().map_err(|e| e.to_string())?;
         db.increment_usage_count(&id).map_err(|e| e.to_string())
     }
+
+    // Command history commands
+    #[command]
+    pub fn add_command_history(
+        db: State<Arc<Mutex<DatabaseManager>>>,
+        app_lock_state: State<Arc<Mutex<AppLockRuntimeState>>>,
+        entry: crate::modules::db::CommandHistoryEntry,
+    ) -> Result<(), String> {
+        ensure_app_unlocked(&db, &app_lock_state)?;
+        let db = db.lock().map_err(|e| e.to_string())?;
+        db.add_command_history(&entry).map_err(|e| e.to_string())
+    }
+
+    #[command]
+    pub fn get_command_history(
+        db: State<Arc<Mutex<DatabaseManager>>>,
+        app_lock_state: State<Arc<Mutex<AppLockRuntimeState>>>,
+        limit: Option<i64>,
+    ) -> Result<Vec<crate::modules::db::CommandHistoryEntry>, String> {
+        ensure_app_unlocked(&db, &app_lock_state)?;
+        let db = db.lock().map_err(|e| e.to_string())?;
+        db.get_command_history(limit.unwrap_or(500))
+            .map_err(|e| e.to_string())
+    }
+
+    #[command]
+    pub fn clear_command_history(
+        db: State<Arc<Mutex<DatabaseManager>>>,
+        app_lock_state: State<Arc<Mutex<AppLockRuntimeState>>>,
+    ) -> Result<(), String> {
+        ensure_app_unlocked(&db, &app_lock_state)?;
+        let db = db.lock().map_err(|e| e.to_string())?;
+        db.clear_command_history().map_err(|e| e.to_string())
+    }
+
+    #[command]
+    pub fn delete_command_history(
+        db: State<Arc<Mutex<DatabaseManager>>>,
+        app_lock_state: State<Arc<Mutex<AppLockRuntimeState>>>,
+        id: Uuid,
+    ) -> Result<(), String> {
+        ensure_app_unlocked(&db, &app_lock_state)?;
+        let db = db.lock().map_err(|e| e.to_string())?;
+        db.delete_command_history(&id).map_err(|e| e.to_string())
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1133,6 +1178,10 @@ pub fn run() {
             commands::get_command_snippet_by_id,
             commands::delete_command_snippet,
             commands::increment_command_snippet_usage,
+            commands::add_command_history,
+            commands::get_command_history,
+            commands::clear_command_history,
+            commands::delete_command_history,
             // AI commands
             crate::modules::ai::ai_get_config,
             crate::modules::ai::ai_save_config,

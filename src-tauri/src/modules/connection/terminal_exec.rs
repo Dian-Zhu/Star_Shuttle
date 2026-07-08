@@ -10,21 +10,155 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-const STARSHUTTLE_OSC7_PROMPT_COMMAND: &str =
-    r#"printf '\033]7;file://%s%s\007' "${HOSTNAME:-localhost}" "$PWD""#;
+// 通过 shell 输入流注入 OSC 7 目录上报钩子，绕开 SSH `set_env`/`AcceptEnv` 限制。
+// 同时兼容 bash（PROMPT_COMMAND）与 zsh（precmd hook）；结尾立即执行一次，
+// 让文件浏览器在会话建立后即可拿到当前目录。printf 的 \033/\007 由远端 shell 自行解释。
+// 首尾用唯一标记（`: __SS_OSC7_B__` / `: __SS_OSC7_E__`，`:` 是 shell no-op）包裹整行。
+// 这两个标记会随输入被 PTY 原样回显到输出流，后端据此把这段回显整段剥掉，用户看不到；
+// 而命令执行真正发出的 OSC 7 转义序列（ESC 开头，出现在 END 标记之后）不受影响。
+const OSC7_ECHO_BEGIN: &[u8] = b"__SS_OSC7_B__";
+const OSC7_ECHO_END: &[u8] = b"__SS_OSC7_E__";
+const STARSHUTTLE_OSC7_SETUP_COMMAND: &str = r#": __SS_OSC7_B__ ; _starshuttle_osc7() { printf '\033]7;file://%s%s\007' "${HOSTNAME:-${HOST:-localhost}}" "$PWD"; }; if [ -n "$ZSH_VERSION" ]; then autoload -Uz add-zsh-hook 2>/dev/null && add-zsh-hook precmd _starshuttle_osc7; elif [ -n "$BASH_VERSION" ]; then case "$PROMPT_COMMAND" in *_starshuttle_osc7*) ;; *) PROMPT_COMMAND="_starshuttle_osc7${PROMPT_COMMAND:+; $PROMPT_COMMAND}";; esac; fi; _starshuttle_osc7 ; : __SS_OSC7_E__"#;
+
+/// 在会话建立初期，从 SSH 输出流里剥掉注入命令自身的回显（BEGIN..END 整段，含结尾换行）。
+/// 只在首次匹配前生效，匹配成功或超出预算后即彻底关闭，不影响后续正常输出。
+enum SuppressState {
+    /// 仍在扫描 BEGIN..END。
+    Scanning,
+    /// 已匹配 END，还需吞掉紧邻的结尾换行；`remaining` 是尚可吞掉的序列（`\r\n` / `\n` / 空）。
+    /// 用于逐字节/跨 chunk 分片时，END 完成而换行尚未到达的情况。
+    SwallowNewline { remaining: &'static [u8] },
+    /// 完成，后续内容全量放行。
+    Done,
+}
+
+struct Osc7EchoSuppressor {
+    state: SuppressState,
+    pending: Vec<u8>,
+    budget: usize,
+}
+
+impl Osc7EchoSuppressor {
+    fn new() -> Self {
+        Self {
+            state: SuppressState::Scanning,
+            pending: Vec::new(),
+            budget: 16384,
+        }
+    }
+
+    fn filter(&mut self, input: &[u8]) -> Vec<u8> {
+        match self.state {
+            SuppressState::Done => input.to_vec(),
+            SuppressState::SwallowNewline { .. } => self.swallow_newline(input),
+            SuppressState::Scanning => self.scan(input),
+        }
+    }
+
+    /// 消费 input 开头与 `remaining` 匹配的换行字节，其余原样放行并转入 Done。
+    fn swallow_newline(&mut self, input: &[u8]) -> Vec<u8> {
+        let SuppressState::SwallowNewline { remaining } = self.state else {
+            unreachable!();
+        };
+        let mut consumed = 0;
+        let mut rem = remaining;
+        while consumed < input.len() {
+            match rem.first() {
+                Some(&expected) if input[consumed] == expected => {
+                    consumed += 1;
+                    rem = &rem[1..];
+                }
+                _ => break,
+            }
+        }
+        if consumed == input.len() && !rem.is_empty() {
+            // 整段都被吞掉，且仍可能有后续换行——继续等待下一片。
+            self.state = SuppressState::SwallowNewline { remaining: rem };
+            return Vec::new();
+        }
+        self.state = SuppressState::Done;
+        input[consumed..].to_vec()
+    }
+
+    fn scan(&mut self, input: &[u8]) -> Vec<u8> {
+        self.pending.extend_from_slice(input);
+
+        match find_subslice(&self.pending, OSC7_ECHO_BEGIN) {
+            None => {
+                // 尚未看到 BEGIN：预算耗尽则放弃过滤，全量放行（容错）。
+                if self.pending.len() > self.budget {
+                    self.state = SuppressState::Done;
+                    return std::mem::take(&mut self.pending);
+                }
+                // 立即放行除“可能是半截 BEGIN 标记”的尾部之外的全部内容（避免压住正常输出）。
+                let keep_back = OSC7_ECHO_BEGIN.len().saturating_sub(1);
+                if self.pending.len() <= keep_back {
+                    return Vec::new();
+                }
+                let emit_upto = self.pending.len() - keep_back;
+                let emitted = self.pending[..emit_upto].to_vec();
+                self.pending.drain(..emit_upto);
+                emitted
+            }
+            Some(begin_idx) => match find_subslice(&self.pending[begin_idx..], OSC7_ECHO_END) {
+                None => {
+                    // 看到 BEGIN 但 END 未到：先放行 BEGIN 之前的内容（提示符等），其余留存等待。
+                    if self.pending.len() > self.budget {
+                        self.state = SuppressState::Done;
+                        return std::mem::take(&mut self.pending);
+                    }
+                    let emitted = self.pending[..begin_idx].to_vec();
+                    self.pending.drain(..begin_idx);
+                    emitted
+                }
+                Some(rel_end) => {
+                    let end_idx = begin_idx + rel_end + OSC7_ECHO_END.len();
+                    let mut emitted = self.pending[..begin_idx].to_vec();
+                    // 吞掉 END 后紧邻的一个换行（\r\n / \n），避免留下空行；
+                    // 已到达的部分就地吞掉，未到达的记入 SwallowNewline 状态跨 chunk 继续吞。
+                    let after_end = &self.pending[end_idx..];
+                    let (tail, next_state) = match after_end.first() {
+                        // END 后尚无字节：整个换行可能还没到，转入等待。
+                        None => (end_idx, SuppressState::SwallowNewline { remaining: b"\r\n" }),
+                        // \r 已到：吞掉；若 \n 也已到则一并吞掉并完成，否则等待 \n。
+                        Some(&b'\r') => {
+                            if after_end.get(1) == Some(&b'\n') {
+                                (end_idx + 2, SuppressState::Done)
+                            } else {
+                                (end_idx + 1, SuppressState::SwallowNewline { remaining: b"\n" })
+                            }
+                        }
+                        // 裸 \n：吞掉并完成。
+                        Some(&b'\n') => (end_idx + 1, SuppressState::Done),
+                        // END 后紧跟非换行内容：无需吞噬，直接完成。
+                        Some(_) => (end_idx, SuppressState::Done),
+                    };
+                    emitted.extend_from_slice(&self.pending[tail..]);
+                    self.pending.clear();
+                    self.state = next_state;
+                    emitted
+                }
+            },
+        }
+    }
+}
+
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return None;
+    }
+    haystack.windows(needle.len()).position(|w| w == needle)
+}
 
 async fn apply_terminal_cwd_shell_integration<S>(channel: &russh::Channel<S>)
 where
     S: From<(russh::ChannelId, russh::ChannelMsg)> + Send + Sync + 'static,
 {
-    if let Err(err) = channel
-        .set_env(false, "PROMPT_COMMAND", STARSHUTTLE_OSC7_PROMPT_COMMAND)
-        .await
-    {
-        debug!(
-            "Failed to set PROMPT_COMMAND for OSC 7 integration: {}",
-            err
-        );
+    let mut payload = Vec::with_capacity(STARSHUTTLE_OSC7_SETUP_COMMAND.len() + 1);
+    payload.extend_from_slice(STARSHUTTLE_OSC7_SETUP_COMMAND.as_bytes());
+    payload.push(b'\r');
+    if let Err(err) = channel.data(&payload[..]).await {
+        debug!("Failed to inject OSC 7 shell integration: {}", err);
     }
 }
 
@@ -357,11 +491,12 @@ fn start_ssh_terminal(
         })
         .map_err(|e| ConnectionError::ConnectionFailed(format!("Failed to request PTY: {}", e)))?;
 
-    runtime.block_on(async { apply_terminal_cwd_shell_integration(&channel).await });
-
     runtime
         .block_on(async { channel.request_shell(true).await })
         .map_err(|e| ConnectionError::ConnectionFailed(format!("Failed to start shell: {}", e)))?;
+
+    // shell 启动后再注入 OSC 7 钩子（写入 shell 输入流），此时远端 shell 已就绪可解释命令。
+    runtime.block_on(async { apply_terminal_cwd_shell_integration(&channel).await });
 
     let newline_data = b"\r\n";
     if let Err(e) = runtime.block_on(async { channel.data(&newline_data[..]).await }) {
@@ -390,6 +525,8 @@ fn start_ssh_terminal(
 
         let mut output_buffer = Vec::new();
         let mut flush_deadline: Option<tokio::time::Instant> = None;
+        // 剥离注入命令自身的回显（BEGIN..END），只在会话建立初期生效。
+        let mut osc7_echo_suppressor = Osc7EchoSuppressor::new();
 
         loop {
             tokio::select! {
@@ -417,7 +554,11 @@ fn start_ssh_terminal(
                         Some(russh::ChannelMsg::Data { ref data }) => {
                             last_activity = tokio::time::Instant::now();
 
-                            output_buffer.extend_from_slice(data);
+                            let filtered = osc7_echo_suppressor.filter(data);
+                            if filtered.is_empty() {
+                                continue;
+                            }
+                            output_buffer.extend_from_slice(&filtered);
 
                             if output_buffer.len() >= 65536 {
                                 flush_output_buffer(
@@ -584,7 +725,61 @@ fn start_ssh_terminal(
 
 #[cfg(test)]
 mod tests {
-    use super::drain_output_buffer;
+    use super::{drain_output_buffer, Osc7EchoSuppressor, OSC7_ECHO_BEGIN, OSC7_ECHO_END};
+
+    // 构造一段“被 PTY 回显的注入命令行”：前缀提示符 + BEGIN..END + 换行 + 后续正常输出。
+    fn echoed_line(prefix: &[u8], trailer: &[u8]) -> Vec<u8> {
+        let mut v = Vec::new();
+        v.extend_from_slice(prefix);
+        v.extend_from_slice(OSC7_ECHO_BEGIN);
+        v.extend_from_slice(b" ; _starshuttle_osc7() { ... } ; ");
+        v.extend_from_slice(OSC7_ECHO_END);
+        v.extend_from_slice(b"\r\n");
+        v.extend_from_slice(trailer);
+        v
+    }
+
+    #[test]
+    fn suppressor_strips_echo_in_single_chunk() {
+        let mut s = Osc7EchoSuppressor::new();
+        let input = echoed_line(b"user@host:~$ ", b"user@host:~$ ");
+        let out = s.filter(&input);
+        assert_eq!(out, b"user@host:~$ user@host:~$ ");
+        // 匹配后过滤器关闭，后续内容原样放行。
+        assert_eq!(s.filter(b"ls -la\r\n"), b"ls -la\r\n");
+    }
+
+    #[test]
+    fn suppressor_strips_echo_across_chunk_boundaries() {
+        let mut s = Osc7EchoSuppressor::new();
+        let input = echoed_line(b"$ ", b"done\r\n");
+        let mut collected = Vec::new();
+        // 逐字节喂入，模拟最坏的分片情况。
+        for b in &input {
+            collected.extend_from_slice(&s.filter(&[*b]));
+        }
+        assert_eq!(collected, b"$ done\r\n");
+    }
+
+    #[test]
+    fn suppressor_passes_through_normal_output_untouched() {
+        let mut s = Osc7EchoSuppressor::new();
+        // 从不出现 BEGIN，超出预算后应全量放行且不再改动。
+        let big = vec![b'x'; 20000];
+        let out = s.filter(&big);
+        assert_eq!(out.len(), big.len());
+        assert_eq!(s.filter(b"more"), b"more");
+    }
+
+    #[test]
+    fn suppressor_does_not_swallow_real_osc7_after_marker() {
+        let mut s = Osc7EchoSuppressor::new();
+        // 注入行回显之后，紧跟命令真正发出的 OSC 7 序列（ESC 开头）——不能被吃掉。
+        let mut input = echoed_line(b"", b"");
+        input.extend_from_slice(b"\x1b]7;file:///home/user\x07");
+        let out = s.filter(&input);
+        assert_eq!(out, b"\x1b]7;file:///home/user\x07");
+    }
 
     #[test]
     fn drain_output_buffer_returns_none_for_empty() {

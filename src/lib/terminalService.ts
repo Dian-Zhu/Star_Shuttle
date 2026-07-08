@@ -90,6 +90,13 @@ import {
 } from './hostKeyPrompt';
 import { sanitizeTerminalDisplayText } from './terminalDisplaySanitizer';
 import { extractTerminalWorkingDirectory } from './terminalCwd';
+import {
+  createCommandLineState,
+  feedTerminalInput,
+  type CommandLineState,
+} from './commandLineReconstructor';
+import { commandHistoryService } from './commandHistoryService';
+import type { CommandHistoryEntry } from '../types';
 
 const IS_DEV = import.meta.env.DEV;
 
@@ -135,6 +142,8 @@ function reportTerminalError(error: unknown, context: string, userMessage?: stri
 const startedTerminalSessions = new Set<string>();
 const lastTerminalSizes = new Map<string, { width: number; height: number }>();
 const terminalCwdRemainders = new Map<string, string>();
+// 每会话的命令行重组状态，用于从逐字符输入里还原完整命令写入历史。
+const terminalCommandLineStates = new Map<string, CommandLineState>();
 
 export function markTerminalStarted(sessionId: string) {
   startedTerminalSessions.add(sessionId);
@@ -285,6 +294,7 @@ function cleanupTerminalListeners(sessionId: string) {
 
 function removeSessionReferences(sessionId: string) {
   terminalCwdRemainders.delete(sessionId);
+  terminalCommandLineStates.delete(sessionId);
   broadcastSessionIds.update(ids => ids.filter(id => id !== sessionId));
   terminalSessionMap.update(map => {
     map.delete(sessionId);
@@ -1031,7 +1041,39 @@ export function handleTerminalInputSingle(sessionId: string, data: string) {
     log.info('TermInput', 'Control char detected', { data: JSON.stringify(data) });
   }
 
+  // 从逐字符输入里重组完整命令行并写入历史（尽力而为，失败不影响输入）。
+  recordCommandHistoryFromInput(sessionId, data);
+
   void sendTerminalDataBuffered(sessionId, data, shouldImmediate);
+}
+
+// 把用户在某会话的原始键入喂给重组器；每当回车提交出完整命令，就写入历史库。
+function recordCommandHistoryFromInput(sessionId: string, data: string) {
+  let state = terminalCommandLineStates.get(sessionId);
+  if (!state) {
+    state = createCommandLineState();
+    terminalCommandLineStates.set(sessionId, state);
+  }
+
+  const commands = feedTerminalInput(state, data);
+  if (commands.length === 0) return;
+
+  const terminal = get(activeTerminals).find(t => t.sessionId === sessionId);
+  const connectionId = terminal?.connection?.id ?? null;
+  const connectionName = terminal?.connection?.name ?? null;
+  const cwd = terminal?.currentDirectory ?? null;
+
+  for (const command of commands) {
+    const entry: CommandHistoryEntry = {
+      id: crypto.randomUUID(),
+      command,
+      connection_id: connectionId,
+      connection_name: connectionName,
+      cwd,
+      executed_at: Math.floor(Date.now() / 1000),
+    };
+    void commandHistoryService.add(entry);
+  }
 }
 
 export function handleTerminalInput(sessionId: string, data: string, connection?: Connection) {

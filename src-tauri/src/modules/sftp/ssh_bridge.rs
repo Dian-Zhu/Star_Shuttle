@@ -5,6 +5,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
+// 保留供“按需解析 owner/group 名字”复用：当前 list_directory 已改为不阻塞地
+// 直接返回数字 uid/gid，这几个函数暂无调用者，但后续做异步补名时会用到。
+#[allow(dead_code)]
 pub(crate) async fn exec_ssh_command(
     connection_manager: &Arc<RwLock<DefaultConnectionManager>>,
     session_id: Uuid,
@@ -75,6 +78,7 @@ pub(crate) async fn open_exec_channel(
     Ok(channel)
 }
 
+#[allow(dead_code)]
 pub(crate) fn parse_id_map(output: &str) -> HashMap<u32, String> {
     let mut map = HashMap::new();
     for line in output.lines() {
@@ -93,6 +97,7 @@ pub(crate) fn parse_id_map(output: &str) -> HashMap<u32, String> {
     map
 }
 
+#[allow(dead_code)]
 pub(crate) async fn resolve_owner_group_maps(
     connection_manager: &Arc<RwLock<DefaultConnectionManager>>,
     session_id: Uuid,

@@ -1,9 +1,11 @@
 pub mod ai_store;
+mod command_history;
 mod command_snippets;
 
 use rusqlite::{params, Connection, Result};
 use uuid::Uuid;
 
+pub use command_history::CommandHistoryEntry;
 pub use command_snippets::CommandSnippet;
 
 pub struct DatabaseManager {
@@ -33,6 +35,7 @@ impl DatabaseManager {
             [],
         )?;
         command_snippets::create_table(conn)?;
+        command_history::create_table(conn)?;
         ai_store::create_tables(conn)?;
         Ok(())
     }
@@ -83,5 +86,22 @@ impl DatabaseManager {
 
     pub fn increment_usage_count(&self, id: &Uuid) -> Result<()> {
         command_snippets::increment_usage_count(&self.conn, id)
+    }
+
+    // Command history CRUD
+    pub fn add_command_history(&self, entry: &CommandHistoryEntry) -> Result<()> {
+        command_history::add(&self.conn, entry)
+    }
+
+    pub fn get_command_history(&self, limit: i64) -> Result<Vec<CommandHistoryEntry>> {
+        command_history::get_recent(&self.conn, limit)
+    }
+
+    pub fn clear_command_history(&self) -> Result<()> {
+        command_history::clear(&self.conn)
+    }
+
+    pub fn delete_command_history(&self, id: &Uuid) -> Result<()> {
+        command_history::delete(&self.conn, id)
     }
 }

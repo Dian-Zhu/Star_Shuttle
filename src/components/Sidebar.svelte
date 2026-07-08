@@ -3,7 +3,6 @@
   import { connections, showConnectionForm, editingConnection, isSidebarCollapsed, isRightSidebarOpen, activeTerminals, connectionGroups, getGroupIdByPath, connectingConnections, connectionHistory, showSuccessMessage, showErrorMessage } from '../lib/store';
   import { deleteConnection, updateConnectionConfig } from '../lib/connectionService';
   import { connectAndOpen, disconnectTerminal } from '../lib/terminalService';
-  import SystemMonitorModal from './SystemMonitorModal.svelte';
   import ContextMenu from './ui/ContextMenu.svelte';
   import ContextMenuItem from './ui/ContextMenuItem.svelte';
   import ContextMenuDivider from './ui/ContextMenuDivider.svelte';
@@ -25,8 +24,6 @@
   let debouncedSearchTerm = '';
   let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   let activeTab: 'servers' | 'history' = 'servers';
-  let showMonitor: string | null = null; // Session ID for monitor
-  let monitorConnection: any = null;
   let expandedPaths = new Set<string>();
   let didInitExpanded = false;
   let contextMenu = {
@@ -331,18 +328,6 @@
     showConnectionForm.set(true);
   }
 
-  function openMonitor(connection: any, event: MouseEvent) {
-      event.stopPropagation();
-      const terminal = $activeTerminals.find(t => t.connection.id === connection.id);
-
-      if (terminal) {
-          showMonitor = terminal.sessionId;
-          monitorConnection = connection;
-      } else {
-          showSidebarError('请先连接到服务器才能打开监控面板');
-      }
-  }
-
   async function createNewGroup() {
     openGroupPrompt();
   }
@@ -474,14 +459,6 @@
     };
   });
 </script>
-
-{#if showMonitor && monitorConnection}
-    <SystemMonitorModal
-        sessionId={showMonitor}
-        connection={monitorConnection}
-        onClose={() => { showMonitor = null; monitorConnection = null; }}
-    />
-{/if}
 
 {#if groupPromptOpen}
   <div class="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm">
@@ -684,16 +661,7 @@
               </button>
 
               {#if !$isSidebarCollapsed}
-                {#if activeConnectionIds.has(row.connection.id)}
                   <button
-                    class="absolute right-[4.25rem] top-2.5 p-1.5 rounded-md text-green-500 hover:text-green-600 hover:bg-green-100 dark:hover:bg-green-900/30 transition-all"
-                    on:click={(e) => openMonitor(row.connection, e)}
-                    title="系统监控"
-                  >
-                    <ActivityIcon class="w-3.5 h-3.5" />
-                  </button>
-                {/if}
-                <button
                   class="absolute right-9 top-2.5 p-1.5 rounded-md text-app-text-secondary hover:text-primary-500 dark:hover:text-primary-400 hover:bg-app-border opacity-0 group-hover:opacity-100 transition-all"
                   on:click={(e) => handleEdit(row.connection, e)}
                   title="编辑连接"
@@ -794,14 +762,6 @@
               handleDisconnect(contextMenuConnectionRow.connection); 
             }} 
             label="断开连接" 
-          />
-          <ContextMenuItem 
-            on:click={(e) => { 
-              closeContextMenu(); 
-              openMonitor(contextMenuConnectionRow.connection, e.detail); 
-            }} 
-            label="系统监控" 
-            iconComponent={ActivityIcon} 
           />
         {/if}
         <ContextMenuDivider />

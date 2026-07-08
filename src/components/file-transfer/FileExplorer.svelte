@@ -1632,9 +1632,10 @@
       <tbody>
         {#each files as file, i}
           {@const iconType = getFileIcon(file.name, file.isDirectory)}
+          {@const isSelected = selectedPaths.has(file.path)}
           <tr
             id={'file-row-' + i}
-            class="cursor-pointer border-b border-app-border transition-colors duration-75 {selectedPaths.has(file.path) ? 'bg-primary-100 dark:bg-primary-900/30' : 'hover:bg-app-bg-hover'}"
+            class="cursor-pointer border-b border-app-border transition-colors duration-75 {isSelected ? 'bg-primary-500 dark:bg-primary-600' : 'hover:bg-app-bg-hover'}"
             on:click|stopPropagation={(e) => handleSelect(e, file)}
             on:dblclick={() => openEditor(file)}
             on:contextmenu|preventDefault|stopPropagation={(e) => handleContextMenu(e, file)}
@@ -1643,11 +1644,11 @@
           >
             <td class="p-2 flex items-center space-x-2">
               <FileIcon iconType={iconType} />
-              <span class={file.isDirectory ? 'font-medium text-app-text' : 'text-app-text'}>{file.name}</span>
+              <span class="{isSelected ? 'text-white' : 'text-app-text'} {file.isDirectory ? 'font-medium' : ''}">{file.name}</span>
             </td>
-            <td class="p-2 text-app-text-secondary font-mono text-xs">{file.isDirectory ? '-' : formatSize(file.size)}</td>
-            <td class="p-2 text-app-text-secondary text-xs">{formatDate(file.modified)}</td>
-            <td class="p-2 text-app-text-secondary font-mono text-xs">{file.permissions}</td>
+            <td class="p-2 {isSelected ? 'text-white/90' : 'text-app-text-secondary'} font-mono text-xs">{file.isDirectory ? '-' : formatSize(file.size)}</td>
+            <td class="p-2 {isSelected ? 'text-white/90' : 'text-app-text-secondary'} text-xs">{formatDate(file.modified)}</td>
+            <td class="p-2 {isSelected ? 'text-white/90' : 'text-app-text-secondary'} font-mono text-xs">{file.permissions}</td>
           </tr>
         {/each}
       </tbody>

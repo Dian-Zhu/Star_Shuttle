@@ -142,6 +142,7 @@ export const editingConnection = writable<Connection | null>(null);
 export const showSettings = writable<boolean>(false);
 export const showAdvancedModal = writable<boolean>(false);
 export const showCommandPalette = writable<boolean>(false);
+export const showCommandHistory = writable<boolean>(false);
 export const isLocked = writable<boolean>(false);
 
 // Secure password prompt modal (replaces window.prompt for password collection)
@@ -408,6 +409,7 @@ export interface AppSettings {
     fileBrowserSelectAll: string;
     fileBrowserOpen: string;
     fileBrowserBack: string;
+    commandHistory: string;
   };
   security: {
     autoLockMinutes: number; // 0 = disabled
@@ -469,6 +471,7 @@ const defaultSettings: AppSettings = {
     fileBrowserSelectAll: 'Ctrl+A',
     fileBrowserOpen: 'Enter',
     fileBrowserBack: 'Backspace',
+    commandHistory: 'Ctrl+Shift+H',
   },
   security: {
     autoLockMinutes: 0,
@@ -536,7 +539,8 @@ const loadSettings = (): AppSettings => {
       'fileBrowserDelete',
       'fileBrowserSelectAll',
       'fileBrowserOpen',
-      'fileBrowserBack'
+      'fileBrowserBack',
+      'commandHistory'
     ];
     const seen = new Map<string, keyof AppSettings['shortcuts']>();
     const sanitizedShortcuts = { ...merged.shortcuts };
