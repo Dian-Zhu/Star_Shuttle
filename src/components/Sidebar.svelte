@@ -831,7 +831,7 @@
     
     <div class="text-xs text-app-text-secondary text-center mt-1 opacity-50">
       {#if !$isSidebarCollapsed}
-        v0.1.0
+        v2.0.0
       {/if}
     </div>
   </div>
