@@ -255,7 +255,7 @@
         {#each filteredCommands as command, index}
           <button
             id="command-item-{index}"
-            class="w-full text-left px-4 py-3 rounded-lg flex items-center justify-between group transition-colors {index === selectedIndex ? 'bg-primary-50 dark:bg-primary-900/20' : 'hover:bg-app-bg-hover'}"
+            class="w-full text-left px-4 py-3 rounded-lg flex items-center justify-between group transition-colors {index === selectedIndex ? 'bg-primary-500/10 dark:bg-primary-500/20 ring-1 ring-inset ring-primary-500/40' : 'hover:bg-app-bg-hover'}"
             on:click={() => executeCommand(command)}
             on:mousemove={() => selectedIndex = index}
           >
@@ -269,11 +269,11 @@
               {/if}
               
               <div class="flex flex-col overflow-hidden">
-                <span class="font-medium text-app-text truncate {index === selectedIndex ? 'text-primary-700 dark:text-primary-300' : ''}">
+                <span class="text-app-text truncate {index === selectedIndex ? 'font-semibold' : 'font-medium'}">
                   {command.title}
                 </span>
                 {#if command.description}
-                  <span class="text-xs text-app-text-secondary truncate">
+                  <span class="text-xs truncate {index === selectedIndex ? 'text-app-text/70' : 'text-app-text-secondary'}">
                     {command.description}
                   </span>
                 {/if}

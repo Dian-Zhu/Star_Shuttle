@@ -25,6 +25,8 @@
   export let followTargetPath: string | null = null;
 
   let currentPath = initialPath;
+  let followEnabled = false;
+  let lastFollowedPath: string | null = null;
   let files: FileEntry[] = [];
   let loading = false;
   let error: string | null = null;
@@ -268,8 +270,17 @@
     return name;
   }
 
-  function followTerminalDirectory() {
-    if (!followTargetPath) return;
+  function toggleFollow() {
+    followEnabled = !followEnabled;
+    if (followEnabled && followTargetPath) {
+      lastFollowedPath = followTargetPath;
+      void loadFiles(followTargetPath);
+    }
+  }
+
+  // 开启跟随后，终端工作目录变化则自动跳转；仅响应终端目录变化，手动浏览不会被打断
+  $: if (followEnabled && followTargetPath && followTargetPath !== lastFollowedPath) {
+    lastFollowedPath = followTargetPath;
     void loadFiles(followTargetPath);
   }
 
@@ -1537,11 +1548,14 @@
   {/if}
   <!-- Toolbar -->
   <div class="flex items-center p-2 border-b border-app-border space-x-2">
-    <button 
-        class="p-1 hover:bg-app-bg-hover rounded text-app-text-secondary disabled:opacity-40 disabled:cursor-not-allowed" 
-        on:click={followTerminalDirectory}
-        title={followTargetPath ? `跟随目录: ${followTargetPath}` : '跟随目录'}
-        disabled={!followTargetPath}
+    <button
+        class="p-1 rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed {followEnabled ? 'bg-primary-500/15 text-primary-600 dark:text-primary-400 ring-1 ring-inset ring-primary-500/40' : 'text-app-text-secondary hover:bg-app-bg-hover'}"
+        on:click={toggleFollow}
+        aria-pressed={followEnabled}
+        title={followEnabled
+          ? `正在跟随终端目录${followTargetPath ? `: ${followTargetPath}` : ''}（点击停止）`
+          : (followTargetPath ? `跟随终端目录: ${followTargetPath}` : '跟随终端目录')}
+        disabled={!followTargetPath && !followEnabled}
     >
       <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
         <path d="M10.707 2.293a1 1 0 00-1.414 0l-7 7a1 1 0 001.414 1.414L4 10.414V17a1 1 0 001 1h2a1 1 0 001-1v-2a1 1 0 011-1h2a1 1 0 011 1v2a1 1 0 001 1h2a1 1 0 001-1v-6.586l.293.293a1 1 0 001.414-1.414l-7-7z" />
