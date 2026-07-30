@@ -713,7 +713,7 @@ function createTerminalForMode(appSettings: AppSettings, mode: TerminalInitMode)
     const baseTheme = getBaseXtermTheme(appSettings);
     const bgBrightness = calculateBrightness(baseTheme.background || '#000000');
     const isLightTheme = bgBrightness > 128;
-    options.fontWeight = isLightTheme ? '600' : 'normal';
+    options.fontWeight = isLightTheme ? '600' : '500';
     options.fontWeightBold = isLightTheme ? 'bold' : 'bold';
   }
 

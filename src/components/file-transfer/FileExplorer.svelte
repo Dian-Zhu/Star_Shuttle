@@ -14,6 +14,10 @@
   } from '../../lib/uploadManager';
   import { isEditableShortcutTarget, matchShortcut } from '../../lib/shortcuts';
   import { validateRemoteLeafName } from '../../lib/remotePathName';
+  import {
+    buildRemotePathCompletion,
+    getRemotePathCompletionContext,
+  } from '../../lib/remotePathCompletion';
   import ContextMenu from '../ui/ContextMenu.svelte';
   import ContextMenuItem from '../ui/ContextMenuItem.svelte';
   import ContextMenuDivider from '../ui/ContextMenuDivider.svelte';
@@ -25,6 +29,13 @@
   export let followTargetPath: string | null = null;
 
   let currentPath = initialPath;
+  let pathDraft = initialPath;
+  let pathInputFocused = false;
+  let pathSuggestions: Array<{ name: string; value: string }> = [];
+  let pathSuggestionIndex = 0;
+  let pathCompletionSequence = 0;
+  let pathCompletionTimer: number | null = null;
+  let completeFirstSuggestionOnLoad = false;
   let followEnabled = false;
   let lastFollowedPath: string | null = null;
   let files: FileEntry[] = [];
@@ -64,6 +75,17 @@
   const FILE_TRANSFER_CHUNK_SIZE = 1024 * 1024; // 1MB
   const MAX_IN_MEMORY_FALLBACK_BYTES = 8 * 1024 * 1024; // 8MB
   const pathWriteLocks = new Map<string, Promise<void>>();
+
+  function closePathSuggestions() {
+    pathCompletionSequence += 1;
+    pathSuggestions = [];
+    pathSuggestionIndex = 0;
+    completeFirstSuggestionOnLoad = false;
+    if (pathCompletionTimer !== null) {
+      window.clearTimeout(pathCompletionTimer);
+      pathCompletionTimer = null;
+    }
+  }
 
   function joinPath(base: string, name: string): string {
     if (base === '/' || base === '') return `/${name}`;
@@ -368,6 +390,8 @@
   $: if (sessionId !== lastSessionId) {
     lastSessionId = sessionId;
     directoryCache.clear();
+    closePathSuggestions();
+    pathDraft = initialPath;
     loadSequence += 1;
     lastRequestedPath = null;
     activeLoadAbortController?.abort();
@@ -550,6 +574,122 @@
     directoryCache.delete(getCacheKey(path));
   }
 
+  async function refreshPathSuggestions(input: string) {
+    const requestId = ++pathCompletionSequence;
+    const targetSessionId = sessionId;
+    const context = getRemotePathCompletionContext(input);
+    const directoryPath = resolveTargetPath(context.directoryInput);
+
+    try {
+      const cached = directoryCache.get(getCacheKey(directoryPath));
+      let entries: FileEntry[];
+      if (cached && Date.now() - cached.ts <= CACHE_TTL_MS) {
+        entries = cached.files;
+      } else {
+        entries = await sftpService.listDirectory(targetSessionId, directoryPath);
+        sortFiles(entries);
+        if (targetSessionId !== sessionId || requestId !== pathCompletionSequence) return;
+        setCache(directoryPath, entries);
+      }
+
+      if (
+        targetSessionId !== sessionId ||
+        requestId !== pathCompletionSequence ||
+        !pathInputFocused
+      ) {
+        return;
+      }
+
+      const nextSuggestions = entries
+        .filter((entry) => entry.isDirectory && entry.name.startsWith(context.typedPrefix))
+        .slice(0, 8)
+        .map((entry) => ({
+          name: entry.name,
+          value: buildRemotePathCompletion(context.valuePrefix, entry.name),
+        }));
+      if (completeFirstSuggestionOnLoad) {
+        completeFirstSuggestionOnLoad = false;
+        const firstSuggestion = nextSuggestions[0];
+        if (firstSuggestion) {
+          pathDraft = firstSuggestion.value;
+          pathSuggestions = [];
+          pathSuggestionIndex = 0;
+          void refreshPathSuggestions(pathDraft);
+          return;
+        }
+      }
+      pathSuggestions = nextSuggestions;
+      pathSuggestionIndex = 0;
+    } catch {
+      if (requestId === pathCompletionSequence) {
+        completeFirstSuggestionOnLoad = false;
+        pathSuggestions = [];
+        pathSuggestionIndex = 0;
+      }
+    }
+  }
+
+  function schedulePathSuggestions(input: string) {
+    if (pathCompletionTimer !== null) {
+      window.clearTimeout(pathCompletionTimer);
+    }
+    pathCompletionTimer = window.setTimeout(() => {
+      pathCompletionTimer = null;
+      void refreshPathSuggestions(input);
+    }, 120);
+  }
+
+  function acceptPathSuggestion(suggestion: { name: string; value: string }, navigate: boolean) {
+    pathDraft = suggestion.value;
+    closePathSuggestions();
+    if (navigate) {
+      void loadFiles(pathDraft);
+    } else {
+      void refreshPathSuggestions(pathDraft);
+    }
+  }
+
+  function handlePathInputKeydown(e: KeyboardEvent) {
+    if (e.key === 'ArrowDown' && pathSuggestions.length > 0) {
+      e.preventDefault();
+      pathSuggestionIndex = (pathSuggestionIndex + 1) % pathSuggestions.length;
+      return;
+    }
+    if (e.key === 'ArrowUp' && pathSuggestions.length > 0) {
+      e.preventDefault();
+      pathSuggestionIndex =
+        (pathSuggestionIndex - 1 + pathSuggestions.length) % pathSuggestions.length;
+      return;
+    }
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      if (pathSuggestions.length > 0) {
+        acceptPathSuggestion(pathSuggestions[pathSuggestionIndex], false);
+      } else {
+        if (pathCompletionTimer !== null) {
+          window.clearTimeout(pathCompletionTimer);
+          pathCompletionTimer = null;
+        }
+        completeFirstSuggestionOnLoad = true;
+        void refreshPathSuggestions(pathDraft);
+      }
+      return;
+    }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (pathSuggestions.length > 0) {
+        acceptPathSuggestion(pathSuggestions[pathSuggestionIndex], true);
+      } else {
+        closePathSuggestions();
+        void loadFiles(pathDraft);
+      }
+      return;
+    }
+    if (e.key === 'Escape') {
+      closePathSuggestions();
+    }
+  }
+
   async function loadFiles(path: string, options?: { force?: boolean }) {
     const targetPath = resolveTargetPath(path);
     if (!options?.force && loading && lastRequestedPath === targetPath) return;
@@ -572,6 +712,8 @@
       if (cached && Date.now() - cached.ts <= CACHE_TTL_MS) {
         files = cached.files;
         currentPath = targetPath;
+        pathDraft = targetPath;
+        closePathSuggestions();
         loading = false;
         return;
       }
@@ -594,6 +736,8 @@
       sortFiles(nextFiles);
       files = nextFiles;
       currentPath = targetPath;
+      pathDraft = targetPath;
+      closePathSuggestions();
       setCache(targetPath, nextFiles);
     } catch (e: any) {
       if (requestId !== loadSequence) return;
@@ -1393,6 +1537,7 @@
     return () => {
       nativeDragDropUnlisten?.();
       nativeDragDropUnlisten = null;
+      closePathSuggestions();
       // window.removeEventListener('click', closeContextMenu);
       window.removeEventListener('keydown', handleKeydown);
     };
@@ -1613,11 +1758,49 @@
       on:change={handleFileUpload}
       style="display: none;"
     />
-    <input 
-      class="flex-1 bg-app-surface border border-app-border rounded px-2 py-1 text-sm text-app-text"
-      value={currentPath}
-      on:change={(e) => loadFiles(e.currentTarget.value)}
-    />
+    <div class="relative min-w-0 flex-1">
+      <input
+        class="w-full bg-app-surface border border-app-border rounded px-2 py-1 text-sm text-app-text focus:border-primary-500 outline-none"
+        bind:value={pathDraft}
+        aria-label="远程路径"
+        aria-autocomplete="list"
+        aria-expanded={pathSuggestions.length > 0}
+        on:focus={() => {
+          pathInputFocused = true;
+          schedulePathSuggestions(pathDraft);
+        }}
+        on:input={() => schedulePathSuggestions(pathDraft)}
+        on:keydown={handlePathInputKeydown}
+        on:change={() => {
+          if (pathDraft !== currentPath) void loadFiles(pathDraft);
+        }}
+        on:blur={() => {
+          pathInputFocused = false;
+          window.setTimeout(closePathSuggestions, 100);
+        }}
+      />
+      {#if pathSuggestions.length > 0}
+        <div
+          class="absolute left-0 right-0 top-full z-40 mt-1 max-h-64 overflow-y-auto rounded-md border border-app-border bg-app-surface py-1 shadow-xl"
+          role="listbox"
+          aria-label="路径补全候选"
+        >
+          {#each pathSuggestions as suggestion, index (suggestion.value)}
+            <button
+              type="button"
+              class="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-sm transition-colors {index === pathSuggestionIndex ? 'bg-primary-500/20 text-primary-700 dark:text-primary-300' : 'text-app-text hover:bg-app-bg-hover'}"
+              role="option"
+              aria-selected={index === pathSuggestionIndex}
+              on:mouseenter={() => (pathSuggestionIndex = index)}
+              on:mousedown|preventDefault={() => acceptPathSuggestion(suggestion, true)}
+            >
+              <FileIcon iconType="folder" />
+              <span class="truncate">{suggestion.name}/</span>
+            </button>
+          {/each}
+        </div>
+      {/if}
+    </div>
   </div>
 
   <!-- File List -->

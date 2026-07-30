@@ -461,8 +461,8 @@ const defaultSettings: AppSettings = {
     nextTab: 'Ctrl+Shift+]',
     screenshot: 'Ctrl+Shift+X',
     recordScreen: 'Ctrl+Shift+R',
-    copy: 'Ctrl+Shift+C',
-    paste: 'Ctrl+Shift+V',
+    copy: 'Ctrl+C',
+    paste: 'Ctrl+V',
     fileBrowserRefresh: 'F5',
     fileBrowserNewFolder: 'F7',
     fileBrowserNewFile: 'Ctrl+Alt+N',
@@ -542,6 +542,13 @@ const loadSettings = (): AppSettings => {
       'fileBrowserBack',
       'commandHistory'
     ];
+    // Migrate the previous built-in defaults while preserving other custom shortcuts.
+    if (parsed.shortcuts?.copy === 'Ctrl+Shift+C') {
+      merged.shortcuts.copy = defaultSettings.shortcuts.copy;
+    }
+    if (parsed.shortcuts?.paste === 'Ctrl+Shift+V') {
+      merged.shortcuts.paste = defaultSettings.shortcuts.paste;
+    }
     const seen = new Map<string, keyof AppSettings['shortcuts']>();
     const sanitizedShortcuts = { ...merged.shortcuts };
     for (const key of shortcutOrder) {
@@ -864,7 +871,7 @@ export function getBaseXtermTheme(appSettings: AppSettings): ITheme {
     background: '#0f172a',
     foreground: '#e2e8f0',
     cursor: '#3b82f6',
-    selectionBackground: '#334155',
+    selectionBackground: '#2563eb',
   };
 }
 

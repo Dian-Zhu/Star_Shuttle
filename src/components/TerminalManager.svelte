@@ -387,8 +387,8 @@
       {/each}
     {/if}
 
-    <!-- 悬浮状态窗（模糊透明玻璃拟态） -->
-    <div class="pointer-events-none absolute bottom-3 right-3 z-20 flex flex-col gap-1.5 rounded-xl border border-white/10 bg-app-surface/50 px-3.5 py-2.5 text-xs text-app-text-secondary shadow-lg backdrop-blur-md">
+    <!-- 悬浮状态窗（轻透明背景，减少对终端内容的遮挡） -->
+    <div class="pointer-events-none absolute bottom-3 right-3 z-20 flex flex-col gap-1.5 rounded-xl border border-white/10 bg-app-surface/25 px-3.5 py-2.5 text-xs text-app-text-secondary shadow-sm backdrop-blur-[2px]">
       <div class="flex items-center justify-between gap-3">
         <span class="flex items-center gap-1">
           <svg class="w-3.5 h-3.5 text-primary-500 dark:text-primary-400" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">

@@ -750,7 +750,7 @@
     </div>
   </div>
 {:else}
-  <div class="h-screen w-screen bg-app-bg text-app-text overflow-hidden font-sans antialiased selection:bg-blue-500/30 relative">
+  <div class="h-screen w-screen bg-app-bg text-app-text overflow-hidden font-sans antialiased selection:bg-primary-200 selection:text-slate-950 dark:selection:bg-primary-600 dark:selection:text-white relative">
     {#if $settings.appearance.backgroundImage}
       <div
         class="absolute inset-0 z-0 bg-cover bg-center bg-no-repeat pointer-events-none"

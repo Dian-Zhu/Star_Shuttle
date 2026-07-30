@@ -160,7 +160,7 @@
       <!-- Session Tab Container -->
       <div 
         class="flex items-center h-[calc(100%-2px)] mt-[2px] rounded-t-md transition-colors group/session
-        {isActive ? 'bg-transparent border-t border-x border-b-0 border-app-border' : 'border border-transparent hover:bg-app-surface-light/50'}"
+        {isActive ? 'bg-primary-500/15 border-t border-x border-b-0 border-primary-500/60' : 'border border-transparent hover:bg-app-surface-light/50'}"
       >
           <button
             class="group/term flex items-center gap-1.5 px-2 py-0.5 max-w-[150px] text-xs transition-colors relative h-full rounded-md mx-0.5

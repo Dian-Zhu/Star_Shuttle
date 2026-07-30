@@ -534,13 +534,13 @@
   {#if !$isSidebarCollapsed}
     <div class="flex gap-1 px-4 pt-4">
        <button 
-         class="flex-1 py-1.5 text-xs font-medium rounded-md transition-all {activeTab === 'servers' ? 'bg-app-surface text-app-text' : 'text-app-text-secondary hover:text-app-text'}"
+         class="flex-1 py-1.5 text-xs font-medium rounded-md transition-all {activeTab === 'servers' ? 'bg-primary-500/20 text-primary-700 dark:text-primary-300 ring-1 ring-inset ring-primary-500/40' : 'text-app-text-secondary hover:text-app-text'}"
          on:click={() => activeTab = 'servers'}
        >
          服务器
        </button>
        <button 
-         class="flex-1 py-1.5 text-xs font-medium rounded-md transition-all {activeTab === 'history' ? 'bg-app-surface text-app-text' : 'text-app-text-secondary hover:text-app-text'}"
+         class="flex-1 py-1.5 text-xs font-medium rounded-md transition-all {activeTab === 'history' ? 'bg-primary-500/20 text-primary-700 dark:text-primary-300 ring-1 ring-inset ring-primary-500/40' : 'text-app-text-secondary hover:text-app-text'}"
          on:click={() => activeTab = 'history'}
        >
          历史

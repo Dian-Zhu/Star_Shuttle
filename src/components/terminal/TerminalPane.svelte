@@ -58,8 +58,12 @@
   let titleChangeDisposable: { dispose: () => void } | null = null
   let altBufferPreserverDisposable: { dispose: () => void } | null = null
   let ctrlCArmedUntil = 0
+  let lastWheelZoomAt = 0
 
   const CTRL_C_INTERRUPT_WINDOW_MS = 800
+  const WHEEL_ZOOM_THROTTLE_MS = 60
+  const MIN_TERMINAL_FONT_SIZE = 10
+  const MAX_TERMINAL_FONT_SIZE = 24
 
   // Search state
   let showSearch = false
@@ -83,6 +87,14 @@
 
   function isPlainCtrlC(e: KeyboardEvent) {
     return e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'c'
+  }
+
+  function isPasteShortcut(e: KeyboardEvent) {
+    const key = e.key.toLowerCase()
+    return (
+      (e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey && key === 'v') ||
+      (e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey && key === 'v')
+    )
   }
 
   // 是否匹配 Layout.svelte 注册的应用级全局快捷键。匹配则放行冒泡到 window 处理器执行，
@@ -139,10 +151,41 @@
     setTimeout(() => terminal?.focus(), 0)
   }
 
+  function handleTerminalZoom(e: WheelEvent) {
+    if (!e.ctrlKey && !e.metaKey) return
+
+    e.preventDefault()
+    e.stopPropagation()
+    if (e.deltaY === 0) return
+
+    const now = Date.now()
+    if (now - lastWheelZoomAt < WHEEL_ZOOM_THROTTLE_MS) return
+    lastWheelZoomAt = now
+
+    const step = e.deltaY < 0 ? 1 : -1
+    settings.update(current => {
+      const fontSize = Math.max(
+        MIN_TERMINAL_FONT_SIZE,
+        Math.min(MAX_TERMINAL_FONT_SIZE, current.terminal.fontSize + step)
+      )
+      if (fontSize === current.terminal.fontSize) return current
+
+      return {
+        ...current,
+        terminal: {
+          ...current.terminal,
+          fontSize,
+        },
+      }
+    })
+  }
+
   function attachTerminalKeybindings(term: Terminal) {
     term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
       if (e.type === 'keydown' && isCopyShortcut(e)) {
         if (isPlainCtrlC(e)) {
+          if (e.repeat) return false
+
           const now = Date.now()
           if (now <= ctrlCArmedUntil) {
             disarmCtrlCInterrupt()
@@ -159,6 +202,12 @@
 
         if (!copyTerminalSelection(term)) return true
         disarmCtrlCInterrupt()
+        return false
+      }
+      if (e.type === 'keydown' && isPasteShortcut(e)) {
+        disarmCtrlCInterrupt()
+        // Stop xterm from sending Ctrl+V (SYN) to the PTY. The browser paste
+        // event remains active and is handled by handlePaste on the container.
         return false
       }
       if (e.type === 'keydown') {
@@ -320,6 +369,7 @@
     if (container) {
       resizeObserver.observe(container)
       container.addEventListener('paste', handlePaste, true)
+      container.addEventListener('wheel', handleTerminalZoom, { passive: false })
     }
 
     isInitialized = true
@@ -359,6 +409,7 @@
     focusListener = null
     mouseDownListener = null
     container?.removeEventListener('paste', handlePaste, true)
+    container?.removeEventListener('wheel', handleTerminalZoom)
 
     const pooled = resolvePooledTerminal()
     if (pooled && pooled.container === container) {
@@ -383,7 +434,7 @@
     const baseTheme = getBaseXtermTheme($settings)
     const bgBrightness = calculateBrightness(baseTheme.background || '#000000')
     const isLightTheme = bgBrightness > 128
-    terminal.options.fontWeight = isLightTheme ? '600' : 'normal'
+    terminal.options.fontWeight = isLightTheme ? '600' : '500'
     terminal.options.fontWeightBold = isLightTheme ? 'bold' : 'bold'
 
     scheduleLayoutWork({ refresh: true })
@@ -614,7 +665,7 @@
     {#if contextMenu.show}
       <ContextMenu x={contextMenu.x} y={contextMenu.y} on:close={closeContextMenu}>
         <ContextMenuItem on:click={handleMenuCopy} label="复制">
-          <span slot="right">Ctrl+C / Ctrl+Shift+C</span>
+          <span slot="right">Ctrl+C（双击强退）</span>
         </ContextMenuItem>
         <ContextMenuItem
           on:click={handleSendSelectionToAi}
@@ -622,7 +673,7 @@
           disabled={!getTerminalSelection().trim()}
         />
         <ContextMenuItem on:click={handleMenuPaste} label="粘贴">
-          <span slot="right">Ctrl+Shift+V</span>
+          <span slot="right">Ctrl+V</span>
         </ContextMenuItem>
         <ContextMenuDivider />
         <ContextMenuItem on:click={handleClearScreen} label="清屏" />

@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { showConnectionForm, editingConnection, connections, connectionHistory, type Connection, showSuccessMessage } from '../lib/store';
+  import { showConnectionForm, editingConnection, connections, connectionHistory, type Connection, showSuccessMessage, showErrorMessage } from '../lib/store';
+  import { open } from '@tauri-apps/plugin-dialog';
   import { saveConnection, createBackendConfig } from '../lib/connectionService';
   import { connectAndOpen, invokeWithTimeout } from '../lib/terminalService';
   import {
@@ -368,6 +369,30 @@
   let isTesting = false;
   let testConnectionFeedback: { type: 'success' | 'error'; message: string } | null = null;
 
+  type CredentialPathField =
+    | 'keyPath'
+    | 'certificatePath'
+    | 'privateKeyPath'
+    | 'jumpHostKeyPath'
+    | 'jumpHostCertificatePath'
+    | 'jumpHostPrivateKeyPath';
+
+  async function selectCredentialFile(field: CredentialPathField, title: string) {
+    try {
+      const selected = await open({
+        title,
+        multiple: false,
+        directory: false,
+      });
+      if (typeof selected === 'string') {
+        formData[field] = selected;
+      }
+    } catch (error) {
+      console.error('Failed to select credential file:', error);
+      showErrorMessage(`打开文件选择器失败: ${error}`);
+    }
+  }
+
   let hostKeyVerification: HostKeyPrompt | null = null;
 
   $: hostKeyTitle =
@@ -725,13 +750,13 @@
           {#if modalView === 'form'}
             <div class="flex bg-app-bg rounded-lg p-1 border border-app-border">
               <button
-                class="px-3 py-1 text-xs font-medium rounded-md transition-all {activeTab === 'basic' ? 'bg-app-surface text-primary-600 dark:text-primary-400 shadow-sm' : 'text-app-text-secondary hover:text-app-text'}"
+                class="px-3 py-1 text-xs font-medium rounded-md transition-all {activeTab === 'basic' ? 'bg-primary-500/20 text-primary-700 dark:text-primary-300 ring-1 ring-inset ring-primary-500/40' : 'text-app-text-secondary hover:text-app-text'}"
                 on:click={() => activeTab = 'basic'}
               >
                 基本信息
               </button>
               <button
-                class="px-3 py-1 text-xs font-medium rounded-md transition-all {formData.protocol !== 'Ssh' ? 'opacity-40 cursor-not-allowed' : ''} {activeTab === 'advanced' ? 'bg-app-surface text-primary-600 dark:text-primary-400 shadow-sm' : 'text-app-text-secondary hover:text-app-text'}"
+                class="px-3 py-1 text-xs font-medium rounded-md transition-all {formData.protocol !== 'Ssh' ? 'opacity-40 cursor-not-allowed' : ''} {activeTab === 'advanced' ? 'bg-primary-500/20 text-primary-700 dark:text-primary-300 ring-1 ring-inset ring-primary-500/40' : 'text-app-text-secondary hover:text-app-text'}"
                 disabled={formData.protocol !== 'Ssh'}
                 on:click={() => activeTab = 'advanced'}
               >
@@ -1032,7 +1057,7 @@
                 ] as method}
                   <button
                     type="button"
-                    class="flex-1 whitespace-nowrap px-3 py-1.5 text-xs rounded-md transition-all {formData.authMethod === method.id ? 'bg-app-surface text-primary-600 shadow-sm font-medium' : 'text-app-text-secondary hover:text-app-text'}"
+                    class="flex-1 whitespace-nowrap px-3 py-1.5 text-xs rounded-md transition-all {formData.authMethod === method.id ? 'bg-primary-500/20 text-primary-700 dark:text-primary-300 ring-1 ring-inset ring-primary-500/40 font-medium' : 'text-app-text-secondary hover:text-app-text'}"
                     on:click={() => formData.authMethod = method.id as any}
                   >
                     {method.label}
@@ -1064,12 +1089,23 @@
                   <div class="space-y-3">
                     <div class="grid grid-cols-12 gap-3">
                       <div class="col-span-12">
-                         <input
-                          type="text"
-                          bind:value={formData.keyPath}
-                          class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-sm text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all font-mono"
-                          placeholder="私钥路径 (~/.ssh/id_rsa)"
-                        />
+                        <div class="flex gap-2">
+                          <input
+                            type="text"
+                            bind:value={formData.keyPath}
+                            class="min-w-0 flex-1 bg-app-bg border border-app-border rounded-lg px-3 py-2 text-sm text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all font-mono"
+                            placeholder="私钥路径 (~/.ssh/id_rsa)"
+                          />
+                          <button
+                            type="button"
+                            class="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-lg border border-app-border bg-app-bg text-app-text-secondary transition-colors hover:border-primary-500/60 hover:text-primary-500"
+                            on:click={() => selectCredentialFile('keyPath', '选择 SSH 私钥文件')}
+                            title="从本地选择私钥"
+                            aria-label="从本地选择私钥"
+                          >
+                            <FolderIcon class="h-4 w-4" />
+                          </button>
+                        </div>
                       </div>
                       <div class="col-span-12">
                         <input
@@ -1096,18 +1132,40 @@
                   </div>
                 {:else if formData.authMethod === 'certificate'}
                   <div class="space-y-3">
-                    <input
+                    <div class="flex gap-2">
+                      <input
                         type="text"
                         bind:value={formData.certificatePath}
-                        class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-sm text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all font-mono"
+                        class="min-w-0 flex-1 bg-app-bg border border-app-border rounded-lg px-3 py-2 text-sm text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all font-mono"
                         placeholder="证书路径 (~/.ssh/id_rsa-cert.pub)"
-                    />
-                    <input
+                      />
+                      <button
+                        type="button"
+                        class="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-lg border border-app-border bg-app-bg text-app-text-secondary transition-colors hover:border-primary-500/60 hover:text-primary-500"
+                        on:click={() => selectCredentialFile('certificatePath', '选择 SSH 证书文件')}
+                        title="从本地选择证书"
+                        aria-label="从本地选择证书"
+                      >
+                        <FolderIcon class="h-4 w-4" />
+                      </button>
+                    </div>
+                    <div class="flex gap-2">
+                      <input
                         type="text"
                         bind:value={formData.privateKeyPath}
-                        class="w-full bg-app-bg border border-app-border rounded-lg px-3 py-2 text-sm text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all font-mono"
+                        class="min-w-0 flex-1 bg-app-bg border border-app-border rounded-lg px-3 py-2 text-sm text-app-text focus:border-primary-500 focus:ring-1 focus:ring-primary-500 outline-none transition-all font-mono"
                         placeholder="私钥路径 (~/.ssh/id_rsa)"
-                    />
+                      />
+                      <button
+                        type="button"
+                        class="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-lg border border-app-border bg-app-bg text-app-text-secondary transition-colors hover:border-primary-500/60 hover:text-primary-500"
+                        on:click={() => selectCredentialFile('privateKeyPath', '选择证书对应的私钥文件')}
+                        title="从本地选择私钥"
+                        aria-label="从本地选择证书对应的私钥"
+                      >
+                        <FolderIcon class="h-4 w-4" />
+                      </button>
+                    </div>
                     <div>
                         <input
                           type="password"
@@ -1287,7 +1345,7 @@
                     ] as type}
                       <button
                         type="button"
-                        class="flex-1 whitespace-nowrap px-3 py-1.5 text-xs rounded-md transition-all {formData.proxyType === type.id ? 'bg-app-surface text-primary-600 shadow-sm font-medium' : 'text-app-text-secondary hover:text-app-text'}"
+                        class="flex-1 whitespace-nowrap px-3 py-1.5 text-xs rounded-md transition-all {formData.proxyType === type.id ? 'bg-primary-500/20 text-primary-700 dark:text-primary-300 ring-1 ring-inset ring-primary-500/40 font-medium' : 'text-app-text-secondary hover:text-app-text'}"
                         on:click={() => formData.proxyType = type.id as any}
                       >
                         {type.label}
@@ -1481,13 +1539,24 @@
                             <div class="space-y-3">
                               <div>
                                 <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="jumpHostKeyPath">跳板私钥路径</label>
-                                <input
-                                  type="text"
-                                  id="jumpHostKeyPath"
-                                  bind:value={formData.jumpHostKeyPath}
-                                  class="w-full bg-app-surface border border-app-border rounded-lg px-3 py-2 text-sm text-app-text focus:border-primary-500 outline-none font-mono"
-                                  placeholder="~/.ssh/id_rsa"
-                                />
+                                <div class="flex gap-2">
+                                  <input
+                                    type="text"
+                                    id="jumpHostKeyPath"
+                                    bind:value={formData.jumpHostKeyPath}
+                                    class="min-w-0 flex-1 bg-app-surface border border-app-border rounded-lg px-3 py-2 text-sm text-app-text focus:border-primary-500 outline-none font-mono"
+                                    placeholder="~/.ssh/id_rsa"
+                                  />
+                                  <button
+                                    type="button"
+                                    class="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-lg border border-app-border bg-app-surface text-app-text-secondary transition-colors hover:border-primary-500/60 hover:text-primary-500"
+                                    on:click={() => selectCredentialFile('jumpHostKeyPath', '选择跳板机 SSH 私钥文件')}
+                                    title="从本地选择跳板机私钥"
+                                    aria-label="从本地选择跳板机私钥"
+                                  >
+                                    <FolderIcon class="h-4 w-4" />
+                                  </button>
+                                </div>
                               </div>
                               <div>
                                 <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="jumpHostPassphrase">密码短语 (可选)</label>
@@ -1518,23 +1587,45 @@
                             <div class="space-y-3">
                               <div>
                                 <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="jumpHostCertificatePath">跳板证书路径</label>
-                                <input
-                                  type="text"
-                                  id="jumpHostCertificatePath"
-                                  bind:value={formData.jumpHostCertificatePath}
-                                  class="w-full bg-app-surface border border-app-border rounded-lg px-3 py-2 text-sm text-app-text focus:border-primary-500 outline-none font-mono"
-                                  placeholder="~/.ssh/id_rsa-cert.pub"
-                                />
+                                <div class="flex gap-2">
+                                  <input
+                                    type="text"
+                                    id="jumpHostCertificatePath"
+                                    bind:value={formData.jumpHostCertificatePath}
+                                    class="min-w-0 flex-1 bg-app-surface border border-app-border rounded-lg px-3 py-2 text-sm text-app-text focus:border-primary-500 outline-none font-mono"
+                                    placeholder="~/.ssh/id_rsa-cert.pub"
+                                  />
+                                  <button
+                                    type="button"
+                                    class="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-lg border border-app-border bg-app-surface text-app-text-secondary transition-colors hover:border-primary-500/60 hover:text-primary-500"
+                                    on:click={() => selectCredentialFile('jumpHostCertificatePath', '选择跳板机 SSH 证书文件')}
+                                    title="从本地选择跳板机证书"
+                                    aria-label="从本地选择跳板机证书"
+                                  >
+                                    <FolderIcon class="h-4 w-4" />
+                                  </button>
+                                </div>
                               </div>
                               <div>
                                 <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="jumpHostPrivateKeyPath">跳板私钥路径</label>
-                                <input
-                                  type="text"
-                                  id="jumpHostPrivateKeyPath"
-                                  bind:value={formData.jumpHostPrivateKeyPath}
-                                  class="w-full bg-app-surface border border-app-border rounded-lg px-3 py-2 text-sm text-app-text focus:border-primary-500 outline-none font-mono"
-                                  placeholder="~/.ssh/id_rsa"
-                                />
+                                <div class="flex gap-2">
+                                  <input
+                                    type="text"
+                                    id="jumpHostPrivateKeyPath"
+                                    bind:value={formData.jumpHostPrivateKeyPath}
+                                    class="min-w-0 flex-1 bg-app-surface border border-app-border rounded-lg px-3 py-2 text-sm text-app-text focus:border-primary-500 outline-none font-mono"
+                                    placeholder="~/.ssh/id_rsa"
+                                  />
+                                  <button
+                                    type="button"
+                                    class="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-lg border border-app-border bg-app-surface text-app-text-secondary transition-colors hover:border-primary-500/60 hover:text-primary-500"
+                                    on:click={() => selectCredentialFile('jumpHostPrivateKeyPath', '选择跳板机证书对应的私钥文件')}
+                                    title="从本地选择跳板机私钥"
+                                    aria-label="从本地选择跳板机证书对应的私钥"
+                                  >
+                                    <FolderIcon class="h-4 w-4" />
+                                  </button>
+                                </div>
                               </div>
                               <div>
                                 <label class="block text-xs font-medium text-app-text-secondary mb-1.5" for="jumpHostPassphraseCert">密码短语 (可选)</label>
