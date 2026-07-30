@@ -117,6 +117,9 @@ npm test
 cd src-tauri && cargo test
 ```
 
+## 友链
+本项目关注开源协作与技术交流，欢迎前往 LINUX DO（https://linux.do/） 社区 与更多开发者交流、分享经验，并发现有趣的开源项目。
+
 ## 许可证
 
 本项目使用 GPL-3.0-or-later 许可证发布，详见 [LICENSE](LICENSE)。
