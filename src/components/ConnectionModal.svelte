@@ -1,7 +1,7 @@
 <script lang="ts">
   import { showConnectionForm, editingConnection, connections, connectionHistory, type Connection, showSuccessMessage, showErrorMessage } from '../lib/store';
-  import { open } from '@tauri-apps/plugin-dialog';
-  import { saveConnection, createBackendConfig } from '../lib/connectionService';
+  import { open, confirm } from '@tauri-apps/plugin-dialog';
+  import { saveConnection, createBackendConfig, deleteConnection } from '../lib/connectionService';
   import { connectAndOpen, invokeWithTimeout } from '../lib/terminalService';
   import {
     getHostKeyPromptHint,
@@ -16,6 +16,11 @@
   import ServerIcon from './icons/ServerIcon.svelte';
   import FolderIcon from './icons/FolderIcon.svelte';
   import ClockIcon from './icons/ClockIcon.svelte';
+  import SettingsIcon from './icons/SettingsIcon.svelte';
+  import TrashIcon from './icons/TrashIcon.svelte';
+  import ContextMenu from './ui/ContextMenu.svelte';
+  import ContextMenuItem from './ui/ContextMenuItem.svelte';
+  import ContextMenuDivider from './ui/ContextMenuDivider.svelte';
   import { slide, fade } from 'svelte/transition';
 
   function createDefaultFormData() {
@@ -570,6 +575,57 @@
     handleClose();
   }
 
+  // 新建页（已保存连接列表）的右键菜单
+  let chooserContextMenu = {
+    show: false,
+    x: 0,
+    y: 0,
+    connection: null as Connection | null,
+  };
+
+  function openChooserContextMenu(e: MouseEvent, connection: Connection | null) {
+    e.preventDefault();
+    e.stopPropagation();
+    chooserContextMenu = {
+      show: true,
+      x: e.clientX,
+      y: e.clientY,
+      connection,
+    };
+  }
+
+  function closeChooserContextMenu() {
+    chooserContextMenu = { ...chooserContextMenu, show: false };
+  }
+
+  async function connectFromChooserMenu() {
+    const connection = chooserContextMenu.connection;
+    if (!connection) return;
+    closeChooserContextMenu();
+    await handleQuickConnect(connection);
+  }
+
+  function editFromChooserMenu() {
+    const connection = chooserContextMenu.connection;
+    if (!connection) return;
+    closeChooserContextMenu();
+    editingConnection.set(connection);
+  }
+
+  async function deleteFromChooserMenu() {
+    const connection = chooserContextMenu.connection;
+    if (!connection) return;
+    closeChooserContextMenu();
+
+    const confirmed = await confirm(`确定要删除连接「${connection.name}」吗？`, {
+      title: '删除连接',
+      kind: 'warning',
+    });
+    if (!confirmed) return;
+
+    await deleteConnection(connection.id);
+  }
+
   function openCreateForm() {
     resetFormData();
     modalView = 'form';
@@ -687,7 +743,9 @@
 
 <svelte:window on:keydown={(e) => e.key === 'Escape' && handleClose()} />
 
-<div class="absolute inset-0 z-30 flex flex-col bg-app-bg">
+<!-- 毛玻璃：模糊必须加在根容器上。若单独放一层子元素做 backdrop-filter，WebKitGTK 会把
+     弹窗自身的前景内容（按钮、输入框）也采样进背景，出现一圈「发光」重影。 -->
+<div class="absolute inset-0 z-30 flex flex-col bg-app-bg backdrop-blur-xl">
   <div class="relative flex-1 flex flex-col overflow-hidden">
     <!-- Host Key Verification Overlay -->
     {#if hostKeyVerification}
@@ -778,7 +836,12 @@
     <div class="flex-1 overflow-y-auto p-6 custom-scrollbar">
       <div class="mx-auto w-full max-w-3xl">
       {#if !$editingConnection && modalView === 'chooser'}
-        <div class="space-y-6" in:fade={{ duration: 150 }}>
+        <div
+          class="space-y-6"
+          role="presentation"
+          in:fade={{ duration: 150 }}
+          on:contextmenu|preventDefault={(e) => openChooserContextMenu(e, null)}
+        >
           <div class="border-b border-app-border pb-5">
             <div class="flex gap-2">
               <button
@@ -852,6 +915,7 @@
                       class="group w-full text-left flex items-center gap-3 rounded-lg p-3 transition-colors hover:bg-app-surface"
                       style={`padding-left: ${0.75 + row.depth * 0.75}rem;`}
                       on:click={() => handleQuickConnect(row.connection)}
+                      on:contextmenu|preventDefault|stopPropagation={(e) => openChooserContextMenu(e, row.connection)}
                     >
                       <div class="text-app-text-secondary group-hover:text-primary-500 dark:group-hover:text-primary-400 transition-colors shrink-0">
                         <ServerIcon class="w-4 h-4" />
@@ -1718,6 +1782,25 @@
     {/if}
   </div>
 </div>
+
+<!-- 右键菜单必须放在带 backdrop-blur 的容器之外：backdrop-filter 会成为 fixed 后代的包含块，
+     放进去会让菜单相对弹窗而不是视口定位。 -->
+{#if chooserContextMenu.show}
+  <ContextMenu
+    x={chooserContextMenu.x}
+    y={chooserContextMenu.y}
+    on:close={closeChooserContextMenu}
+  >
+    {#if chooserContextMenu.connection}
+      <ContextMenuItem on:click={connectFromChooserMenu} label="连接" iconComponent={ActivityIcon} />
+      <ContextMenuDivider />
+      <ContextMenuItem on:click={editFromChooserMenu} label="编辑" iconComponent={SettingsIcon} />
+      <ContextMenuItem on:click={deleteFromChooserMenu} label="删除" danger iconComponent={TrashIcon} />
+    {:else}
+      <ContextMenuItem on:click={() => { closeChooserContextMenu(); openCreateForm(); }} label="新建连接" iconComponent={PlusIcon} />
+    {/if}
+  </ContextMenu>
+{/if}
 
 <style>
   .custom-scrollbar::-webkit-scrollbar {
